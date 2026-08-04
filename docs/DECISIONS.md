@@ -277,6 +277,59 @@ surfaces as a usable 400 instead of a stack trace.
 
 ---
 
+## ADR-016: Access codes are revealed behind an audited click, and flagged after the fact
+
+**Decided.** Reading a home's gate code, alarm code, or key location requires
+`POST /api/customers/locations/{id}/reveal-access/` with
+`{"acknowledged": true}`. Each reveal writes an append-only `AccessReveal` row:
+who, which location, which fields, when, IP, user agent.
+
+**Scope is deliberately narrow.** Ordinary schedule data — address, phone,
+arrival time, what the job involves — is shown freely and never logged. A
+worker needs all of it constantly, and recording every glance would bury the
+signal in noise until nobody reads the log. What gets recorded is the discrete,
+intentional act of asking for a code, which maps to a real moment: someone is
+at a door.
+
+**Nothing is blocked, and nobody is notified in real time.** The reveal always
+succeeds. This is a change from the first draft of this design, which proposed
+a hard block plus an owner notification — both were rejected as too heavy.
+Blocking strands a worker over a job that got moved; live notifications train
+the owner to ignore them.
+
+**Flagging is an end-of-day pass, not a request-time decision** (Phase 3). A
+reveal is flagged if it sat more than 1–2 hours outside its appointment window.
+This *has* to happen after the fact: a job rescheduled at 4pm changes the
+verdict on a 2pm reveal, so evaluating live would bake in a judgement from
+facts that had not settled. A flag is a prompt for the owner to ask a question,
+not an accusation and not an enforcement action. `review`/`reviewed_by`/
+`review_note` record that a human closed it out.
+
+**The acknowledgement is enforced server-side**, so the warning is part of the
+API contract rather than a dialog the frontend could quietly stop showing, and
+the log can state the user saw it. The exact copy lives in
+`audit.models.ACCESS_WARNING` and is returned by the 400, so API and UI cannot
+drift apart.
+
+**Consequences accepted:**
+
+- Codes became `write_only` on `ServiceLocationSerializer`. They can be set and
+  changed normally; reading them back needs the reveal. `has_access_codes`
+  lets the UI show "codes on file" without disclosing them.
+- **They were removed from the Django admin entirely.** Admin logs changes but
+  not views, so leaving them there was an unlogged way to read every code in
+  the database — precisely the hole a determined person would use.
+- The audit trail is owner/admin only. The people being recorded should not be
+  able to curate the record. `AccessReveal.delete()` raises, there is no update
+  or destroy route, and the admin registration is fully read-only.
+
+**Known limit, stated plainly:** this deters and reconstructs; it does not
+prevent. A worker with a legitimate reveal can write the code on their hand.
+The value is that misuse becomes attributable, which is real but is not access
+control — do not treat the log as though it were a lock.
+
+---
+
 ## Standing security notes
 
 The source repo has a live `SECRET_KEY` (`app/app/settings.py`, line 26) and an

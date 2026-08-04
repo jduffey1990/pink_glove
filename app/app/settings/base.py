@@ -75,6 +75,7 @@ LOCAL_APPS = [
     "two_factor",
     "customers",
     "catalog",
+    "audit",
     "health",
     # Phase 3 adds: scheduling
     # Phase 4 adds: billing

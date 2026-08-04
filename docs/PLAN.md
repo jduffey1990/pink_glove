@@ -8,6 +8,7 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 | 0 | Scaffold, settings, Docker, test harness | **Done** |
 | 1 | Tenancy core + identity | **Done** |
 | 2 | Customers + service catalog | **Done** |
+| 2.5 | Access audit trail | **Done** (flagging pass deferred to 3) |
 | 3 | Scheduling | Next |
 | 4 | Billing | Not started |
 | 5 | Notifications + customer portal | Not started |
@@ -181,6 +182,34 @@ Two things surfaced while building:
 Verified live: creating a location through the API returns `gate_code` as
 `4821#`, while `SELECT gate_code FROM customers_servicelocation` returns
 `gAAAAABqcjNG...`.
+
+---
+
+## Phase 2.5 — Access audit trail ✅
+
+149 tests passing. Full rationale in ADR-016.
+
+`audit` app with append-only `AccessReveal`. Access codes moved behind
+`POST /api/customers/locations/{id}/reveal-access/`, became `write_only` on the
+location serializer, and were removed from the Django admin (which logs changes
+but not views).
+
+**Carried into Phase 3:**
+
+1. Add `job = FK("scheduling.Job", null=True)` to `AccessReveal` and set it on
+   reveal, so a reveal binds to the specific visit rather than just a person
+   and a time.
+2. Write the end-of-day Celery beat task that sets `evaluated_at`,
+   `is_flagged`, and `flag_reason` — flagging reveals more than 1–2 hours
+   outside their appointment window, in the organization's own timezone.
+   `AccessReveal` already carries all four fields, unset.
+3. The buffer (1h before / 2h after) should be configurable per organization
+   rather than hardcoded.
+
+**Frontend contract:** the confirmation copy is served by the backend
+(`audit.models.ACCESS_WARNING`, returned in the 400 when `acknowledged` is
+missing). Render that string rather than hardcoding it, so the two cannot
+drift.
 
 ---
 
