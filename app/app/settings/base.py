@@ -26,6 +26,10 @@ DEBUG = False
 
 ENV = config("ENV", default="local")
 
+#: Only ever True in app.settings.local. Gates development-only affordances
+#: such as returning a 2FA code in the API response.
+LOCAL = False
+
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 
 ROOT_URLCONF = "app.urls"
@@ -60,9 +64,10 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "base",
+    "organizations",
     "users",
+    "two_factor",
     "health",
-    # Phase 1 adds: organizations, two_factor
     # Phase 2 adds: customers, catalog
     # Phase 3 adds: scheduling
     # Phase 4 adds: billing
@@ -79,7 +84,9 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
-    # Phase 1: app.middleware.tenant.TenantMiddleware goes here, after auth
+    # Must follow AuthenticationMiddleware: it resolves the tenant from
+    # request.user's memberships.
+    "app.middleware.tenant.TenantMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

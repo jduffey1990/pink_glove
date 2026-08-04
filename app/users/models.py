@@ -1,8 +1,14 @@
+import hashlib
+import secrets
+from datetime import timedelta
+
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
 from django.db import models
+from django.utils import timezone
 
-from base.models import Base, SoftDeleteQuerySet
+from base.models import Base, SoftDeleteQuerySet, TenantModel
+from users.enums import Role
 
 
 class CustomUserManager(BaseUserManager.from_queryset(SoftDeleteQuerySet)):
@@ -85,3 +91,97 @@ class CustomUser(AbstractBaseUser, PermissionsMixin, Base):
     def save(self, *args, **kwargs):
         self.email = self.email.lower()
         super().save(*args, **kwargs)
+
+
+class Membership(TenantModel):
+    """
+    A user's role within one organization.
+
+    Role lives here rather than on `CustomUser` so the same person can hold
+    different roles in different organizations. See docs/DECISIONS.md ADR-003.
+    """
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="memberships")
+    role = models.CharField(max_length=32, choices=Role.choices, db_index=True)
+    is_active = models.BooleanField(default=True)
+    invited_at = models.DateTimeField(null=True, blank=True)
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(TenantModel.Meta):
+        verbose_name = "Membership"
+        verbose_name_plural = "Memberships"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "organization"], name="unique_membership_per_organization"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} @ {self.organization_id} ({self.role})"
+
+    @property
+    def is_staff_role(self) -> bool:
+        return self.role != Role.CUSTOMER
+
+
+def _hash_token(raw_token: str) -> str:
+    """
+    SHA-256 is correct here, unlike for passwords.
+
+    These tokens carry 256 bits of entropy, so there is nothing to brute-force
+    and a deliberately slow hash would only cost latency. Contrast
+    `two_factor.models.TwoFactorCode`, where a 6-digit code has ~20 bits and
+    therefore does need a slow hasher.
+    """
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+class MagicLinkToken(Base):
+    """
+    Single-use passwordless sign-in, used for the customer portal.
+
+    Customers check an invoice a few times a year; a password they must reset
+    every time is pure support burden. See docs/DECISIONS.md ADR-008.
+
+    Only the hash is stored -- a database leak must not yield usable links.
+    """
+
+    TTL = timedelta(minutes=15)
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="magic_links")
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(Base.Meta):
+        verbose_name = "Magic link token"
+        verbose_name_plural = "Magic link tokens"
+
+    def __str__(self):
+        return f"Magic link for {self.user.email}"
+
+    @classmethod
+    def issue(cls, user: "CustomUser") -> tuple["MagicLinkToken", str]:
+        """Create a token and return it alongside the raw value to email."""
+        raw_token = secrets.token_urlsafe(32)
+        token = cls.objects.create(
+            user=user,
+            token_hash=_hash_token(raw_token),
+            expires_at=timezone.now() + cls.TTL,
+        )
+        return token, raw_token
+
+    @classmethod
+    def consume(cls, raw_token: str) -> "CustomUser | None":
+        """Redeem a token, returning its user. Returns None if unusable."""
+        token = cls.objects.filter(token_hash=_hash_token(raw_token)).first()
+        if token is None or not token.is_valid:
+            return None
+
+        token.consumed_at = timezone.now()
+        token.save(update_fields=["consumed_at", "updated_at"])
+        return token.user
+
+    @property
+    def is_valid(self) -> bool:
+        return self.consumed_at is None and timezone.now() <= self.expires_at

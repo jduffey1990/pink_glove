@@ -8,7 +8,9 @@ from django.urls import include, path
 urlpatterns = [
     path("health/", include("health.urls", namespace="health")),
     path("admin/", admin.site.urls),
-    # Phase 1: api/auth/, api/organizations/, api/users/
+    path("api/auth/", include("two_factor.urls", namespace="two_factor")),
+    path("api/users/", include("users.urls", namespace="users")),
+    path("api/organizations/", include("organizations.urls", namespace="organizations")),
     # Phase 2: api/customers/, api/catalog/
     # Phase 3: api/scheduling/
     # Phase 4: api/billing/
