@@ -13,6 +13,7 @@ urlpatterns = [
     path("api/organizations/", include("organizations.urls", namespace="organizations")),
     path("api/customers/", include("customers.urls", namespace="customers")),
     path("api/catalog/", include("catalog.urls", namespace="catalog")),
+    path("api/audit/", include("audit.urls", namespace="audit")),
     # Phase 3: api/scheduling/
     # Phase 4: api/billing/
 ]

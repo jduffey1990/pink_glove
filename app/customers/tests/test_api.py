@@ -168,9 +168,14 @@ class TestServiceLocationApi:
         assert "alarm_code" not in location
         assert location["one_line_address"] == "1 Elm St, Denver, CO, 80202"
 
-    def test_detail_endpoint_does_expose_codes_to_staff(
+    def test_the_detail_endpoint_does_not_expose_codes_either(
         self, authed_client, organization, make_customer
     ):
+        """
+        Reading a code requires the audited reveal action. An unlogged read on
+        the detail endpoint would make the audit trail decorative.
+        See audit/tests/test_reveal.py for the full contract.
+        """
         customer = make_customer(organization)
         location = ServiceLocation.objects.create(
             organization=organization,
@@ -184,7 +189,8 @@ class TestServiceLocationApi:
 
         body = authed_client.get(reverse("customers:location-detail", args=[location.id])).json()
 
-        assert body["gate_code"] == "4821#"
+        assert "gate_code" not in body
+        assert body["has_access_codes"] is True
 
 
 @pytest.mark.django_db

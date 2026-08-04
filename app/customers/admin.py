@@ -39,14 +39,14 @@ class ServiceLocationAdmin(admin.ModelAdmin):
         (
             "Access",
             {
-                "fields": (
-                    "parking_notes",
-                    "access_notes",
-                    "gate_code",
-                    "alarm_code",
-                    "key_location",
+                "fields": ("parking_notes", "access_notes"),
+                "description": (
+                    "Gate code, alarm code, and key location are deliberately absent "
+                    "from this form. Django admin logs changes but not views, so "
+                    "showing them here would be an unlogged way to read every code "
+                    "in the database. Manage them through the API, where reading "
+                    "requires an audited reveal."
                 ),
-                "description": "Gate code, alarm code, and key location are encrypted at rest.",
             },
         ),
         ("Pets", {"fields": ("has_pets", "pet_notes")}),
