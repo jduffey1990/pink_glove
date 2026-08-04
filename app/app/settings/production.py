@@ -9,7 +9,7 @@ should come back clean.
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, SECRET_KEY
+from .base import ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, FIELD_ENCRYPTION_KEY, SECRET_KEY
 
 DEBUG = False
 LOCAL = False
@@ -20,6 +20,9 @@ _missing = [
         ("SECRET_KEY", SECRET_KEY),
         ("ALLOWED_HOSTS", ALLOWED_HOSTS),
         ("CORS_ALLOWED_ORIGINS", CORS_ALLOWED_ORIGINS),
+        # Without this, every read of an encrypted column raises at runtime
+        # rather than at startup. Fail now instead.
+        ("FIELD_ENCRYPTION_KEY", FIELD_ENCRYPTION_KEY),
     ]
     if not value
 ]

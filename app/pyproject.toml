@@ -30,6 +30,7 @@ dependencies = [
     "django-celery-results>=2.6,<3",
     "django-celery-beat>=2.9,<3",    # Phase 3: recurring job materializer
     "pillow>=12.3,<13",              # Organization.logo now, job photos later
+    "cryptography>=46.0,<47",        # base.fields.EncryptedTextField
 ]
 
 [project.optional-dependencies]

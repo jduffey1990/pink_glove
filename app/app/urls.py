@@ -11,7 +11,8 @@ urlpatterns = [
     path("api/auth/", include("two_factor.urls", namespace="two_factor")),
     path("api/users/", include("users.urls", namespace="users")),
     path("api/organizations/", include("organizations.urls", namespace="organizations")),
-    # Phase 2: api/customers/, api/catalog/
+    path("api/customers/", include("customers.urls", namespace="customers")),
+    path("api/catalog/", include("catalog.urls", namespace="catalog")),
     # Phase 3: api/scheduling/
     # Phase 4: api/billing/
 ]

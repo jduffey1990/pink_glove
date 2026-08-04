@@ -32,6 +32,12 @@ LOCAL = False
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="", cast=Csv())
 
+#: Fernet key for base.fields.EncryptedTextField (gate codes, alarm codes).
+#: Separate from SECRET_KEY on purpose: rotating SECRET_KEY only invalidates
+#: sessions, whereas rotating this one makes existing ciphertext unreadable.
+#: local/test substitute a throwaway value; production.py requires a real one.
+FIELD_ENCRYPTION_KEY = config("FIELD_ENCRYPTION_KEY", default="")
+
 ROOT_URLCONF = "app.urls"
 WSGI_APPLICATION = "app.wsgi.application"
 ASGI_APPLICATION = "app.asgi.application"
@@ -67,8 +73,9 @@ LOCAL_APPS = [
     "organizations",
     "users",
     "two_factor",
+    "customers",
+    "catalog",
     "health",
-    # Phase 2 adds: customers, catalog
     # Phase 3 adds: scheduling
     # Phase 4 adds: billing
     # Phase 5 adds: notifications
@@ -143,6 +150,9 @@ AUTH_PASSWORD_VALIDATORS = [
 # explicitly, so a forgotten permission_classes fails closed rather than open.
 
 REST_FRAMEWORK = {
+    # Renders Django's ValidationError as a 400 rather than letting it escape
+    # as a 500. See app/exceptions.py.
+    "EXCEPTION_HANDLER": "app.exceptions.exception_handler",
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],

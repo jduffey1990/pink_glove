@@ -43,9 +43,13 @@ COPY --chown=app:app . /code
 # Baked in at build time so the running container needs no write access to
 # STATIC_ROOT. Uses production settings so a settings misconfiguration fails
 # the build rather than the first deploy.
+# These values exist only for the duration of this layer -- they are not
+# persisted into the image and are never used to encrypt anything. The real
+# ones come from the environment at runtime.
 RUN SECRET_KEY=build-time-only \
     ALLOWED_HOSTS=localhost \
     CORS_ALLOWED_ORIGINS=http://localhost \
+    FIELD_ENCRYPTION_KEY=YnVpbGQtdGltZS1vbmx5LW5vdC1hLXJlYWwta2V5ISE= \
     DJANGO_SETTINGS_MODULE=app.settings.production \
     python manage.py collectstatic --noinput --clear
 

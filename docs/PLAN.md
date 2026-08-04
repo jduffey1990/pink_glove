@@ -7,8 +7,8 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 |---|---|---|
 | 0 | Scaffold, settings, Docker, test harness | **Done** |
 | 1 | Tenancy core + identity | **Done** |
-| 2 | Customers + service catalog | Next |
-| 3 | Scheduling | Not started |
+| 2 | Customers + service catalog | **Done** |
+| 3 | Scheduling | Next |
 | 4 | Billing | Not started |
 | 5 | Notifications + customer portal | Not started |
 
@@ -152,11 +152,39 @@ organizations with users in each.
 
 ---
 
-## Later phases
+## Phase 2 — Customers and service catalog ✅
 
-**Phase 2 — customers / catalog.** `Customer`, `ServiceLocation` (sqft,
-beds/baths, access notes, gate code, pets), `Service` + pricing model (flat /
-hourly / per-sqft).
+129 tests passing.
+
+- `customers`: `Customer` (billing address, status, source, optional `user` link
+  for portal access) and `ServiceLocation` (service address, sqft/beds/baths,
+  access and pet notes). A check constraint requires at least one of first name,
+  last name, or company name.
+- `catalog`: `Service` with flat / hourly / per-sqft pricing and a
+  `quote_cents()` that rounds once at the end (ADR-009). `POST
+  /api/catalog/services/{id}/quote/` exposes it.
+- Gate codes, alarm codes, and key locations are encrypted at rest (ADR-014).
+- Permissions differ by role: cleaners can read the catalog but not change
+  prices; dispatchers manage customers but not prices; customers see neither.
+
+Two things surfaced while building:
+
+- **`TenantModel.save()`'s cross-org guard was returning 500, not 400.** Caught
+  by the location-attachment test. Fixed globally with a DRF exception handler
+  (ADR-015).
+- **Adding `FIELD_ENCRYPTION_KEY` broke the Docker build** before it broke a
+  deploy: `production.py` refuses to boot without it, and the image runs
+  `collectstatic` under production settings. The Dockerfile now passes a
+  throwaway build-time key. This is the settings-validation-at-build-time design
+  working as intended.
+
+Verified live: creating a location through the API returns `gate_code` as
+`4821#`, while `SELECT gate_code FROM customers_servicelocation` returns
+`gAAAAABqcjNG...`.
+
+---
+
+## Later phases
 
 **Phase 3 — scheduling.** `RecurringPlan` (RRULE), `Job`, `JobAssignment`,
 `TimeEntry`, `JobNote` / `JobPhoto`. Beat materializes `Job` rows ~8 weeks ahead

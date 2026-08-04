@@ -3,13 +3,17 @@
 from decouple import config
 
 from .base import *  # noqa: F403
-from .base import MIDDLEWARE, SECRET_KEY
+from .base import FIELD_ENCRYPTION_KEY, MIDDLEWARE, SECRET_KEY
 
 DEBUG = True
 ENV = "local"
 LOCAL = True
 
 SECRET_KEY = SECRET_KEY or "django-insecure-local-only-do-not-deploy-this-value"  # noqa: S105
+
+# A fixed throwaway key, so encrypted columns survive a local database that
+# outlives the process. Anything written with it is readable by anyone.
+FIELD_ENCRYPTION_KEY = FIELD_ENCRYPTION_KEY or "cGluay1nbG92ZS1sb2NhbC1kZXYta2V5LU5PVFJFQUw="  # noqa: S105
 
 ALLOWED_HOSTS = ["*"]
 

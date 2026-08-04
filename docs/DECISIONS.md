@@ -159,10 +159,20 @@ resolution, so there is no organization to scope to yet.
 
 ---
 
-## ADR-009: Money is integer cents, everywhere
+## ADR-009: Money is integer cents — but *rates* are Decimal
 
-No floats, no `Decimal` columns for currency. The source repo already does this
+Amounts are integer cents, always. No floats. The source repo already does this
 (`amount_in_cents`) and it is one of the things it gets right.
+
+**Refined in Phase 2:** a *rate* is not an amount. $0.125 per square foot is a
+real price, and rounding the rate to 12 cents would quote $216 instead of $225
+on an 1,800 sqft house — losing $9 on every job, silently, forever. So
+`Service.hourly_rate_cents` and `per_sqft_rate_cents` are `Decimal`, the
+multiplication happens in `Decimal`, and the result is rounded to whole cents
+exactly once at the end (`Service.quote_cents`).
+
+`base_price_cents` doubles as a minimum charge for hourly and per-sqft
+services, so a 400 sqft studio cannot price below the cost of showing up.
 
 ---
 
@@ -211,6 +221,59 @@ adopting uv later needs no restructuring.
 **Not carried over:** the source repo's `requirements.txt` is a `pip freeze` —
 pandas, numpy, yfinance, peewee, and a pinned `pip`/`setuptools`/`wheel`, plus
 the PyPI `uuid` package which shadows the stdlib module. ~60 packages → 15.
+
+---
+
+## ADR-014: Gate codes, alarm codes, and key locations are encrypted at rest
+
+**Decided (Phase 2).** `base.fields.EncryptedTextField`, Fernet, keyed by
+`FIELD_ENCRYPTION_KEY`. Applied to exactly three columns on `ServiceLocation`.
+
+**Why these and not everything:** for a cleaning company, a leaked database is
+not merely a privacy incident — it is a list of addresses paired with the codes
+to get inside them. That is a materially different kind of harm from a leaked
+phone number, and worth the cost. Encryption is applied deliberately rather than
+broadly because the cost is real:
+
+- **Encrypted columns cannot be filtered, ordered, or indexed on.** Fernet
+  includes a random IV, so identical plaintext yields different ciphertext every
+  time. A test asserts this, precisely so nobody later assumes otherwise.
+- **Losing the key loses the data, permanently.** It belongs in a secret store
+  *and* in backups — not only in the app environment.
+- It protects a stolen dump. It does **not** protect against an attacker with
+  application-level access, because the running app necessarily holds the key.
+
+**Rejected — full-database encryption at rest (managed-Postgres option).** Worth
+turning on too, but it protects against a stolen disk, not a stolen dump or a
+compromised read-replica credential. It is not a substitute.
+
+**Rejected — not storing codes at all.** Cleaners genuinely need them, and the
+alternative is codes living in group texts, which is worse.
+
+Nested serializers omit these fields entirely, so a customer list cannot spray
+gate codes across the wire. Only the location detail endpoint returns them, and
+only to staff.
+
+`production.py` refuses to boot without the key, and the Dockerfile's
+build-time `collectstatic` passes a throwaway one — a real key is never baked
+into an image layer.
+
+---
+
+## ADR-015: Django's ValidationError renders as 400, not 500
+
+**Decided (Phase 2).** `app.exceptions.exception_handler`, wired as DRF's
+`EXCEPTION_HANDLER`, translates `django.core.exceptions.ValidationError` into
+DRF's own.
+
+Found by a test. `TenantModel.save()` raises Django's `ValidationError` when a
+write points at another organization's record (ADR-002) — correct behaviour, but
+DRF only understands its own exception type, so it escaped as an unhandled 500.
+A caller pasting somebody else's id is a client error, and the response should
+say so.
+
+This applies globally: any model-level `clean()` or `save()` validation now
+surfaces as a usable 400 instead of a stack trace.
 
 ---
 

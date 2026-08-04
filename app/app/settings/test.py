@@ -12,6 +12,7 @@ ENV = "test"
 LOCAL = False
 
 SECRET_KEY = "django-insecure-test-only"  # noqa: S105
+FIELD_ENCRYPTION_KEY = "cGluay1nbG92ZS1sb2NhbC1kZXYta2V5LU5PVFJFQUw="  # noqa: S105
 
 ALLOWED_HOSTS = ["*", "testserver"]
 
