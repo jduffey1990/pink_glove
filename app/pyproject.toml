@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# This project is deployed, not distributed. `py-modules = []` makes
+# `pip install .` resolve dependencies without trying to package the Django
+# apps themselves, which keeps pyproject.toml the single source of deps.
+[tool.setuptools]
+py-modules = []
+
+[project]
+name = "pink-glove"
+version = "0.1.0"
+description = "CRM, scheduling, and billing for cleaning companies"
+requires-python = ">=3.13"
+
+dependencies = [
+    "django>=5.2.17,<5.3",          # LTS, security support through April 2028
+    "djangorestframework>=3.17,<4",
+    "django-cors-headers>=4.9,<5",
+    "django-filter>=26.1,<27",
+    "django-extensions>=4.1,<5",
+    "psycopg[binary]>=3.3,<4",
+    "python-decouple>=3.8,<4",
+    "dj-database-url>=3.1,<4",
+    "gunicorn>=26.0,<27",
+    "whitenoise>=6.12,<7",
+    "celery>=5.6,<6",
+    "redis>=6.0,<7",
+    "django-celery-results>=2.6,<3",
+    "django-celery-beat>=2.9,<3",    # Phase 3: recurring job materializer
+    "pillow>=12.3,<13",              # Organization.logo now, job photos later
+]
+
+[project.optional-dependencies]
+# Installed only once a deploy target is chosen. See docs/DECISIONS.md ADR-006.
+s3 = ["django-storages[s3]>=1.14"]
+gcs = ["django-storages[google]>=1.14"]
+
+dev = [
+    "pytest>=8.4",
+    "pytest-django>=4.12",
+    "pytest-cov>=7.0",
+    "factory-boy>=3.3",
+    "ruff>=0.16",
+    "pre-commit>=4.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["*/migrations/*"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "DJ",            # flake8-django
+    "C4",            # comprehensions
+    "T20",           # no print() left behind
+]
+ignore = [
+    "E501",          # line length is handled by the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["S101"]
+"app/settings/*" = ["F403", "F405"]  # star-imports from base are intentional here
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "app.settings.test"
+python_files = ["test_*.py", "tests.py"]
+addopts = "--strict-markers --strict-config -ra"
+testpaths = ["."]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["*/migrations/*", "*/tests/*", "manage.py", "app/settings/*", "conftest.py"]

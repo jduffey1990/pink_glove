@@ -1,0 +1,100 @@
+name: pink-glove
+
+x-django: &django
+  build:
+    context: .
+  image: pink-glove:local
+  env_file: .env
+  environment:
+    DJANGO_SETTINGS_MODULE: app.settings.local
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  volumes:
+    # Live code reload in development. Not present in any deployed environment.
+    - .:/code
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: pink_glove
+      POSTGRES_USER: pink_glove
+      POSTGRES_PASSWORD: pink_glove
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pink_glove -d pink_glove"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Runs to completion before web starts, so migrations never race N workers.
+  migrate:
+    <<: *django
+    command: python manage.py migrate --noinput
+    restart: "no"
+
+  web:
+    <<: *django
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  worker:
+    <<: *django
+    command: celery -A app worker --loglevel=info --concurrency=4
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  beat:
+    <<: *django
+    command: celery -A app beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
