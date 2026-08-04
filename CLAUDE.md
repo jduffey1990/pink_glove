@@ -88,6 +88,10 @@ SECRET_KEY=x ALLOWED_HOSTS=example.com CORS_ALLOWED_ORIGINS=https://example.com 
 # Migrations
 docker compose run --rm web python manage.py makemigrations
 docker compose run --rm web python manage.py migrate
+
+# Two demo organizations with a user in every role (password printed at the end).
+# Two, not one -- tenant isolation bugs are invisible with a single tenant.
+docker compose run --rm web python manage.py seed_demo
 ```
 
 `.env` is required (`cp .env.example .env`). The default `DATABASE_URL` uses the
@@ -98,6 +102,13 @@ docker compose run --rm web python manage.py migrate
 - Line length 100, `ruff` for lint and format, `ruff` rule set in
   `pyproject.toml`.
 - Tests live in `<app>/tests/`, named `test_*.py`, pytest style.
+- **Sign tests in with `client.force_login(user)`, never DRF's
+  `force_authenticate()`.** The latter attaches the user after Django
+  middleware has run, so `TenantMiddleware` sees `AnonymousUser` and resolves
+  no organization — tests then pass or fail for the wrong reason. Use the
+  `authed_client` fixture.
+- `override_settings` cannot decorate a plain pytest class. Use pytest-django's
+  `settings` fixture in an autouse fixture instead.
 - One app per bounded concern; enums in `<app>/enums.py`.
 - Views: DRF generic views and viewsets. Business logic that outgrows a view
   goes in `<app>/services.py`, not a fat model.

@@ -1,0 +1,18 @@
+{% autoescape on %}
+<div style="font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #333;">
+  <p>Hi {{ first_name|default:"there" }},</p>
+
+  <p>Your {{ site_name }} sign-in code is:</p>
+
+  <p style="font-size: 36px; letter-spacing: 6px; font-weight: 600;
+            border: 1px solid #ccc; border-radius: 6px;
+            padding: 12px 20px; display: inline-block;">{{ code }}</p>
+
+  <p>It expires in {{ ttl_minutes }} minutes.</p>
+
+  <p>If you didn't try to sign in, you can ignore this email. Someone may have
+     mistyped their address &mdash; but if it keeps happening, please tell us.</p>
+
+  <p>&mdash; The {{ site_name }} team</p>
+</div>
+{% endautoescape %}

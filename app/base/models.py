@@ -8,6 +8,7 @@ an organization FK on top.
 
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -90,3 +91,95 @@ class Base(models.Model):
     @property
     def is_deleted(self) -> bool:
         return self.deleted_at is not None
+
+
+class TenantModel(Base):
+    """
+    Base for anything owned by one organization.
+
+    Scoping to the current tenant happens at the viewset chokepoint
+    (`base.viewsets.TenantViewSetMixin`), NOT here -- this model's manager is
+    deliberately unscoped so migrations, the admin, management commands, and
+    related-object traversal all keep working. See docs/DECISIONS.md ADR-002
+    before changing that.
+
+    What this class *does* enforce is referential consistency: a record may not
+    point at a record belonging to a different organization.
+    """
+
+    organization = models.ForeignKey(
+        "organizations.Organization",
+        on_delete=models.PROTECT,
+        related_name="+",
+        db_index=True,
+    )
+
+    #: Set False on a model where the cross-organization FK check is not worth
+    #: the extra queries per save (bulk ingest paths, for example).
+    validate_tenant_consistency = True
+
+    class Meta(Base.Meta):
+        abstract = True
+        indexes = [
+            models.Index(fields=["organization", "created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Called here as well as in clean() because DRF serializers do not run
+        # full_clean(), and this guard is worthless if the API path skips it.
+        if self.validate_tenant_consistency:
+            errors = self._check_tenant_consistency()
+            if errors:
+                raise ValidationError(errors)
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        errors = self._check_tenant_consistency()
+        if errors:
+            raise ValidationError(errors)
+
+    def _tenant_foreign_keys(self):
+        for field in self._meta.concrete_fields:
+            if not field.many_to_one or field.name == "organization":
+                continue
+            related_model = field.related_model
+            if isinstance(related_model, type) and issubclass(related_model, TenantModel):
+                yield field
+
+    def _check_tenant_consistency(self) -> dict[str, str]:
+        """
+        Return {field_name: message} for any FK pointing outside this record's
+        organization.
+
+        Viewset scoping stops a user reading another tenant's rows, but it does
+        not stop them *referencing* one by id in a write. This does.
+
+        Cost: one narrow indexed query per tenant FK whose target isn't already
+        cached on the instance.
+        """
+        errors: dict[str, str] = {}
+        if self.organization_id is None:
+            return errors
+
+        for field in self._tenant_foreign_keys():
+            related_id = getattr(self, field.attname)
+            if related_id is None:
+                continue
+
+            cached = self._state.fields_cache.get(field.name)
+            if cached is not None:
+                related_org_id = cached.organization_id
+            else:
+                related_org_id = (
+                    field.related_model.all_objects.filter(pk=related_id)
+                    .values_list("organization_id", flat=True)
+                    .first()
+                )
+
+            if related_org_id is not None and related_org_id != self.organization_id:
+                errors[field.name] = (
+                    f"{field.related_model._meta.verbose_name} belongs to a different organization."
+                )
+
+        return errors

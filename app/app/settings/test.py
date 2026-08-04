@@ -37,8 +37,15 @@ STORAGES = {
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
 
-# Throttles would make test outcomes depend on execution order.
+# Rates are raised rather than removed: ScopedRateThrottle raises
+# ImproperlyConfigured if a view's scope is missing from this dict, and a low
+# rate would make test outcomes depend on execution order. Throttling itself is
+# tested with an explicit override_settings.
 REST_FRAMEWORK = {  # noqa: F405
     **REST_FRAMEWORK,  # noqa: F405
-    "DEFAULT_THROTTLE_RATES": {},
+    "DEFAULT_THROTTLE_RATES": {
+        "two_factor_issue": "10000/hour",
+        "two_factor_verify": "10000/hour",
+        "magic_link": "10000/hour",
+    },
 }

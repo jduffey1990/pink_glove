@@ -6,8 +6,8 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Scaffold, settings, Docker, test harness | **Done** |
-| 1 | Tenancy core + identity | Next |
-| 2 | Customers + service catalog | Not started |
+| 1 | Tenancy core + identity | **Done** |
+| 2 | Customers + service catalog | Next |
 | 3 | Scheduling | Not started |
 | 4 | Billing | Not started |
 | 5 | Notifications + customer portal | Not started |
@@ -40,7 +40,34 @@ Delivered and verified:
 
 ---
 
-## Phase 1 — Tenancy core + identity ← next
+## Phase 1 — Tenancy core + identity ✅
+
+78 tests passing. The conformance test was verified by deliberately removing
+`TenantViewSetMixin` from `MembershipViewSet`: it failed and named both leaking
+routes, and the two behavioural cross-org tests failed alongside it. Restored
+and green.
+
+End-to-end against `docker compose up`, with two seeded organizations: owner
+login returns a challenge; the session stays anonymous until verification; a
+wrong code is refused; a correct code returns the session; `/api/users/memberships/`
+returns 5 of the 10 seeded memberships, all from the caller's own organization.
+Cleaner login is challenged (untrusted device), customer login is not.
+
+Notes for whoever picks up Phase 2:
+
+- **Tests must sign in with `client.force_login()`, not DRF's
+  `force_authenticate()`.** The latter attaches the user during DRF view
+  dispatch, which runs *after* Django middleware, so `TenantMiddleware` would
+  still see `AnonymousUser` and resolve no organization. `conftest.authed_client`
+  does this correctly.
+- **Throttle scopes cannot be removed in test settings.** `ScopedRateThrottle`
+  raises `ImproperlyConfigured` when a view's scope is missing from
+  `DEFAULT_THROTTLE_RATES`, so `app/settings/test.py` raises the rates instead.
+- `base/tests/test_tenancy.py::_synthetic_models` documents an
+  `isolate_apps` subtlety worth reading before adding tests there.
+
+<details>
+<summary>Original Phase 1 specification</summary>
 
 ### 1.1 `base/` — enforcement machinery
 
@@ -120,6 +147,8 @@ custom UI exists.
 **Done when:** conformance test and cross-org matrix green; all three auth flows
 work end to end against `docker compose up`; a seed command creates two
 organizations with users in each.
+
+</details>
 
 ---
 
