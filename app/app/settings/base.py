@@ -66,6 +66,7 @@ THIRD_PARTY_APPS = [
     "django_extensions",
     "django_celery_results",
     "django_celery_beat",
+    "drf_spectacular",
 ]
 
 LOCAL_APPS = [
@@ -76,8 +77,8 @@ LOCAL_APPS = [
     "customers",
     "catalog",
     "audit",
+    "scheduling",
     "health",
-    # Phase 3 adds: scheduling
     # Phase 4 adds: billing
     # Phase 5 adds: notifications
 ]
@@ -165,11 +166,42 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 50,
+    # ADR-019: the schema is the frontend's contract, generated from the
+    # viewsets rather than hand-maintained.
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
         # Phase 1: consumed by the two_factor views.
         "two_factor_issue": "5/hour",
         "two_factor_verify": "10/hour",
         "magic_link": "5/hour",
+    },
+}
+
+# --------------------------------------------------------------------------
+# OpenAPI schema
+# --------------------------------------------------------------------------
+# See docs/DECISIONS.md ADR-019. `ui/src/api/schema.d.ts` is generated from
+# this and committed, so an API change is visible in the diff that caused it.
+# A test asserts the schema generates with zero warnings -- an action
+# spectacular cannot describe is an action the frontend cannot call.
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "pink_glove API",
+    "DESCRIPTION": "CRM, scheduling, and billing for cleaning companies.",
+    "VERSION": "0.1.0",
+    # The schema endpoint keeps the global IsAuthenticated default; there is no
+    # reason to publish our full surface area to anonymous callers.
+    # SERVE_PERMISSIONS is spelled out because spectacular's own default is
+    # AllowAny -- it does not inherit DEFAULT_PERMISSION_CLASSES.
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAuthenticated"],
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": "/api",
+    # Role is reached both through Membership.role and through the session's
+    # `current_role`. Without this the generator names the same choice set
+    # twice and warns; the schema test treats that warning as a failure.
+    "ENUM_NAME_OVERRIDES": {
+        "RoleEnum": "users.enums.Role.choices",
     },
 }
 

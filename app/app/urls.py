@@ -4,6 +4,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
+from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
     path("health/", include("health.urls", namespace="health")),
@@ -14,7 +15,11 @@ urlpatterns = [
     path("api/customers/", include("customers.urls", namespace="customers")),
     path("api/catalog/", include("catalog.urls", namespace="catalog")),
     path("api/audit/", include("audit.urls", namespace="audit")),
-    # Phase 3: api/scheduling/
+    path("api/scheduling/", include("scheduling.urls", namespace="scheduling")),
+    # The schema and its browser both sit behind the global IsAuthenticated
+    # default -- no AllowAny. See docs/DECISIONS.md ADR-019.
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
     # Phase 4: api/billing/
 ]
 

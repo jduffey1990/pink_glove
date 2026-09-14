@@ -31,6 +31,8 @@ dependencies = [
     "django-celery-beat>=2.9,<3",    # Phase 3: recurring job materializer
     "pillow>=12.3,<13",              # Organization.logo now, job photos later
     "cryptography>=46.0,<47",        # base.fields.EncryptedTextField
+    "python-dateutil>=2.9,<3",       # RRULE expansion; imported directly, so declared
+    "drf-spectacular>=0.28,<1",      # OpenAPI schema -- the frontend contract, ADR-019
 ]
 
 [project.optional-dependencies]

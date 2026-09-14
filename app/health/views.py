@@ -14,8 +14,11 @@ import logging
 
 from django.db import connection
 from django.http import JsonResponse
+from drf_spectacular.utils import extend_schema
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
+
+from health.serializers import LivenessSerializer, ReadinessSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,7 @@ logger = logging.getLogger(__name__)
 class LivenessView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(responses={200: LivenessSerializer}, summary="Liveness probe")
     def get(self, request):
         return JsonResponse({"status": "ok"})
 
@@ -30,6 +34,10 @@ class LivenessView(APIView):
 class ReadinessView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        responses={200: ReadinessSerializer, 503: ReadinessSerializer},
+        summary="Readiness probe",
+    )
     def get(self, request):
         checks = {"database": self._check_database(), "redis": self._check_redis()}
         healthy = all(result == "ok" for result in checks.values())

@@ -15,13 +15,20 @@ import logging
 
 from django.conf import settings
 from django.contrib.auth import authenticate, login
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from base.serializers import DetailSerializer
 from two_factor.models import TrustedDevice, TwoFactorCode
+from two_factor.serializers import (
+    ChallengeIssuedSerializer,
+    LoginSerializer,
+    VerifySerializer,
+)
 from two_factor.services import TRUSTED_DEVICE_COOKIE, send_challenge, two_factor_required
 from users.serializers import SessionSerializer
 
@@ -46,6 +53,20 @@ def _set_device_cookie(response, raw_token: str) -> None:
     )
 
 
+@extend_schema(
+    request=LoginSerializer,
+    responses={
+        200: SessionSerializer,
+        202: ChallengeIssuedSerializer,
+        400: DetailSerializer,
+        401: DetailSerializer,
+    },
+    summary="Sign in",
+    description=(
+        "200 means the session is established (no 2FA required, or a trusted "
+        "device). 202 means a code was sent and POST /api/auth/verify/ is next."
+    ),
+)
 class LoginView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -81,6 +102,11 @@ class LoginView(APIView):
         return Response(body, status=status.HTTP_202_ACCEPTED)
 
 
+@extend_schema(
+    request=VerifySerializer,
+    responses={200: SessionSerializer, 400: DetailSerializer, 401: DetailSerializer},
+    summary="Submit a sign-in code",
+)
 class VerifyView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
@@ -131,6 +157,11 @@ class VerifyView(APIView):
         return TwoFactorCode.objects.filter(pk=challenge_id).first()
 
 
+@extend_schema(
+    request=None,
+    responses={202: ChallengeIssuedSerializer, 400: DetailSerializer},
+    summary="Resend the pending sign-in code",
+)
 class ResendView(APIView):
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
