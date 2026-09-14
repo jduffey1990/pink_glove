@@ -1,5 +1,8 @@
+import datetime as dt
+
 import pytest
 from django.urls import reverse
+from django.utils import timezone
 
 from audit.models import ACCESS_WARNING, AccessReveal
 from customers.models import Customer, ServiceLocation
@@ -114,14 +117,22 @@ class TestReveal:
         assert reveal.is_flagged is False
         assert reveal.evaluated_at is None
 
-    def test_a_cleaner_can_reveal(self, api_client, organization, location, make_member):
-        """They are the ones at the door."""
+    def test_a_cleaner_with_no_assignment_is_refused(
+        self, api_client, organization, location, make_member
+    ):
+        """
+        Changed in Phase 3a.6 (ADR-017). Before jobs existed, any staff member
+        could reveal and the end-of-day pass sorted it out afterwards. A
+        cleaner has no legitimate reason to be in a location's record without
+        an assignment, and a flag cannot undo the exposure -- so this is
+        refused at request time and no row is written.
+        """
         api_client.force_login(make_member(organization, role=Role.CLEANER))
 
         response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
 
-        assert response.status_code == 200
-        assert AccessReveal.objects.get().fields_revealed
+        assert response.status_code == 403
+        assert not AccessReveal.objects.exists()
 
     def test_a_customer_cannot_reveal(self, api_client, organization, location, make_member):
         api_client.force_login(make_member(organization, role=Role.CUSTOMER))
@@ -212,3 +223,235 @@ class TestAuditTrailAccess:
         assert reveal.reviewed_by == owner
         assert reveal.reviewed_at is not None
         assert "ran late" in reveal.review_note
+
+
+@pytest.mark.django_db
+class TestRevealsBindToAJob:
+    """
+    Phase 3a.6 (ADR-016, ADR-017): a reveal records *which visit* it was for,
+    so the end-of-day pass has a window to judge it against rather than only a
+    person and a time.
+    """
+
+    @pytest.fixture
+    def cleaner(self, organization, make_member):
+        return make_member(organization, role=Role.CLEANER, email="cleaner@example.com")
+
+    @pytest.fixture
+    def dispatcher(self, organization, make_member):
+        return make_member(organization, role=Role.DISPATCHER, email="dispatcher@example.com")
+
+    def _job_at(self, organization, location, *, start):
+        from scheduling.tests.factories import JobFactory
+
+        return JobFactory(
+            organization=organization,
+            customer=location.customer,
+            location=location,
+            scheduled_start=start,
+            scheduled_end=start + dt.timedelta(hours=2),
+        )
+
+    def _assign(self, organization, job, user):
+        from scheduling.models import JobAssignment
+
+        return JobAssignment.objects.create(organization=organization, job=job, user=user)
+
+    def test_a_cleaner_on_a_job_today_gets_the_codes_and_the_binding(
+        self, api_client, organization, location, cleaner
+    ):
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        self._assign(organization, job, cleaner)
+        api_client.force_login(cleaner)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.status_code == 200
+        assert response.json()["job"] == str(job.id)
+        assert AccessReveal.objects.get().job_id == job.id
+
+    def test_a_cleaner_assigned_three_days_out_is_refused(
+        self, api_client, organization, location, cleaner
+    ):
+        """The 24-hour band is coarse, but it is not unbounded."""
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(days=3))
+        self._assign(organization, job, cleaner)
+        api_client.force_login(cleaner)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.status_code == 403
+        assert not AccessReveal.objects.exists()
+
+    def test_a_cleaner_assigned_to_a_cancelled_job_is_refused(
+        self, api_client, organization, location, cleaner
+    ):
+        from scheduling.enums import JobStatus
+
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        job.status = JobStatus.CANCELLED
+        job.save()
+        self._assign(organization, job, cleaner)
+        api_client.force_login(cleaner)
+
+        assert (
+            api_client.post(reveal_url(location), {"acknowledged": True}, format="json").status_code
+            == 403
+        )
+
+    def test_the_nearest_job_wins_when_several_qualify(
+        self, api_client, organization, location, cleaner
+    ):
+        """A morning and an evening visit at one address is an ordinary day."""
+        soon = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        later = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=8))
+        self._assign(organization, soon, cleaner)
+        self._assign(organization, later, cleaner)
+        api_client.force_login(cleaner)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.json()["job"] == str(soon.id)
+
+    def test_a_dispatcher_with_no_job_reveals_with_a_null_binding(
+        self, api_client, organization, location, dispatcher
+    ):
+        api_client.force_login(dispatcher)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.status_code == 200
+        assert response.json()["job"] is None
+        assert AccessReveal.objects.get().job_id is None
+
+    def test_a_dispatcher_can_name_the_job(self, api_client, organization, location, dispatcher):
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        api_client.force_login(dispatcher)
+
+        response = api_client.post(
+            reveal_url(location), {"acknowledged": True, "job": str(job.id)}, format="json"
+        )
+
+        assert response.status_code == 200
+        assert AccessReveal.objects.get().job_id == job.id
+
+    def test_a_dispatcher_naming_another_organizations_job_is_a_400(
+        self, api_client, organization, other_organization, location, dispatcher
+    ):
+        from scheduling.tests.factories import JobFactory
+
+        rival_job = JobFactory(organization=other_organization)
+        api_client.force_login(dispatcher)
+
+        response = api_client.post(
+            reveal_url(location),
+            {"acknowledged": True, "job": str(rival_job.id)},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert not AccessReveal.objects.exists()
+
+    def test_a_dispatcher_naming_a_job_at_another_location_is_a_400(
+        self, api_client, organization, location, dispatcher
+    ):
+        from scheduling.tests.factories import JobFactory
+
+        elsewhere = JobFactory(organization=organization)
+        api_client.force_login(dispatcher)
+
+        response = api_client.post(
+            reveal_url(location),
+            {"acknowledged": True, "job": str(elsewhere.id)},
+            format="json",
+        )
+
+        assert response.status_code == 400
+
+    def test_a_dispatcher_with_exactly_one_open_job_binds_to_it(
+        self, api_client, organization, location, dispatcher
+    ):
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        api_client.force_login(dispatcher)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.json()["job"] == str(job.id)
+
+    def test_a_dispatcher_with_two_open_jobs_binds_to_neither(
+        self, api_client, organization, location, dispatcher
+    ):
+        """Guessing between them would put the wrong visit on an audit row."""
+        self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=8))
+        api_client.force_login(dispatcher)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.status_code == 200
+        assert response.json()["job"] is None
+
+
+@pytest.mark.django_db
+class TestTheEvaluatorJudgesBoundReveals:
+    """The two halves joined up: a bound reveal gets a window to be judged against."""
+
+    @pytest.fixture
+    def cleaner(self, organization, make_member):
+        return make_member(organization, role=Role.CLEANER, email="cleaner@example.com")
+
+    def _yesterday_job_and_reveal(self, organization, location, cleaner, *, reveal_hour):
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+
+        from scheduling.models import JobAssignment
+        from scheduling.tests.factories import JobFactory
+
+        tz = ZoneInfo(organization.timezone)
+        day = timezone.now().astimezone(tz).date() - dt.timedelta(days=1)
+        while day.isoweekday() > 5:
+            day -= dt.timedelta(days=1)
+
+        start = dt.datetime(day.year, day.month, day.day, 9, 0, tzinfo=tz)
+        job = JobFactory(
+            organization=organization,
+            customer=location.customer,
+            location=location,
+            scheduled_start=start,
+            scheduled_end=start + dt.timedelta(hours=2),
+        )
+        JobAssignment.objects.create(organization=organization, job=job, user=cleaner)
+
+        reveal = AccessReveal.objects.create(
+            organization=organization,
+            user=cleaner,
+            location=location,
+            job=job,
+            fields_revealed=["gate_code"],
+            acknowledged=True,
+        )
+        moment = dt.datetime(day.year, day.month, day.day, reveal_hour, 0, tzinfo=tz)
+        AccessReveal.objects.filter(pk=reveal.pk).update(created_at=moment)
+        return reveal
+
+    def test_a_reveal_inside_the_window_is_cleared(self, organization, location, cleaner):
+        from audit.tasks import evaluate_access_reveals
+
+        reveal = self._yesterday_job_and_reveal(organization, location, cleaner, reveal_hour=9)
+
+        evaluate_access_reveals(str(organization.id))
+
+        reveal.refresh_from_db()
+        assert reveal.evaluated_at is not None
+        assert not reveal.is_flagged
+
+    def test_a_reveal_hours_outside_the_window_is_flagged(self, organization, location, cleaner):
+        from audit.tasks import OUTSIDE_JOB_WINDOW, evaluate_access_reveals
+
+        reveal = self._yesterday_job_and_reveal(organization, location, cleaner, reveal_hour=5)
+
+        evaluate_access_reveals(str(organization.id))
+
+        reveal.refresh_from_db()
+        assert reveal.is_flagged
+        assert reveal.flag_reason == OUTSIDE_JOB_WINDOW

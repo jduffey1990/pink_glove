@@ -14,6 +14,14 @@ class RevealRequestSerializer(serializers.Serializer):
     """
 
     acknowledged = serializers.BooleanField()
+    job = serializers.UUIDField(
+        required=False,
+        allow_null=True,
+        help_text=(
+            "The visit this reveal is for. Dispatcher and above may name one; "
+            "a cleaner's is resolved from their assignment and this is ignored."
+        ),
+    )
 
 
 class AccessRevealSerializer(TenantModelSerializer):
@@ -24,6 +32,9 @@ class AccessRevealSerializer(TenantModelSerializer):
     location_label = serializers.CharField(source="location.label", read_only=True)
     customer_name = serializers.CharField(source="location.customer.display_name", read_only=True)
     reviewed_by_email = serializers.EmailField(source="reviewed_by.email", read_only=True)
+    job_scheduled_start = serializers.DateTimeField(
+        source="job.scheduled_start", read_only=True, allow_null=True
+    )
 
     class Meta(TenantModelSerializer.Meta):
         model = AccessReveal
@@ -35,6 +46,8 @@ class AccessRevealSerializer(TenantModelSerializer):
             "user_name",
             "location",
             "location_label",
+            "job",
+            "job_scheduled_start",
             "customer_name",
             "fields_revealed",
             "acknowledged",

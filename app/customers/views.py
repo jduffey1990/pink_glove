@@ -6,8 +6,8 @@ from rest_framework.viewsets import ModelViewSet
 
 from audit.models import ACCESS_WARNING
 from audit.serializers import RevealRequestSerializer
-from audit.services import record_reveal
-from base.permissions import IsDispatcherOrHigher, IsStaff
+from audit.services import record_reveal, resolve_reveal_job
+from base.permissions import IsDispatcherOrHigher
 from base.viewsets import TenantViewSetMixin
 from customers.models import Customer, ServiceLocation
 from customers.serializers import CustomerSerializer, ServiceLocationSerializer
@@ -40,9 +40,15 @@ class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):
 
     def get_permissions(self):
         # Cleaners are not dispatchers, but they are the people standing at the
-        # door who need the code. The reveal is what they get, and it is logged.
+        # door who need the code. What they get is a reveal, it is logged, and
+        # it is bounded by their assignment (ADR-017): a cleaner with no job at
+        # this location is refused outright rather than logged and reviewed
+        # later, because there is no legitimate reason for that request and a
+        # flag cannot undo the exposure.
         if self.action == "reveal_access":
-            return [IsStaff()]
+            from scheduling.permissions import IsAssignedCleaner
+
+            return [(IsDispatcherOrHigher | IsAssignedCleaner)()]
         return super().get_permissions()
 
     @action(detail=True, methods=["post"], url_path="reveal-access")
@@ -53,10 +59,14 @@ class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):
         Ordinary schedule data -- address, phone, arrival time -- is not gated
         or logged; a worker needs it constantly. This is only the codes.
 
-        No time restriction is applied here. Whether a reveal sat inside its
-        appointment window is decided by an end-of-day pass (Phase 3), because
-        that verdict depends on how the schedule finally stood. Blocking at
-        request time would strand a worker over a job that got moved.
+        No *timing* restriction is applied here. Whether a reveal sat inside
+        its appointment window is decided by the end-of-day pass, because that
+        verdict depends on how the schedule finally stood. Blocking on timing
+        at request time would strand a worker over a job that got moved.
+
+        What is enforced here is a relationship, not a time: a cleaner needs an
+        assignment at this location (ADR-017). Dispatchers and above are
+        unrestricted, as they already are for the location record itself.
         """
         location = self.get_object()
 
@@ -69,6 +79,14 @@ class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Raises a 400 if a dispatcher named a job that is not at this
+        # location; binding the record to the wrong visit would be worse.
+        job = resolve_reveal_job(
+            request=request,
+            location=location,
+            job_id=serializer.validated_data.get("job"),
+        )
+
         revealed = {field: getattr(location, field) for field in ACCESS_CODE_FIELDS}
         populated = [field for field, value in revealed.items() if value]
 
@@ -77,6 +95,13 @@ class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):
             location=location,
             fields_revealed=populated,
             acknowledged=True,
+            job=job,
         )
 
-        return Response({**revealed, "reveal_id": str(reveal.id)})
+        return Response(
+            {
+                **revealed,
+                "reveal_id": str(reveal.id),
+                "job": str(job.id) if job else None,
+            }
+        )
