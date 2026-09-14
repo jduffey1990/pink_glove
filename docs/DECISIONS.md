@@ -330,6 +330,160 @@ control — do not treat the log as though it were a lock.
 
 ---
 
+## ADR-017: Reveal access is role-tier gated; only cleaners are assignment-bound
+
+**Decided.** Resolves the open question ADR-016 and `docs/PLAN.md`'s Phase 3
+section left unanswered ("what happens to a reveal with no job attached").
+Once `Job`/`JobAssignment` exist (Phase 3), `reveal_access` splits by role
+instead of using one rule for every staff tier:
+
+- **Cleaner:** may reveal only a location tied to a `Job` they are currently
+  assigned to. No matching `JobAssignment`, no reveal — the request is refused
+  outright (`IsAssignedCleaner`, object-level), not logged-and-flagged-later.
+- **Dispatcher and above:** unrestricted, as `IsDispatcherOrHigher` already
+  grants them for `CustomerViewSet`/`ServiceLocationViewSet` generally. Their
+  reveals are logged exactly as before; the end-of-day pass (ADR-016) flags
+  one only when it falls outside the organization's business hours, since
+  there is often no appointment window to compare against for this tier.
+
+**Why split by tier instead of judging every unassigned reveal by business
+hours alone** (the option Phase 3's spec had floated as the default answer):
+a cleaner has no legitimate reason to be in a location's record without an
+assignment — the assignment is the authorization boundary for that role, not
+just a fact to evaluate after the fact. Business-hours-only flagging would let
+any cleaner pull any customer's codes at any daytime hour and only get caught
+after the fact; that is real-time exposure a flag cannot undo. Dispatchers and
+admins are already trusted with the whole book, so a lighter, after-the-fact
+instrument is the right fit for them.
+
+**This narrows, but does not reverse, ADR-016's "nothing is blocked" stance.**
+That rejection was about hard-blocking *any* reveal against a job that might
+have simply moved — blocking there strands a worker over a scheduling change
+that isn't their fault. This blocks a different, narrower thing: a reveal with
+no job relationship at all, for the one role with no legitimate reason to have
+one. ADR-016's mechanics (append-only log, enforced acknowledgement, admin
+exclusion, review workflow) are unchanged for every reveal that still occurs.
+
+**Consequences:**
+
+- `ServiceLocationViewSet.get_permissions()` (`customers/views.py:44-46`) can
+  no longer return a flat `IsStaff()` for `reveal_access`; it needs
+  `IsDispatcherOrHigher() | IsAssignedCleaner()`, where the latter is a new
+  object-level permission checking `JobAssignment` for the requested location.
+- `AccessReveal.job` (already planned for Phase 3) is non-null for every
+  cleaner-tier reveal by construction — a cleaner reveal with no resolvable
+  job is now a 403 at request time, never a row to review later.
+- The end-of-day evaluator only ever needs to reason about dispatcher+
+  reveals (job-window comparison where a job exists, business-hours check
+  where one doesn't) — the cleaner-without-a-job case it would otherwise have
+  had to handle can't occur.
+
+---
+
+## ADR-018: Frontend is a fresh Vue 3 + Vuetify + TypeScript scaffold in `ui/`, not the source repo's shell
+
+**Decided (Phase 3b).** A new Vite scaffold — Vue 3, Vuetify 3, Pinia, Vue
+Router, TypeScript — lives at the repo root in `ui/`. It talks to the API with
+session cookies and a CSRF header, the auth model the backend was built for
+(`SESSION_COOKIE_SAMESITE`, `CSRF_COOKIE_HTTPONLY = False`, credentialed CORS
+all already assume a browser SPA on a separate origin).
+
+**Rejected — reusing the source repo's `ui/` tree.** It was the working
+assumption since Phase 0, so the rejection needs stating. The tree is Vue 3.2
+on Vite 3 with Vuetify 3.6, carries both a Vite config and a leftover Vue CLI
+config, lists webpack plugins Vite never runs, and pulls moment, jsPDF,
+html2canvas, and chart.js for features this product does not have. Every
+screen is Pomarium-specific. The transferable parts — the axios plugin with
+CSRF and credentials, the session store shape, and the Stripe.js wiring — total
+under two hundred lines and are ported by hand. Adopting the tree would mean
+upgrading and deleting most of it before writing the first screen; cleaner to
+start from the current Vuetify template and copy those pieces in.
+
+**Rejected — token (JWT) auth to "simplify" the SPA.** Session auth is already
+built, tested, and hardened (ADR-008); the 2FA challenge and trusted-device
+cookie are session-bound. Tokens would mean re-doing that and losing HttpOnly
+protection on the credential. The SPA's only obligations are `withCredentials`
+and reading the CSRF cookie.
+
+**Rejected — server-rendered Django templates or HTMX.** Two of the three
+audiences (dispatchers on a calendar, cleaners on a phone in a driveway) need a
+stateful, responsive client. A cleaner's clock-in must feel instant.
+
+**Why TypeScript when the source was JavaScript:** the API contract is
+generated (ADR-019). Types are what make the generated schema useful; without
+them it is documentation nobody reads.
+
+**Consequences:** `ui/` is its own package with its own lint; `docker compose`
+grows a `ui` service for development; a production build for the UI is deferred
+with the deploy target (ADR-006). Nothing in `app/` knows the UI exists beyond
+`CORS_ALLOWED_ORIGINS` and `FRONTEND_BASE_URL`.
+
+---
+
+## ADR-019: The OpenAPI schema is the frontend contract
+
+**Decided (Phase 3a).** `drf-spectacular` generates the schema from the
+viewsets. It is served at `/api/schema/` and browsable at `/api/docs/`, both
+authenticated. The frontend does not hand-write request or response types: a
+script regenerates `ui/openapi.yaml` and `ui/src/api/schema.d.ts` from the
+backend, and both are committed so an API change shows up in the same diff as
+the backend change that caused it.
+
+**A test asserts the schema generates with zero warnings.** A viewset action
+that spectacular cannot describe is a viewset the frontend cannot call
+correctly; making that a test failure keeps `@extend_schema` from being
+forgotten.
+
+**Rejected — hand-maintained TypeScript interfaces.** They drift the first time
+someone adds a serializer field under deadline, and nothing fails when they
+do.
+
+**Rejected — generating a full client SDK.** The generated *types* plus a thin
+axios wrapper is enough; a generated client would own the CSRF and
+organization-header logic that must stay in one hand-written place.
+
+**Rejected — committing nothing and generating at build time.** Then a backend
+change can silently break the UI build on someone else's machine. Committing
+the schema turns that into a reviewable diff.
+
+---
+
+## ADR-020: Editing a recurring plan regenerates untouched future jobs and keeps the rest
+
+**Decided (Phase 3a).** A `Job` materialized from a `RecurringPlan` carries
+`plan_occurrence`, the UTC instant it was originally planned for. When the plan
+is edited (rule, time, duration, location, service, price override, or
+deactivated), future jobs from that plan that are **untouched** — still
+`SCHEDULED`, `scheduled_start == plan_occurrence`, no time entries — are
+soft-deleted and re-materialized from the new definition. Any future job that
+has been rescheduled, has changed status, or has been worked is kept as it is
+and stays linked to the plan. The API reports `{"regenerated": n, "kept": m}`
+so the dispatcher sees what happened.
+
+**Why `plan_occurrence` and not `scheduled_start` as the idempotency key.**
+The materializer runs daily. If a dispatcher moves next Tuesday's visit to
+Wednesday, keying on `scheduled_start` re-creates a Tuesday job the next
+morning and the customer gets two visits. Keying on the originally planned
+instant means "this occurrence already exists, wherever it was moved to".
+
+**Rejected — never touching materialized jobs on plan edit.** Eight weeks of
+stale jobs at the old time is the common case for a plan edit, and a
+dispatcher will not hand-fix forty rows.
+
+**Rejected — regenerating every future job.** Throws away the reschedule the
+customer asked for last week and the cleaner the dispatcher assigned by hand.
+
+**Rejected — a "detached from plan" flag set on any manual edit.** Same
+outcome as the untouched rule, but needs every write path to remember to set
+it. The rule derives the answer from state that is already there.
+
+**Accepted cost:** an assignment added by hand to an otherwise untouched future
+job is lost on regeneration and replaced by the plan's `default_assignees`.
+The response counts make that visible; a dispatcher who needs to keep such an
+assignment can reschedule the job by a minute to pin it.
+
+---
+
 ## Standing security notes
 
 The source repo has a live `SECRET_KEY` (`app/app/settings.py`, line 26) and an
