@@ -24,11 +24,12 @@ repos:
     hooks:
       # Runs the project's own eslint rather than a pinned mirror: the config
       # is eslint-config-vuetify, which has to agree with the versions in
-      # ui/package-lock.json. Needs Node 22 (see ui/.nvmrc) -- the toolchain
-      # calls Object.groupBy, which does not exist before Node 21.
+      # ui/package-lock.json. The wrapper picks up ui/.nvmrc and fails with a
+      # readable message on an older Node, rather than the TypeError eslint
+      # throws from inside a dependency there.
       - id: ui-eslint
         name: eslint (ui)
-        entry: bash -c 'cd ui && npm run --silent lint:fix'
+        entry: ui/bin/lint.sh
         language: system
         files: ^ui/.*\.(ts|vue|js|mts)$
         pass_filenames: false
