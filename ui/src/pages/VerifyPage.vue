@@ -40,6 +40,13 @@
     }
   }
 
+  /** Fill the field from the code the local backend handed back. */
+  function useDevCode () {
+    if (session.devCode) {
+      code.value = session.devCode
+    }
+  }
+
   async function resend () {
     resending.value = true
     error.value = ''
@@ -83,6 +90,26 @@
           variant="tonal"
         >
           {{ notice }}
+        </v-alert>
+
+        <!-- Local development only. The API returns `dev_code` just when it is
+             running with LOCAL = True, so this cannot appear in a deployed
+             environment: there is nothing for it to render. -->
+        <v-alert
+          v-if="session.devCode"
+          class="mb-4"
+          density="compact"
+          icon="mdi-wrench-outline"
+          type="info"
+          variant="tonal"
+        >
+          <div class="d-flex align-center ga-2">
+            <span>Dev code: <strong>{{ session.devCode }}</strong></span>
+
+            <v-spacer />
+
+            <v-btn size="x-small" variant="tonal" @click="useDevCode">Use it</v-btn>
+          </div>
         </v-alert>
 
         <v-form @submit.prevent="submit">

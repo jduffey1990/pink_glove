@@ -139,6 +139,17 @@ npm run api:types      # -> ui/openapi.yaml and ui/src/api/schema.d.ts
 
 The whole stack, including the dev server, comes up with
 `docker compose up -d` from `app/` — the `ui` service runs Vite on :3000.
+Do not also run `npm run dev` on the host while that container is up: the port
+is `strictPort`, so the second one now fails rather than drifting to :3001 and
+being refused by CORS on every call.
+
+**Signing in locally.** Owner, admin and dispatcher are challenged on every
+sign-in by design (ADR-008) — there is no bypass and none should be added.
+Instead the API returns the code in the login response as `dev_code` whenever
+it runs with `LOCAL = True`, and the verify page shows it with a "Use it"
+button. It is absent in any deployed environment, so nothing renders there.
+Cleaners can tick "Trust this device" and skip the challenge for 30 days;
+customers use magic links and are never challenged.
 
 ## Conventions
 

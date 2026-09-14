@@ -54,6 +54,17 @@ export const useSessionStore = defineStore('session', () => {
   const ready = ref(false)
   const organizationId = ref<string | null>(readStoredOrganization())
 
+  /**
+   * The code, when the backend chose to hand it over.
+   *
+   * `dev_code` is present only when the API runs with `LOCAL = True`, which is
+   * never a deployed environment -- the backend gates it, not this store. It
+   * exists so a developer with no mail server can still sign in, and surfacing
+   * it here saves digging through DevTools for something the response already
+   * contains.
+   */
+  const devCode = ref<string | null>(null)
+
   const isAuthenticated = computed(() => user.value !== null)
   const memberships = computed<Membership[]>(() => user.value?.memberships ?? [])
 
@@ -92,6 +103,7 @@ export const useSessionStore = defineStore('session', () => {
 
   function clear (): void {
     user.value = null
+    devCode.value = null
     organizationId.value = null
     writeStoredOrganization(null)
   }
@@ -145,6 +157,7 @@ export const useSessionStore = defineStore('session', () => {
     const response = await api.post('/api/auth/login/', { email, password })
 
     if (response.status === 202) {
+      devCode.value = response.data?.dev_code ?? null
       return 'code-required'
     }
 
@@ -154,11 +167,13 @@ export const useSessionStore = defineStore('session', () => {
 
   async function verify (code: string, rememberDevice = false): Promise<void> {
     await api.post('/api/auth/verify/', { code, remember_device: rememberDevice })
+    devCode.value = null
     await refresh()
   }
 
   async function resendCode (): Promise<void> {
-    await api.post('/api/auth/resend/')
+    const response = await api.post('/api/auth/resend/')
+    devCode.value = response.data?.dev_code ?? null
   }
 
   async function logout (): Promise<void> {
@@ -173,6 +188,7 @@ export const useSessionStore = defineStore('session', () => {
     user,
     ready,
     organizationId,
+    devCode,
     isAuthenticated,
     memberships,
     role,
