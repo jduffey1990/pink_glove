@@ -48,6 +48,12 @@ export default defineConfig({
     // Matches CORS_ALLOWED_ORIGINS and FRONTEND_BASE_URL in app/.env.example.
     // Changing it means changing those too, or credentialed requests fail CORS.
     port: 3000,
+    // Fail rather than drift to 3001. Vite's default is to hunt for the next
+    // free port, which hands you a dev server that looks fine and that the
+    // backend refuses on every call -- the browser only says "blocked by CORS
+    // policy", which reads as a backend fault. Usually this means the compose
+    // `ui` service already holds 3000: use that one, or stop it first.
+    strictPort: true,
     // Bound to all interfaces so the container's dev server is reachable from
     // the host. Harmless locally; the dev server is never deployed.
     host: true,

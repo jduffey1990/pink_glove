@@ -8,6 +8,7 @@
    */
   import { ref } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
+  import { API_BASE_URL } from '@/api/client'
   import { statusOf, useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -19,6 +20,41 @@
   const busy = ref(false)
   const error = ref('')
   const showPassword = ref(false)
+
+  /**
+   * Why a sign-in failed, in terms the person can act on.
+   *
+   * The 403 case is the one worth spelling out. DRF only enforces CSRF on
+   * requests it authenticates, so posting credentials while an OLD session
+   * cookie is still in the browser gets authenticated, then fails the CSRF
+   * check against a token belonging to a different session. "Please try
+   * again" is exactly wrong there: retrying fails identically forever.
+   */
+  function messageFor (status: number | null): string {
+    switch (status) {
+      case 401: {
+        // The backend's own wording, identical for "no such user" and "wrong
+        // password" so this cannot be used to enumerate accounts.
+        return 'Email and password do not match an active account.'
+      }
+      case 403: {
+        return 'Your browser is holding an old session. Clear this site\'s data '
+          + '(or use a private window) and sign in again.'
+      }
+      case 429: {
+        return 'Too many attempts. Wait a few minutes and try again.'
+      }
+      case null: {
+        // No response at all: the request never reached the API, or CORS
+        // refused it. Commonest cause is a dev server on an unexpected port.
+        return `Could not reach the API at ${API_BASE_URL}. Check it is running, `
+          + 'and that this page is served from an origin the API allows.'
+      }
+      default: {
+        return 'Could not sign in. Please try again.'
+      }
+    }
+  }
 
   async function submit () {
     busy.value = true
@@ -34,15 +70,7 @@
 
       router.push((route.query.next as string) || { name: 'home' })
     } catch (error_) {
-      const status = statusOf(error_)
-      error.value = status === 401
-        // Deliberately the backend's wording: it is identical for "no such
-        // user" and "wrong password" so the endpoint cannot be used to
-        // enumerate accounts.
-        ? 'Email and password do not match an active account.'
-        : (status === 429
-          ? 'Too many attempts. Wait a few minutes and try again.'
-          : 'Could not sign in. Please try again.')
+      error.value = messageFor(statusOf(error_))
     } finally {
       busy.value = false
     }
