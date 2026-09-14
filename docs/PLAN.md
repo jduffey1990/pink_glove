@@ -7,10 +7,10 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 ## Start here
 
-Everything through Phase 2.5 is on `main`, tests green. Next work is Phase 3
-(scheduling backend, then the first frontend slice), specified below. The
-frontend stack is decided (ADR-018, ADR-019); the source repo's `ui/` is
-reference only.
+Everything through Phase 3a is on `main`, tests green. Next work is Phase 3b,
+the first frontend slice, specified below and built against 3a's real
+endpoints. The frontend stack is decided (ADR-018, ADR-019); the source repo's
+`ui/` is reference only.
 
 ```bash
 cd app
@@ -24,7 +24,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **149 passing**. Read `CLAUDE.md` first — it has the invariants and the
+Expect **454 passing**. Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
 **Decisions still open, listed where they bite:**
@@ -40,9 +40,9 @@ testing gotchas that will otherwise cost you an hour each.
 | 0 | Scaffold, settings, Docker, test harness | **Done** |
 | 1 | Tenancy core + identity | **Done** |
 | 2 | Customers + service catalog | **Done** |
-| 2.5 | Access audit trail | **Done** (flagging pass deferred to 3) |
-| 3a | Scheduling backend, audit evaluator, OpenAPI | Next |
-| 3b | Frontend slice (`ui/`), built against 3a | After 3a |
+| 2.5 | Access audit trail | **Done** (flagging pass landed in 3a) |
+| 3a | Scheduling backend, audit evaluator, OpenAPI | **Done** |
+| 3b | Frontend slice (`ui/`), built against 3a | Next |
 | 4 | Billing | Not started |
 | 5 | Notifications + customer portal | Not started |
 
@@ -246,9 +246,13 @@ drift.
 
 ---
 
-## Phase 3 — Scheduling ← next
+## Phase 3 — Scheduling
 
-Split in two. **3a** is the backend and ships first. **3b** is the first
+**3a is done** (454 tests). What the build actually turned up is recorded in
+"Phase 3a as built" below, immediately after the 3a spec — read that before
+3b, because four things differ from what the spec assumed.
+
+Split in two. **3a** is the backend and shipped first. **3b** is the first
 frontend slice and is built against 3a's real endpoints, so that the job list
 and assignment endpoints get shaped by an actual consumer before they harden.
 Stack decisions for 3b are in ADR-018 and ADR-019; do not re-open them here.
@@ -668,6 +672,63 @@ you) and `CLAUDE.md`'s layout block. Regenerate the schema and skim
 seed runs, and a manual pass in Swagger UI as the seeded dispatcher: create a
 plan, see the preview, see the jobs appear, assign the cleaner, sign in as the
 cleaner, clock in, reveal codes, clock out, complete.
+
+---
+
+## Phase 3a as built
+
+Delivered as specified, 149 → 454 tests. Four things differed from the spec,
+and one dev-environment trap is worth knowing about.
+
+**1. `IsDispatcherOrHigher() | IsAssignedCleaner()` does not work.** DRF
+defines `|` on permission *classes* (via `OperandHolder`), not instances. The
+spec's spelling raises `TypeError` at request time, not import time, so it
+looks fine until the endpoint is called. The correct form, used everywhere:
+
+```python
+return [(IsDispatcherOrHigher | IsAssignedCleaner)()]
+```
+
+**2. The zero-warning schema test only means something if it reads both
+caches.** drf-spectacular files "unable to guess serializer" under *error*,
+not warning. A test asserting on `GENERATOR_STATS._warn_cache` alone passes
+vacuously over exactly the views that need `@extend_schema`. `app/tests/
+test_schema.py` reads `_warn_cache` and `_error_cache` both.
+
+Two follow-ons: `SERVE_PERMISSIONS` has to be spelled out because spectacular
+defaults to `AllowAny` rather than inheriting `DEFAULT_PERMISSION_CLASSES`;
+and `ENUM_NAME_OVERRIDES` needs an entry per colliding choice set (`Role`,
+plus `JobStatus`/`CustomerStatus`, which both surface as a field called
+`status`).
+
+**3. A UTC-stamped `UNTIL` in an RRULE is rejected, in favour of `ends_on`.**
+Expansion is deliberately naive local wall-clock so 9am survives a DST change,
+and dateutil refuses to mix a naive DTSTART with an aware UNTIL. Beyond the
+library's objection, "until this UTC instant" is ambiguous against a series
+defined in local time. A floating `UNTIL=20271231T000000` is accepted.
+
+**4. Soft-deleting a job does not suppress the visit; cancelling does.**
+`materialize_plan` checks *live* rows for an existing occurrence, because the
+unique constraint is itself partial on `deleted_at is null` and regeneration
+works by soft-deleting untouched jobs and rebuilding them (ADR-020). The
+consequence is that a deleted job reappears on the next nightly run, while a
+CANCELLED one does not — it is a live row at that occurrence, and it keeps the
+reason on the record. This is why `destroy` refuses a job with recorded time
+and tells the caller to cancel instead. Documented in `scheduling/services.py`
+where it would otherwise look like a bug.
+
+**The dev-environment trap:** `EncryptedTextField` raises when
+`FIELD_ENCRYPTION_KEY` has changed since a row was written, which turns a
+single stale row into a 500 on any list that includes it. If
+`/api/customers/locations/` returns a 500 in a long-lived dev database, that
+is the cause — the message names the field. Re-seed, or delete the row.
+
+**Not carried out:** the live cross-tenant HTTP check in the exit-criteria
+walkthrough hit the `two_factor_issue` throttle (5/hour) after repeated
+sign-ins. The behaviour is covered by the suite
+(`scheduling/tests/test_jobs_api.py::TestTenantIsolation`) and by the
+structural conformance test; only the manual repeat was skipped.
+
 
 ### 3b — Frontend slice
 

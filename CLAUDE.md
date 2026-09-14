@@ -23,9 +23,13 @@ pink_glove/
 │   ├── app/                # project package: settings/, urls, celery, middleware
 │   ├── base/               # Base + TenantModel, managers, TenantViewSetMixin, permissions
 │   ├── users/              # CustomUser, Membership, Role enum, auth
+│   ├── customers/          # Customer, ServiceLocation (codes encrypted)
+│   ├── catalog/            # Service + pricing models
+│   ├── audit/              # AccessReveal, the end-of-day evaluator
+│   ├── scheduling/         # RecurringPlan, Job, assignments, time, notes, photos
 │   ├── health/             # liveness + readiness
-│   └── ...                 # organizations, two_factor, customers, catalog,
-│                           #   scheduling, billing, notifications (by phase)
+│   └── ...                 # organizations, two_factor; billing and
+│                           #   notifications by phase
 └── docs/
 ```
 
@@ -54,7 +58,11 @@ quiet edit.
 7. **No secrets in source.** Everything via env; `.env` is gitignored.
    `gitleaks` runs in pre-commit.
 8. **Timestamps stored UTC.** Display and recurrence expansion happen in
-   `Organization.timezone`.
+   `Organization.timezone`. Recurrence expands *naive local* and converts to
+   UTC last — expanding in UTC shifts every job by an hour for half the year.
+9. **The generated schema has zero warnings.** A test asserts it. An action
+   drf-spectacular cannot describe is one the frontend cannot call, so new
+   `@action`s carry `@extend_schema` (ADR-019).
 
 ## Commands
 
@@ -89,9 +97,16 @@ SECRET_KEY=x ALLOWED_HOSTS=example.com CORS_ALLOWED_ORIGINS=https://example.com 
 docker compose run --rm web python manage.py makemigrations
 docker compose run --rm web python manage.py migrate
 
-# Two demo organizations with a user in every role (password printed at the end).
-# Two, not one -- tenant isolation bugs are invisible with a single tenant.
+# Two demo organizations, each with users in every role, three customers,
+# three services, two recurring plans and a materialized board of jobs
+# (password printed at the end). Two, not one -- tenant isolation bugs are
+# invisible with a single tenant.
 docker compose run --rm web python manage.py seed_demo
+
+# OpenAPI schema (ADR-019). Both are authenticated; sign in first.
+#   GET /api/schema/   the schema itself
+#   GET /api/docs/     Swagger UI
+python manage.py spectacular --file openapi.yaml
 ```
 
 `.env` is required (`cp .env.example .env`). The default `DATABASE_URL` uses the
@@ -109,6 +124,12 @@ docker compose run --rm web python manage.py seed_demo
   `authed_client` fixture.
 - `override_settings` cannot decorate a plain pytest class. Use pytest-django's
   `settings` fixture in an autouse fixture instead.
+- **Compose DRF permissions on the classes, not instances**:
+  `(IsDispatcherOrHigher | IsAssignedCleaner)()`. The instance form raises
+  `TypeError` at request time, which reads as a 500 rather than a mistake.
+- Build scheduling rows with `scheduling/tests/factories.py`. A `Job` needs
+  four related rows that must all agree about the tenant; by hand that is a
+  test about fixtures rather than about behaviour.
 - One app per bounded concern; enums in `<app>/enums.py`.
 - Views: DRF generic views and viewsets. Business logic that outgrows a view
   goes in `<app>/services.py`, not a fat model.

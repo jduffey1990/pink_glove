@@ -9,6 +9,7 @@ hostname -- those come from the environment. See .env.example.
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from decouple import Csv, config
 
 # app/app/settings/base.py -> app/
@@ -66,6 +67,7 @@ THIRD_PARTY_APPS = [
     "django_extensions",
     "django_celery_results",
     "django_celery_beat",
+    "drf_spectacular",
 ]
 
 LOCAL_APPS = [
@@ -76,8 +78,8 @@ LOCAL_APPS = [
     "customers",
     "catalog",
     "audit",
+    "scheduling",
     "health",
-    # Phase 3 adds: scheduling
     # Phase 4 adds: billing
     # Phase 5 adds: notifications
 ]
@@ -165,11 +167,47 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 50,
+    # ADR-019: the schema is the frontend's contract, generated from the
+    # viewsets rather than hand-maintained.
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
         # Phase 1: consumed by the two_factor views.
         "two_factor_issue": "5/hour",
         "two_factor_verify": "10/hour",
         "magic_link": "5/hour",
+    },
+}
+
+# --------------------------------------------------------------------------
+# OpenAPI schema
+# --------------------------------------------------------------------------
+# See docs/DECISIONS.md ADR-019. `ui/src/api/schema.d.ts` is generated from
+# this and committed, so an API change is visible in the diff that caused it.
+# A test asserts the schema generates with zero warnings -- an action
+# spectacular cannot describe is an action the frontend cannot call.
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "pink_glove API",
+    "DESCRIPTION": "CRM, scheduling, and billing for cleaning companies.",
+    "VERSION": "0.1.0",
+    # The schema endpoint keeps the global IsAuthenticated default; there is no
+    # reason to publish our full surface area to anonymous callers.
+    # SERVE_PERMISSIONS is spelled out because spectacular's own default is
+    # AllowAny -- it does not inherit DEFAULT_PERMISSION_CLASSES.
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAuthenticated"],
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": "/api",
+    # Role is reached both through Membership.role and through the session's
+    # `current_role`. Without this the generator names the same choice set
+    # twice and warns; the schema test treats that warning as a failure.
+    "ENUM_NAME_OVERRIDES": {
+        "RoleEnum": "users.enums.Role.choices",
+        # Two different choice sets are both exposed as a field called
+        # "status". Left alone the generator invents names like
+        # "StatusAccEnum", which the frontend then has to guess at.
+        "JobStatusEnum": "scheduling.enums.JobStatus.choices",
+        "CustomerStatusEnum": "customers.enums.CustomerStatus.choices",
     },
 }
 
@@ -261,6 +299,28 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# DatabaseScheduler reads this dict on startup and syncs it into the database,
+# so adding an entry here needs no data migration.
+#
+# Both fan-out tasks iterate active organizations and dispatch one task each;
+# neither takes a tenant from ambient context (ADR-004).
+CELERY_BEAT_SCHEDULE = {
+    # Tops every active recurring plan back up to the 8-week horizon. Runs in
+    # the small hours UTC, which is outside the working day of every timezone
+    # this product plausibly serves.
+    "materialize-recurring-jobs": {
+        "task": "scheduling.materialize_all_organizations",
+        "schedule": crontab(hour="2", minute="0"),
+    },
+    # Hourly rather than daily on purpose: the task only judges local days that
+    # are already over, so running every hour gives every tenant an
+    # after-close pass in its own timezone without a per-tenant cron entry.
+    "evaluate-access-reveals": {
+        "task": "audit.evaluate_access_reveals_all",
+        "schedule": crontab(minute="0"),
+    },
+}
 
 REDIS_URL = CELERY_BROKER_URL
 

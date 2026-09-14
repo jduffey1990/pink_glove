@@ -3,6 +3,9 @@ import logging
 from django.conf import settings
 from django.contrib.auth import login, logout
 from django.core.mail import send_mail
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import ensure_csrf_cookie
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -11,11 +14,13 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from base.permissions import IsStaff
+from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 from users.models import CustomUser, MagicLinkToken, Membership
 from users.serializers import (
     MagicLinkConsumeSerializer,
     MagicLinkRequestSerializer,
+    MagicLinkSentSerializer,
     MembershipSerializer,
     SessionSerializer,
 )
@@ -28,6 +33,18 @@ class SessionView(APIView):
 
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        responses={200: SessionSerializer},
+        summary="Current session",
+        description=(
+            "Returns an empty object when nobody is signed in. Always sets the "
+            "csrftoken cookie, which is what the SPA needs before its first POST."
+        ),
+    )
+    # This GET is the SPA's first call on boot, and nothing else sets the
+    # csrftoken cookie before it. Without the cookie a fresh browser's very
+    # first POST -- the login -- fails CSRF.
+    @method_decorator(ensure_csrf_cookie)
     def get(self, request):
         if not request.user.is_authenticated:
             return Response({}, status=status.HTTP_200_OK)
@@ -37,6 +54,7 @@ class SessionView(APIView):
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses={200: DetailSerializer}, summary="Sign out")
     def post(self, request):
         logout(request)
         return Response({"detail": "Signed out."})
@@ -54,6 +72,11 @@ class MagicLinkRequestView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "magic_link"
 
+    @extend_schema(
+        request=MagicLinkRequestSerializer,
+        responses={202: MagicLinkSentSerializer},
+        summary="Request a sign-in link",
+    )
     def post(self, request):
         serializer = MagicLinkRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -90,6 +113,11 @@ class MagicLinkConsumeView(APIView):
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "magic_link"
 
+    @extend_schema(
+        request=MagicLinkConsumeSerializer,
+        responses={200: SessionSerializer, 401: DetailSerializer},
+        summary="Exchange a sign-in link for a session",
+    )
     def post(self, request):
         serializer = MagicLinkConsumeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

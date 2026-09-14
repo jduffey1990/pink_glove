@@ -490,3 +490,41 @@ The source repo has a live `SECRET_KEY` (`app/app/settings.py`, line 26) and an
 Alpha Vantage API key (line 29) committed in source and in git history. **If that
 app is live, rotate both.** Nothing of the sort is carried into this repo, and
 `gitleaks` runs in pre-commit to keep it that way.
+
+---
+
+## ADR-021: A visit is suppressed by cancelling it, not by deleting it
+
+**Decided (Phase 3a).** `materialize_plan` looks for an existing occurrence
+among **live** rows only. Soft-deleted jobs do not block re-creation, so a job
+that is deleted reappears on the next nightly run. A job that is **cancelled**
+does not: it is a live row at that occurrence, and it carries the reason.
+
+**Why it has to be this way.** The unique constraint that makes materialization
+idempotent, `unique_job_per_plan_occurrence`, is itself partial on
+`deleted_at is null` — it has to be, because ADR-020's regeneration works by
+soft-deleting untouched future jobs and rebuilding them from the plan's new
+definition. If the materializer treated soft-deleted rows as existing,
+`regenerate_plan` would delete eight weeks of jobs and create nothing.
+
+**Rejected — making the constraint and the lookup include deleted rows.** Then
+regeneration cannot rebuild an occurrence it just dropped, and ADR-020 needs a
+different mechanism (a "superseded" flag, or hard deletes) to work at all.
+Hard-deleting loses the audit trail on a row that may already be referenced by
+an `AccessReveal`.
+
+**Rejected — having the materializer skip occurrences with a soft-deleted
+job.** It reads as the intuitive behaviour and it is what most people expect on
+first reading, which is why the rejection is written down. It cannot be
+distinguished from the regeneration case: both look like "this occurrence has
+a soft-deleted job". Distinguishing them would mean recording *why* the row was
+deleted, which is the "detached" flag ADR-020 already rejected.
+
+**Consequences:**
+
+- `JobViewSet.destroy` refuses (409) a job with recorded time and says to
+  cancel instead. Deleting one would orphan hours already billed against it.
+- Cancelling is the documented way to call off a visit, and the UI offers it;
+  deletion is for a job created by mistake.
+- Stated in a comment in `scheduling/services.py` at the lookup itself, where
+  it would otherwise read as a bug.
