@@ -3201,6 +3201,14 @@ components:
       - created
     Membership:
       type: object
+      description: |-
+        Who belongs to this organization.
+
+        The user fields are what make this usable as a staff directory: the
+        frontend's assignee pickers need a *user* id to POST to the job assign
+        action, and the membership id is not it. `JobAssignmentSerializer` already
+        exposes the same name and email to the same audience (staff only), so this
+        widens nothing.
       properties:
         id:
           type: string
@@ -3209,6 +3217,17 @@ components:
         organization:
           allOf:
           - $ref: '#/components/schemas/OrganizationSummary'
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_email:
+          type: string
+          format: email
           readOnly: true
         role:
           allOf:
@@ -3222,6 +3241,9 @@ components:
       - is_active
       - organization
       - role
+      - user
+      - user_email
+      - user_name
     NullEnum:
       enum:
       - null

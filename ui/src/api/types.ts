@@ -28,6 +28,22 @@ export type Customer = Schemas['Customer']
 export type ServiceLocation = Schemas['ServiceLocation']
 export type Service = Schemas['Service']
 
+/**
+ * Request bodies, which are NOT the same shape as responses.
+ *
+ * `SPECTACULAR_SETTINGS['COMPONENT_SPLIT_REQUEST']` generates these
+ * separately, and the difference is load-bearing: a location's access codes
+ * are write-only, so they exist on the request type and not on the response
+ * one. Reading a code back is a logged reveal (ADR-016), never a field on a
+ * detail payload -- and the types enforce that rather than relying on
+ * everyone remembering it.
+ */
+export type ServiceLocationRequest = Schemas['PatchedServiceLocationRequest']
+export type CustomerRequest = Schemas['PatchedCustomerRequest']
+export type ServiceRequest = Schemas['PatchedServiceRequest']
+export type JobRequest = Schemas['PatchedJobRequest']
+export type RecurringPlanRequest = Schemas['PatchedRecurringPlanRequest']
+
 export type LocationSummary = Schemas['LocationSummary']
 export type CustomerSummary = Schemas['CustomerSummary']
 export type ServiceSummary = Schemas['ServiceSummary']

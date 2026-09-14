@@ -1357,10 +1357,24 @@ export interface components {
         MaterializeResponse: {
             created: number;
         };
+        /**
+         * @description Who belongs to this organization.
+         *
+         *     The user fields are what make this usable as a staff directory: the
+         *     frontend's assignee pickers need a *user* id to POST to the job assign
+         *     action, and the membership id is not it. `JobAssignmentSerializer` already
+         *     exposes the same name and email to the same audience (staff only), so this
+         *     widens nothing.
+         */
         Membership: {
             /** Format: uuid */
             readonly id: string;
             readonly organization: components["schemas"]["OrganizationSummary"];
+            /** Format: uuid */
+            readonly user: string;
+            readonly user_name: string;
+            /** Format: email */
+            readonly user_email: string;
             readonly role: components["schemas"]["RoleEnum"];
             readonly is_active: boolean;
         };

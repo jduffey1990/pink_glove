@@ -14,11 +14,23 @@ class OrganizationSummarySerializer(serializers.ModelSerializer):
 
 
 class MembershipSerializer(serializers.ModelSerializer):
+    """
+    Who belongs to this organization.
+
+    The user fields are what make this usable as a staff directory: the
+    frontend's assignee pickers need a *user* id to POST to the job assign
+    action, and the membership id is not it. `JobAssignmentSerializer` already
+    exposes the same name and email to the same audience (staff only), so this
+    widens nothing.
+    """
+
     organization = OrganizationSummarySerializer(read_only=True)
+    user_name = serializers.CharField(source="user.full_name", read_only=True)
+    user_email = serializers.EmailField(source="user.email", read_only=True)
 
     class Meta:
         model = Membership
-        fields = ("id", "organization", "role", "is_active")
+        fields = ("id", "organization", "user", "user_name", "user_email", "role", "is_active")
         read_only_fields = fields
 
 
