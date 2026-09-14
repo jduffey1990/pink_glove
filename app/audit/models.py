@@ -8,10 +8,10 @@ act of revealing a home's access codes, which is a discrete, intentional
 click that maps to a real-world moment: someone is at a door.
 
 Flagging is NOT decided here. `is_flagged` is set by an end-of-day pass
-(Phase 3), because whether a reveal fell inside its appointment window depends
-on the schedule as it finally stood that day -- a job moved at 4pm changes the
-verdict on a 2pm reveal. A flag is a prompt for a human to ask a question, not
-an accusation and not an enforcement action.
+(`audit.tasks.evaluate_access_reveals`), because whether a reveal fell inside
+its appointment window depends on the schedule as it finally stood that day --
+a job moved at 4pm changes the verdict on a 2pm reveal. A flag is a prompt for
+a human to ask a question, not an accusation and not an enforcement action.
 """
 
 from django.db import models
@@ -41,8 +41,18 @@ class AccessReveal(TenantModel):
     location = models.ForeignKey(
         ServiceLocation, on_delete=models.PROTECT, related_name="access_reveals"
     )
-    # Phase 3 adds: job = FK("scheduling.Job", null=True) -- binds a reveal to
-    # the specific visit it was for, which is what the EOD pass compares against.
+    #: The visit this reveal was for. PROTECT rather than SET_NULL: the row is
+    #: evidence, and jobs are soft-deleted anyway, so nothing legitimately
+    #: destroys the job it points at. Null only for a dispatcher-tier reveal
+    #: with no resolvable job -- a cleaner's reveal cannot get this far without
+    #: one (ADR-017).
+    job = models.ForeignKey(
+        "scheduling.Job",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="access_reveals",
+    )
 
     fields_revealed = models.JSONField(default=list, help_text='e.g. ["gate_code", "alarm_code"]')
     acknowledged = models.BooleanField(

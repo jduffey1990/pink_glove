@@ -9,6 +9,7 @@ hostname -- those come from the environment. See .env.example.
 from pathlib import Path
 
 import dj_database_url
+from celery.schedules import crontab
 from decouple import Csv, config
 
 # app/app/settings/base.py -> app/
@@ -293,6 +294,28 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# DatabaseScheduler reads this dict on startup and syncs it into the database,
+# so adding an entry here needs no data migration.
+#
+# Both fan-out tasks iterate active organizations and dispatch one task each;
+# neither takes a tenant from ambient context (ADR-004).
+CELERY_BEAT_SCHEDULE = {
+    # Tops every active recurring plan back up to the 8-week horizon. Runs in
+    # the small hours UTC, which is outside the working day of every timezone
+    # this product plausibly serves.
+    "materialize-recurring-jobs": {
+        "task": "scheduling.materialize_all_organizations",
+        "schedule": crontab(hour="2", minute="0"),
+    },
+    # Hourly rather than daily on purpose: the task only judges local days that
+    # are already over, so running every hour gives every tenant an
+    # after-close pass in its own timezone without a per-tenant cron entry.
+    "evaluate-access-reveals": {
+        "task": "audit.evaluate_access_reveals_all",
+        "schedule": crontab(minute="0"),
+    },
+}
 
 REDIS_URL = CELERY_BROKER_URL
 
