@@ -7,10 +7,9 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 ## Start here
 
-Everything through Phase 3a is on `main`, tests green. Next work is Phase 3b,
-the first frontend slice, specified below and built against 3a's real
-endpoints. The frontend stack is decided (ADR-018, ADR-019); the source repo's
-`ui/` is reference only.
+Everything through Phase 3 is on `main`, tests green — backend and the first
+frontend slice both. Next work is Phase 4, billing. Read "Phase 3b as built"
+before touching `ui/`.
 
 ```bash
 cd app
@@ -24,7 +23,8 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **454 passing**. Read `CLAUDE.md` first — it has the invariants and the
+Expect **460 passing** in `app/`, and **65** in `ui/` (`cd ui && npm test`).
+Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
 **Decisions still open, listed where they bite:**
@@ -42,7 +42,7 @@ testing gotchas that will otherwise cost you an hour each.
 | 2 | Customers + service catalog | **Done** |
 | 2.5 | Access audit trail | **Done** (flagging pass landed in 3a) |
 | 3a | Scheduling backend, audit evaluator, OpenAPI | **Done** |
-| 3b | Frontend slice (`ui/`), built against 3a | Next |
+| 3b | Frontend slice (`ui/`), built against 3a | **Done** |
 | 4 | Billing | Not started |
 | 5 | Notifications + customer portal | Not started |
 
@@ -825,3 +825,52 @@ Organization subscription models come over renamed but unwired.
 delivery.
 
 Open decisions are listed under **Start here** at the top of this file.
+
+---
+
+## Phase 3b as built
+
+Delivered as specified: all seven screens, the API client, the session store,
+and the generated contract. 65 Vitest tests over the interceptors, the session
+boot sequence, and the timezone helpers. The backend grew to 460.
+
+**Vuetify 4, not 3 (ADR-022).** ADR-018 named the then-current major. Node 22
+is a hard requirement — the lint toolchain calls `Object.groupBy`, absent
+before Node 21, and crashes rather than degrading on Node 20.
+
+**Two things the generated contract caught that review would not have.**
+
+1. Access codes are write-only, so they are absent from the *response* type.
+   Write paths now take the split request types (`ServiceLocationRequest`),
+   which makes "a code must never appear on a read payload" a compile error
+   rather than a convention.
+2. Building the assignee picker surfaced that `MembershipSerializer` never
+   exposed a user id, so the UI could list colleagues but not assign any of
+   them. Fixed in the backend with the regenerated schema in the same commit —
+   which is the feedback loop 3a and 3b were split to produce.
+
+**One real bug, worth knowing about because the pattern recurs.** A dialog
+rendered behind a `v-if` that becomes true in the same tick as its `v-model`
+mounts with the model *already* true, so a plain `watch` never sees a change.
+`RevealCodesDialog` opened blank — no warning text, because the fetch never
+ran. It needs `{ immediate: true }`.
+
+**Local throttle rates raised** in `app/settings/local.py`. Five sign-ins an
+hour is right for a deployed environment and unworkable for building a login
+screen, and the throttle is keyed on IP so every browser profile on the
+machine shares one bucket. Production keeps the real rates.
+
+**Verified in a real browser** (Chromium via Playwright, driven from a
+scratchpad — no browser automation was added to the repo, per the 3b spec):
+26 checks as the seeded dispatcher at 1440px and the cleaner at 400px, in both
+organizations. Sign-in through the 2FA challenge, the week grid in each
+organization's own timezone, job detail, the customer screens, the reveal
+dialog showing the backend's own warning and then the codes, and the cleaner's
+clock-in → clock-out → complete at 400px with no horizontal overflow.
+
+**Still open:** the stale-`FIELD_ENCRYPTION_KEY` row noted under "Phase 3a as
+built" makes Sparkle Clean's customer list 500, so the customer screens were
+walked through in the second organization. Re-seeding clears it.
+
+**Not in 3b, unchanged:** customer portal, billing, notifications, offline
+support, push, a production build pipeline for `ui/`.

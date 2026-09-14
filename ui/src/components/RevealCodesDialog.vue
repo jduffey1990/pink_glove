@@ -25,6 +25,10 @@
   const loading = ref(false)
   const error = ref('')
 
+  // `immediate` matters: callers render this dialog behind a `v-if` that
+  // becomes true in the same tick as the model, so the component mounts with
+  // `model` ALREADY true and a plain watcher never sees a change -- the
+  // warning would then never be fetched and the dialog would open blank.
   watch(model, async open => {
     if (!open) {
       // Dropped on close. Reopening means another reveal, and another row.
@@ -43,7 +47,7 @@
     } finally {
       loading.value = false
     }
-  })
+  }, { immediate: true })
 
   async function confirm () {
     loading.value = true

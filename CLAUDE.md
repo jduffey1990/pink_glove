@@ -30,6 +30,11 @@ pink_glove/
 │   ├── health/             # liveness + readiness
 │   └── ...                 # organizations, two_factor; billing and
 │                           #   notifications by phase
+├── ui/                     # Vue 3 + Vuetify 4 + TypeScript SPA (ADR-018)
+│   ├── src/api/            # client.ts (CSRF + org header), generated schema.d.ts
+│   ├── src/stores/         # session store: boot, login, organization choice
+│   ├── src/lib/            # datetime helpers, all in the org's timezone
+│   └── src/pages/          # one file per screen
 └── docs/
 ```
 
@@ -112,6 +117,29 @@ python manage.py spectacular --file openapi.yaml
 `.env` is required (`cp .env.example .env`). The default `DATABASE_URL` uses the
 `db` hostname, which only resolves inside compose — override it for host runs.
 
+### Frontend
+
+Run from `ui/`. **Node 22 is required**, not preferred: eslint's config
+toolchain calls `Object.groupBy`, which does not exist before Node 21, so
+linting crashes with a `TypeError` from inside a dependency on Node 20.
+`nvm use` reads `ui/.nvmrc`.
+
+```bash
+npm install
+npm run dev            # Vite on :3000, matching CORS_ALLOWED_ORIGINS
+npm run lint           # eslint; lint:fix to apply
+npm run type-check     # vue-tsc
+npm test               # vitest
+npm run build
+
+# Regenerate the API contract after ANY backend serializer or view change,
+# and commit the result in the same diff (ADR-019). Needs app/.venv.
+npm run api:types      # -> ui/openapi.yaml and ui/src/api/schema.d.ts
+```
+
+The whole stack, including the dev server, comes up with
+`docker compose up -d` from `app/` — the `ui` service runs Vite on :3000.
+
 ## Conventions
 
 - Line length 100, `ruff` for lint and format, `ruff` rule set in
@@ -130,6 +158,23 @@ python manage.py spectacular --file openapi.yaml
 - Build scheduling rows with `scheduling/tests/factories.py`. A `Job` needs
   four related rows that must all agree about the tenant; by hand that is a
   test about fixtures rather than about behaviour.
+
+### Frontend
+
+- **Never hand-edit `ui/src/api/schema.d.ts`.** It is generated; change the
+  backend and rerun `npm run api:types`.
+- **Write paths use the generated *request* types**, not the response ones.
+  They differ where it matters: a location's access codes are write-only, so
+  they exist on `ServiceLocationRequest` and not on `ServiceLocation`. The
+  types are what keep a code off a read payload.
+- **Dates are reckoned in `session.organization.timezone`, never the
+  browser's.** Use `src/lib/datetime.ts`; the API's `date_from`/`date_to` are
+  organization-local dates and the backend does the conversion.
+- **The server owns the job state machine.** Render the next-status buttons
+  from the 409 body's `allowed` list rather than from a client-side copy.
+- A dialog rendered behind a `v-if` that flips in the same tick as its
+  `v-model` mounts with the model already true, so a `watch` on it needs
+  `{ immediate: true }` or it never fires.
 - One app per bounded concern; enums in `<app>/enums.py`.
 - Views: DRF generic views and viewsets. Business logic that outgrows a view
   goes in `<app>/services.py`, not a fat model.
