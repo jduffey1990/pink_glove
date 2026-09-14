@@ -909,6 +909,39 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/customers/locations/{id}/access-warning/:
+    get:
+      operationId: customers_locations_access_warning_retrieve
+      description: |-
+        The copy the frontend must show before revealing codes.
+
+        Served on its own rather than leaving the client to scrape it out of
+        the 400 that an unacknowledged reveal returns. Both put the wording in
+        one place, which is the point (ADR-023) -- but a deliberate 400 on a
+        healthy path is indistinguishable from a real failure in a browser
+        console, a server log, or an error tracker.
+
+        Nothing is logged here: no reveal has happened.
+      summary: The warning a user must acknowledge before codes are revealed
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessWarning'
+          description: ''
   /api/customers/locations/{id}/reveal-access/:
     post:
       operationId: customers_locations_reveal_access_create
@@ -2561,6 +2594,18 @@ components:
       - user_agent
       - user_email
       - user_name
+    AccessWarning:
+      type: object
+      description: |-
+        The acknowledgement copy, served so the frontend never hardcodes it.
+
+        One string, in one place: the words shown to the user and the words the
+        audit row claims they were shown cannot drift apart (ADR-016, ADR-023).
+      properties:
+        warning:
+          type: string
+      required:
+      - warning
     AssignRequest:
       type: object
       properties:

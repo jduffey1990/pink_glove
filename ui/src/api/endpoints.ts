@@ -297,29 +297,15 @@ export interface RevealedCodes {
 /**
  * Fetch the warning a user must acknowledge before codes are revealed.
  *
- * Obtained by deliberately asking *without* acknowledgement: the backend
- * answers 400 carrying `audit.models.ACCESS_WARNING`. Rendering the server's
- * own words means the warning and the thing it warns about cannot drift, and
- * nothing is logged by this call -- no reveal happened.
+ * Served by the backend so the words shown and the words the audit row claims
+ * were shown are one string (ADR-023). Nothing is logged by asking: no reveal
+ * has happened yet.
  */
 export async function fetchAccessWarning (locationId: string): Promise<string> {
-  try {
-    await api.post(`/api/customers/locations/${locationId}/reveal-access/`, {
-      acknowledged: false,
-    })
-  } catch (error) {
-    const detail = (error as { response?: { data?: { detail?: string } } })
-      .response
-      ?.data
-      ?.detail
-    if (detail) {
-      return detail
-    }
-    throw error
-  }
-
-  // A 200 here would mean the backend stopped requiring acknowledgement.
-  throw new Error('The API did not ask for an acknowledgement.')
+  const { data } = await api.get<{ warning: string }>(
+    `/api/customers/locations/${locationId}/access-warning/`,
+  )
+  return data.warning
 }
 
 /**

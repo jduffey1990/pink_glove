@@ -349,6 +349,34 @@ export interface paths {
         patch: operations["customers_locations_partial_update"];
         trace?: never;
     };
+    "/api/customers/locations/{id}/access-warning/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The warning a user must acknowledge before codes are revealed
+         * @description The copy the frontend must show before revealing codes.
+         *
+         *     Served on its own rather than leaving the client to scrape it out of
+         *     the 400 that an unacknowledged reveal returns. Both put the wording in
+         *     one place, which is the point (ADR-023) -- but a deliberate 400 on a
+         *     healthy path is indistinguishable from a real failure in a browser
+         *     console, a server log, or an error tracker.
+         *
+         *     Nothing is logged here: no reveal has happened.
+         */
+        get: operations["customers_locations_access_warning_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customers/locations/{id}/reveal-access/": {
         parameters: {
             query?: never;
@@ -1051,6 +1079,15 @@ export interface components {
             /** Format: email */
             readonly reviewed_by_email: string;
             readonly review_note: string;
+        };
+        /**
+         * @description The acknowledgement copy, served so the frontend never hardcodes it.
+         *
+         *     One string, in one place: the words shown to the user and the words the
+         *     audit row claims they were shown cannot drift apart (ADR-016, ADR-023).
+         */
+        AccessWarning: {
+            warning: string;
         };
         AssignRequest: {
             /** Format: uuid */
@@ -2880,6 +2917,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceLocation"];
+                };
+            };
+        };
+    };
+    customers_locations_access_warning_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Service location. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessWarning"];
                 };
             };
         };

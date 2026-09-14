@@ -572,11 +572,20 @@ list in the 409 body that a refused transition returns, not from a copy of
 `ALLOWED_TRANSITIONS`. A client-side copy is correct until the day the
 backend's rules change and nothing in the UI fails.
 
-**The access-code warning.** The reveal dialog obtains its text by asking
-without acknowledgement and reading `detail` out of the resulting 400, which
-carries `audit.models.ACCESS_WARNING`. The alternative is a string literal in
-the component that can quietly stop matching the warning the audit row claims
-the user was shown — and that record is the entire point of ADR-016.
+**The access-code warning.** The reveal dialog fetches its text from
+`GET /api/customers/locations/{id}/access-warning/`, which returns
+`audit.models.ACCESS_WARNING`. The alternative is a string literal in the
+component that can quietly stop matching the warning the audit row claims the
+user was shown — and that record is the entire point of ADR-016.
+
+**Amended (Phase 3b, after use).** This first worked by asking for a reveal
+*without* acknowledgement and reading `detail` out of the resulting 400. Same
+single source of truth, and it needed no new endpoint — but it put a red 400
+in the browser console on a completely healthy path, where it is
+indistinguishable from a real failure, and would do the same in server logs
+and any error tracker. A dedicated GET costs one trivial action and keeps a
+failure looking like a failure. The endpoint is gated exactly as the reveal
+is, and logs nothing: no reveal has happened.
 
 **Rejected — generating a client SDK so the rules come along for free.** They
 would not: neither of these is in the schema. The schema types the shapes; the
