@@ -13,8 +13,8 @@ import datetime as dt
 from django.db import models, transaction
 from django.utils import timezone
 
-from scheduling.enums import JobStatus
-from scheduling.models import Job, JobAssignment, RecurringPlan
+from scheduling.enums import ALLOWED_TRANSITIONS, REASON_REQUIRED_STATUSES, JobStatus
+from scheduling.models import Job, JobAssignment, RecurringPlan, TimeEntry
 
 #: How far ahead jobs are created. Eight weeks is far enough that a dispatcher
 #: can plan a rota against real rows, and near enough that a plan edit does not
@@ -255,3 +255,190 @@ def regenerate_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> dic
     regenerated = materialize_plan(plan, today=today) if plan.is_active else 0
 
     return {"regenerated": regenerated, "kept": kept}
+
+
+# ---------------------------------------------------------------------------
+# Job actions
+# ---------------------------------------------------------------------------
+# These raise Django's ValidationError for "you gave me bad input" (rendered as
+# a 400 by app.exceptions, ADR-015) and ConflictError for "the record is not in
+# a state where that makes sense" (409). The distinction matters to the
+# frontend: a 400 means fix the payload, a 409 means re-read the job.
+
+
+class ConflictError(Exception):
+    """
+    The request was well-formed but conflicts with the record's current state.
+
+    Carries an optional `payload` merged into the response body -- the status
+    action uses it to return the allowed next states, so a client that guessed
+    wrong can render the right buttons without a second round trip.
+    """
+
+    def __init__(self, detail: str, payload: dict | None = None):
+        super().__init__(detail)
+        self.detail = detail
+        self.payload = payload or {}
+
+
+def assert_can_be_assigned(*, user, organization) -> None:
+    """
+    A job may only be assigned to staff of its own organization.
+
+    `JobAssignment.user` is a `CustomUser`, which is not a `TenantModel`, so
+    `TenantModel._check_tenant_consistency` does not cover this edge -- without
+    the check, a rival organization's cleaner id in a payload would be accepted.
+    """
+    from django.core.exceptions import ValidationError
+
+    from users.enums import STAFF_ROLES
+    from users.models import Membership
+
+    is_staff_here = Membership.objects.filter(
+        user=user, organization=organization, role__in=STAFF_ROLES, is_active=True
+    ).exists()
+
+    if not is_staff_here:
+        raise ValidationError({"user": "That user is not active staff in this organization."})
+
+
+@transaction.atomic
+def assign_user(*, job: Job, user, assigned_by=None) -> JobAssignment:
+    """Put `user` on `job`. Idempotent: re-assigning returns the existing row."""
+    if job.is_terminal:
+        raise ConflictError(
+            f"This job is {job.get_status_display().lower()} and cannot be assigned.",
+            {"status": job.status},
+        )
+
+    assert_can_be_assigned(user=user, organization=job.organization)
+
+    assignment, _ = JobAssignment.objects.get_or_create(
+        job=job,
+        user=user,
+        defaults={"organization": job.organization, "assigned_by": assigned_by},
+    )
+    return assignment
+
+
+@transaction.atomic
+def unassign_user(*, job: Job, user) -> bool:
+    """Take `user` off `job`. Returns whether anything was removed."""
+    assignment = JobAssignment.objects.filter(job=job, user=user).first()
+    if assignment is None:
+        return False
+
+    assignment.delete()
+    return True
+
+
+@transaction.atomic
+def transition_job(*, job: Job, to_status: str, actor, reason: str = "") -> Job:
+    """
+    Move `job` to `to_status`, enforcing the state machine in
+    `scheduling.enums.ALLOWED_TRANSITIONS`.
+
+    Enforced here rather than in the view because three callers need it: the
+    status action, clock-in (which drags a job into IN_PROGRESS), and the
+    seed command.
+    """
+    from django.core.exceptions import ValidationError
+
+    if to_status not in JobStatus.values:
+        raise ValidationError({"status": f"{to_status!r} is not a job status."})
+
+    allowed = ALLOWED_TRANSITIONS.get(job.status, ())
+    if to_status not in allowed:
+        raise ConflictError(
+            f"A {job.get_status_display().lower()} job cannot become "
+            f"{JobStatus(to_status).label.lower()}.",
+            {"status": job.status, "allowed": list(allowed)},
+        )
+
+    is_dispatcher = _is_dispatcher_or_higher(actor, job.organization)
+
+    # Reopening a finished visit is a correction, not part of the forward flow.
+    if job.is_terminal and not is_dispatcher:
+        raise ConflictError(
+            "Only a dispatcher can reopen a job that is already finished.",
+            {"status": job.status, "allowed": []},
+        )
+
+    if to_status == JobStatus.CANCELLED and not is_dispatcher:
+        raise ConflictError(
+            "Only a dispatcher can cancel a job.",
+            {"status": job.status, "allowed": [s for s in allowed if s != JobStatus.CANCELLED]},
+        )
+
+    if to_status in REASON_REQUIRED_STATUSES and not (reason or "").strip():
+        raise ValidationError(
+            {"reason": f"A reason is required to mark a job {JobStatus(to_status).label.lower()}."}
+        )
+
+    job.status = to_status
+    job.status_changed_at = timezone.now()
+    fields = ["status", "status_changed_at", "updated_at"]
+
+    if to_status in REASON_REQUIRED_STATUSES:
+        job.cancellation_reason = reason.strip()[:255]
+        fields.append("cancellation_reason")
+
+    job.save(update_fields=fields)
+    return job
+
+
+def _is_dispatcher_or_higher(user, organization) -> bool:
+    from users.enums import DISPATCHER_ROLES
+    from users.models import Membership
+
+    if user is None:
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+
+    return Membership.objects.filter(
+        user=user, organization=organization, role__in=DISPATCHER_ROLES, is_active=True
+    ).exists()
+
+
+@transaction.atomic
+def clock_in(*, job: Job, user) -> TimeEntry:
+    """
+    Start `user`'s stretch of work on `job`.
+
+    Moves a SCHEDULED or EN_ROUTE job to IN_PROGRESS as a side effect: someone
+    is on site with the clock running, and making the cleaner press two buttons
+    to say so is how statuses end up wrong.
+    """
+    if job.is_terminal:
+        raise ConflictError(
+            f"This job is {job.get_status_display().lower()}; you cannot clock in.",
+            {"status": job.status},
+        )
+
+    if TimeEntry.objects.filter(job=job, user=user, clock_out__isnull=True).exists():
+        raise ConflictError("You are already clocked in to this job.")
+
+    entry = TimeEntry.objects.create(
+        organization=job.organization, job=job, user=user, clock_in=timezone.now()
+    )
+
+    if job.status in (JobStatus.SCHEDULED, JobStatus.EN_ROUTE):
+        job.status = JobStatus.IN_PROGRESS
+        job.status_changed_at = timezone.now()
+        job.save(update_fields=["status", "status_changed_at", "updated_at"])
+
+    return entry
+
+
+@transaction.atomic
+def clock_out(*, job: Job, user) -> TimeEntry:
+    """Close `user`'s open stretch on `job`. Leaves the status alone -- whether
+    the visit is complete is a separate judgement the cleaner makes."""
+    entry = TimeEntry.objects.filter(job=job, user=user, clock_out__isnull=True).first()
+    if entry is None:
+        raise ConflictError("You are not clocked in to this job.")
+
+    entry.clock_out = timezone.now()
+    entry.save(update_fields=["clock_out", "updated_at"])
+    return entry

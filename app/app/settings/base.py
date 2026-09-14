@@ -203,6 +203,11 @@ SPECTACULAR_SETTINGS = {
     # twice and warns; the schema test treats that warning as a failure.
     "ENUM_NAME_OVERRIDES": {
         "RoleEnum": "users.enums.Role.choices",
+        # Two different choice sets are both exposed as a field called
+        # "status". Left alone the generator invents names like
+        # "StatusAccEnum", which the frontend then has to guess at.
+        "JobStatusEnum": "scheduling.enums.JobStatus.choices",
+        "CustomerStatusEnum": "customers.enums.CustomerStatus.choices",
     },
 }
 
