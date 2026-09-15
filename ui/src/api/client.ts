@@ -1,0 +1,107 @@
+/**
+ * The one place that knows how to talk to the API.
+ *
+ * Everything the backend's auth model needs lives here rather than being
+ * repeated per call (ADR-018): credentials on every request, the CSRF token
+ * echoed back from its cookie on every unsafe one, and the organization header
+ * when the signed-in user belongs to more than one.
+ *
+ * Deliberately a thin wrapper over axios rather than a generated client
+ * (ADR-019): the generated *types* are the contract, but the CSRF and
+ * organization logic has to stay in one hand-written place.
+ */
+
+import type { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
+import axios from 'axios'
+
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+
+const CSRF_COOKIE = 'csrftoken'
+const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])
+
+/** Methods that need a CSRF token. GET/HEAD/OPTIONS do not. */
+function isUnsafe (method?: string): boolean {
+  return UNSAFE_METHODS.has((method ?? 'get').toLowerCase())
+}
+
+export function readCookie (name: string): string | null {
+  // document.cookie is the only way to read this: the backend sets csrftoken
+  // with HttpOnly off precisely so the SPA can echo it back.
+  const match = document.cookie.match(new RegExp(String.raw`(^|;\s*)${name}=([^;]*)`))
+  return match ? decodeURIComponent(match[2]) : null
+}
+
+/** Called on a 401, or on a 403 while a session was believed to be active. */
+type SessionLostHandler = () => void
+
+let onSessionLost: SessionLostHandler = () => {}
+
+export function setSessionLostHandler (handler: SessionLostHandler): void {
+  onSessionLost = handler
+}
+
+/**
+ * Which organization the caller is acting in.
+ *
+ * Only sent when the user holds more than one membership -- with a single
+ * membership the backend resolves the tenant on its own, and sending a header
+ * it did not ask for is noise. Supplied as a getter so the client does not
+ * import the store (which imports the client).
+ */
+type OrganizationIdGetter = () => string | null
+
+let getOrganizationId: OrganizationIdGetter = () => null
+
+export function setOrganizationIdGetter (getter: OrganizationIdGetter): void {
+  getOrganizationId = getter
+}
+
+export function createClient (): AxiosInstance {
+  const instance = axios.create({
+    baseURL: API_BASE_URL,
+    // Session cookie auth, so every request must carry credentials.
+    withCredentials: true,
+    headers: { Accept: 'application/json' },
+  })
+
+  instance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+    if (isUnsafe(config.method)) {
+      const token = readCookie(CSRF_COOKIE)
+      if (token) {
+        config.headers.set('X-CSRFToken', token)
+      }
+    }
+
+    const organizationId = getOrganizationId()
+    if (organizationId) {
+      config.headers.set('X-Organization', organizationId)
+    }
+
+    return config
+  })
+
+  instance.interceptors.response.use(
+    response => response,
+    (error: AxiosError) => {
+      const status = error.response?.status
+
+      // 401 is "you are not signed in". 403 covers both "signed in but not
+      // allowed" and an expired session that DRF reports as a permission
+      // failure, so it is treated the same way when we believed we had one.
+      //
+      // 404 is NOT treated as a wrong-organization signal: the API returns 404
+      // for a cross-tenant read by design (a 403 would confirm the record
+      // exists), so reacting to it would sign people out for opening a stale
+      // link.
+      if (status === 401 || status === 403) {
+        onSessionLost()
+      }
+
+      return Promise.reject(error)
+    },
+  )
+
+  return instance
+}
+
+export const api = createClient()

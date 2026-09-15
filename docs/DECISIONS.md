@@ -528,3 +528,70 @@ deleted, which is the "detached" flag ADR-020 already rejected.
   deletion is for a job created by mistake.
 - Stated in a comment in `scheduling/services.py` at the lookup itself, where
   it would otherwise read as a bug.
+
+---
+
+## ADR-022: `ui/` is built on Vuetify 4 and requires Node 22
+
+**Decided (Phase 3b).** Amends ADR-018, which said Vuetify 3.
+
+**Vuetify 4, not 3.** ADR-018 was written while 3 was the current major; it
+named the version it would have got from the scaffold, rather than rejecting 4
+(which did not exist). `npm create vuetify` now produces Vuetify 4, and
+scaffolding one major behind would recreate exactly the staleness ADR-018
+rejected in the source repo's `ui/` tree. Vuetify 3.13 is still maintained, so
+this was a real choice and not a forced one.
+
+**Rejected — pinning Vuetify 3 to match the ADR's letter.** More third-party
+examples still target 3, which is the honest argument for it. Not enough to
+start a greenfield scaffold on a version that is already superseded, when the
+screens here are ordinary lists, forms and dialogs that both majors do well.
+
+**Node 22 is a hard requirement, not a preference.** `eslint-config-vuetify`'s
+toolchain calls `Object.groupBy`, which landed in Node 21. On Node 20 linting
+does not degrade — it crashes with `TypeError: Object.groupBy is not a
+function` from inside a dependency, which reads as a broken install rather
+than an unmet requirement. Pinned in three places so it fails clearly instead:
+`ui/.nvmrc`, `engines` in `ui/package.json`, and `node:22-alpine` for the
+compose service. The Vite build and the dev server themselves run on Node
+20.19; it is only the lint toolchain that does not.
+
+**Consequence:** the `ui-eslint` pre-commit hook is a `local`/`system` hook
+running the project's own eslint, not a pinned mirror — the config has to
+agree with the versions in `ui/package-lock.json`.
+
+---
+
+## ADR-023: The frontend renders server-owned copy and server-owned rules
+
+**Decided (Phase 3b).** Two places where the obvious thing is to hardcode in
+the client, and both are refused.
+
+**The job state machine.** The status buttons are rendered from the `allowed`
+list in the 409 body that a refused transition returns, not from a copy of
+`ALLOWED_TRANSITIONS`. A client-side copy is correct until the day the
+backend's rules change and nothing in the UI fails.
+
+**The access-code warning.** The reveal dialog fetches its text from
+`GET /api/customers/locations/{id}/access-warning/`, which returns
+`audit.models.ACCESS_WARNING`. The alternative is a string literal in the
+component that can quietly stop matching the warning the audit row claims the
+user was shown — and that record is the entire point of ADR-016.
+
+**Amended (Phase 3b, after use).** This first worked by asking for a reveal
+*without* acknowledgement and reading `detail` out of the resulting 400. Same
+single source of truth, and it needed no new endpoint — but it put a red 400
+in the browser console on a completely healthy path, where it is
+indistinguishable from a real failure, and would do the same in server logs
+and any error tracker. A dedicated GET costs one trivial action and keeps a
+failure looking like a failure. The endpoint is gated exactly as the reveal
+is, and logs nothing: no reveal has happened.
+
+**Rejected — generating a client SDK so the rules come along for free.** They
+would not: neither of these is in the schema. The schema types the shapes; the
+behaviour still has to come from a live response.
+
+**Accepted cost:** the reveal dialog makes two requests where one would do,
+and a first-time render of the status buttons uses a local list until the
+server has had a chance to disagree. Both are cheap next to the failure they
+prevent.

@@ -1,0 +1,4817 @@
+openapi: 3.0.3
+info:
+  title: pink_glove API
+  version: 0.1.0
+  description: CRM, scheduling, and billing for cleaning companies.
+paths:
+  /api/audit/access-reveals/:
+    get:
+      operationId: audit_access_reveals_list
+      description: |-
+        The audit trail. Read-only by construction -- there is no update or destroy
+        route, and the model refuses deletion.
+
+        Admin and owner only: this is the record used to ask a worker why they
+        pulled a code at 11pm, so the people being recorded should not be able to
+        curate it.
+      parameters:
+      - in: query
+        name: acknowledged
+        schema:
+          type: boolean
+      - in: query
+        name: is_flagged
+        schema:
+          type: boolean
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: location
+        schema:
+          type: string
+          format: uuid
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: user
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - audit
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAccessRevealList'
+          description: ''
+  /api/audit/access-reveals/{id}/:
+    get:
+      operationId: audit_access_reveals_retrieve
+      description: |-
+        The audit trail. Read-only by construction -- there is no update or destroy
+        route, and the model refuses deletion.
+
+        Admin and owner only: this is the record used to ask a worker why they
+        pulled a code at 11pm, so the people being recorded should not be able to
+        curate it.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Access reveal.
+        required: true
+      tags:
+      - audit
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessReveal'
+          description: ''
+  /api/audit/access-reveals/{id}/review/:
+    post:
+      operationId: audit_access_reveals_review_create
+      description: |-
+        Mark a flagged reveal as looked at.
+
+        Closing a flag records who closed it and what they were told. Nothing
+        about the original reveal is altered.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Access reveal.
+        required: true
+      tags:
+      - audit
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessReveal'
+          description: ''
+  /api/auth/login/:
+    post:
+      operationId: auth_login_create
+      description: 200 means the session is established (no 2FA required, or a trusted
+        device). 202 means a code was sent and POST /api/auth/verify/ is next.
+      summary: Sign in
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+          description: ''
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeIssued'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/auth/resend/:
+    post:
+      operationId: auth_resend_create
+      summary: Resend the pending sign-in code
+      tags:
+      - auth
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeIssued'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/auth/verify/:
+    post:
+      operationId: auth_verify_create
+      summary: Submit a sign-in code
+      tags:
+      - auth
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/catalog/services/:
+    get:
+      operationId: catalog_services_list
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: pricing_model
+        schema:
+          type: string
+          enum:
+          - flat
+          - hourly
+          - per_sqft
+        description: |-
+          * `flat` - Flat rate
+          * `hourly` - Hourly
+          * `per_sqft` - Per square foot
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - catalog
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedServiceList'
+          description: ''
+    post:
+      operationId: catalog_services_create
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      tags:
+      - catalog
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ServiceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ServiceRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Service'
+          description: ''
+  /api/catalog/services/{id}/:
+    get:
+      operationId: catalog_services_retrieve
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service.
+        required: true
+      tags:
+      - catalog
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Service'
+          description: ''
+    put:
+      operationId: catalog_services_update
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service.
+        required: true
+      tags:
+      - catalog
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ServiceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ServiceRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Service'
+          description: ''
+    patch:
+      operationId: catalog_services_partial_update
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service.
+        required: true
+      tags:
+      - catalog
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedServiceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedServiceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedServiceRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Service'
+          description: ''
+    delete:
+      operationId: catalog_services_destroy
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service.
+        required: true
+      tags:
+      - catalog
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/catalog/services/{id}/quote/:
+    post:
+      operationId: catalog_services_quote_create
+      description: Price this service for a given size or duration.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service.
+        required: true
+      tags:
+      - catalog
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuoteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/QuoteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/QuoteRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Quote'
+          description: ''
+  /api/customers/customers/:
+    get:
+      operationId: customers_customers_list
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: preferred_contact_method
+        schema:
+          type: string
+          enum:
+          - email
+          - phone
+          - sms
+        description: |-
+          * `email` - Email
+          * `sms` - Text message
+          * `phone` - Phone call
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - active
+          - archived
+          - inactive
+          - lead
+        description: |-
+          * `lead` - Lead
+          * `active` - Active
+          * `inactive` - Inactive
+          * `archived` - Archived
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedCustomerList'
+          description: ''
+    post:
+      operationId: customers_customers_create
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+          description: ''
+  /api/customers/customers/{id}/:
+    get:
+      operationId: customers_customers_retrieve
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Customer.
+        required: true
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+          description: ''
+    put:
+      operationId: customers_customers_update
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Customer.
+        required: true
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+          description: ''
+    patch:
+      operationId: customers_customers_partial_update
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Customer.
+        required: true
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCustomerRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCustomerRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCustomerRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+          description: ''
+    delete:
+      operationId: customers_customers_destroy
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Customer.
+        required: true
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/customers/locations/:
+    get:
+      operationId: customers_locations_list
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: query
+        name: customer
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: has_pets
+        schema:
+          type: boolean
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedServiceLocationList'
+          description: ''
+    post:
+      operationId: customers_locations_create
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceLocation'
+          description: ''
+  /api/customers/locations/{id}/:
+    get:
+      operationId: customers_locations_retrieve
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceLocation'
+          description: ''
+    put:
+      operationId: customers_locations_update
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceLocation'
+          description: ''
+    patch:
+      operationId: customers_locations_partial_update
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedServiceLocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedServiceLocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedServiceLocationRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceLocation'
+          description: ''
+    delete:
+      operationId: customers_locations_destroy
+      description: |-
+        Scopes reads to the caller's organization and stamps writes with it.
+
+        `organization` is taken from the resolved tenant and never from request
+        data, so a forged `organization` field in a payload has no effect.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/customers/locations/{id}/access-warning/:
+    get:
+      operationId: customers_locations_access_warning_retrieve
+      description: |-
+        The copy the frontend must show before revealing codes.
+
+        Served on its own rather than leaving the client to scrape it out of
+        the 400 that an unacknowledged reveal returns. Both put the wording in
+        one place, which is the point (ADR-023) -- but a deliberate 400 on a
+        healthy path is indistinguishable from a real failure in a browser
+        console, a server log, or an error tracker.
+
+        Nothing is logged here: no reveal has happened.
+      summary: The warning a user must acknowledge before codes are revealed
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessWarning'
+          description: ''
+  /api/customers/locations/{id}/reveal-access/:
+    post:
+      operationId: customers_locations_reveal_access_create
+      description: |-
+        Return this location's access codes and record who asked.
+
+        Ordinary schedule data -- address, phone, arrival time -- is not gated
+        or logged; a worker needs it constantly. This is only the codes.
+
+        No *timing* restriction is applied here. Whether a reveal sat inside
+        its appointment window is decided by the end-of-day pass, because that
+        verdict depends on how the schedule finally stood. Blocking on timing
+        at request time would strand a worker over a job that got moved.
+
+        What is enforced here is a relationship, not a time: a cleaner needs an
+        assignment at this location (ADR-017). Dispatchers and above are
+        unrestricted, as they already are for the location record itself.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Service location.
+        required: true
+      tags:
+      - customers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ServiceLocationRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceLocation'
+          description: ''
+  /api/organizations/current/:
+    get:
+      operationId: organizations_current_retrieve
+      description: |-
+        The caller's own organization.
+
+        Not a `TenantViewSetMixin` view: `Organization` is the tenant, not
+        tenant-owned data. Scoping happens by only ever returning the organization
+        the middleware resolved.
+      tags:
+      - organizations
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+          description: ''
+    put:
+      operationId: organizations_current_update
+      description: |-
+        The caller's own organization.
+
+        Not a `TenantViewSetMixin` view: `Organization` is the tenant, not
+        tenant-owned data. Scoping happens by only ever returning the organization
+        the middleware resolved.
+      tags:
+      - organizations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OrganizationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/OrganizationRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+          description: ''
+    patch:
+      operationId: organizations_current_partial_update
+      description: |-
+        The caller's own organization.
+
+        Not a `TenantViewSetMixin` view: `Organization` is the tenant, not
+        tenant-owned data. Scoping happens by only ever returning the organization
+        the middleware resolved.
+      tags:
+      - organizations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedOrganizationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedOrganizationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedOrganizationRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Organization'
+          description: ''
+  /api/scheduling/job-notes/:
+    get:
+      operationId: scheduling_job_notes_list
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: query
+        name: job
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedJobNoteList'
+          description: ''
+    post:
+      operationId: scheduling_job_notes_create
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobNoteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JobNoteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JobNoteRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobNote'
+          description: ''
+  /api/scheduling/job-notes/{id}/:
+    get:
+      operationId: scheduling_job_notes_retrieve
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job note.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobNote'
+          description: ''
+    put:
+      operationId: scheduling_job_notes_update
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job note.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobNoteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JobNoteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JobNoteRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobNote'
+          description: ''
+    patch:
+      operationId: scheduling_job_notes_partial_update
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job note.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedJobNoteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedJobNoteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedJobNoteRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobNote'
+          description: ''
+    delete:
+      operationId: scheduling_job_notes_destroy
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job note.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/scheduling/job-photos/:
+    get:
+      operationId: scheduling_job_photos_list
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: query
+        name: job
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedJobPhotoList'
+          description: ''
+    post:
+      operationId: scheduling_job_photos_create
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobPhotoRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JobPhotoRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JobPhotoRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPhoto'
+          description: ''
+  /api/scheduling/job-photos/{id}/:
+    get:
+      operationId: scheduling_job_photos_retrieve
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job photo.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPhoto'
+          description: ''
+    put:
+      operationId: scheduling_job_photos_update
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job photo.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobPhotoRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JobPhotoRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JobPhotoRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPhoto'
+          description: ''
+    patch:
+      operationId: scheduling_job_photos_partial_update
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job photo.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedJobPhotoRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedJobPhotoRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedJobPhotoRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobPhoto'
+          description: ''
+    delete:
+      operationId: scheduling_job_photos_destroy
+      description: |-
+        Shared behaviour for notes and photos: both hang off a job, both stamp
+        `user` from the request, and both are readable by the crew on that job.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job photo.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/scheduling/jobs/:
+    get:
+      operationId: scheduling_jobs_list
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      parameters:
+      - in: query
+        name: assignee
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: customer
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: date_from
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: date_to
+        schema:
+          type: string
+          format: date
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: location
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: mine
+        schema:
+          type: boolean
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: plan
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - cancelled
+            - complete
+            - en_route
+            - in_progress
+            - no_access
+            - scheduled
+        description: |-
+          * `scheduled` - Scheduled
+          * `en_route` - En route
+          * `in_progress` - In progress
+          * `complete` - Complete
+          * `cancelled` - Cancelled
+          * `no_access` - No access
+        explode: true
+        style: form
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedJobList'
+          description: ''
+    post:
+      operationId: scheduling_jobs_create
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+  /api/scheduling/jobs/{id}/:
+    get:
+      operationId: scheduling_jobs_retrieve
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+    put:
+      operationId: scheduling_jobs_update
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/JobRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+    patch:
+      operationId: scheduling_jobs_partial_update
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedJobRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedJobRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedJobRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+    delete:
+      operationId: scheduling_jobs_destroy
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/scheduling/jobs/{id}/assign/:
+    post:
+      operationId: scheduling_jobs_assign_create
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      summary: Put a cleaner on this job
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/jobs/{id}/clock-in/:
+    post:
+      operationId: scheduling_jobs_clock_in_create
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      summary: Start the clock on this job
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/jobs/{id}/clock-out/:
+    post:
+      operationId: scheduling_jobs_clock_out_create
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      summary: Stop the clock on this job
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/jobs/{id}/status/:
+    post:
+      operationId: scheduling_jobs_status_create
+      description: Transitions are enforced server-side. A refusal returns 409 with
+        the allowed next states, so a client can render the right buttons without
+        a second request.
+      summary: Move this job to another status
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusChangeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StatusChangeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StatusChangeRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/jobs/{id}/unassign/:
+    post:
+      operationId: scheduling_jobs_unassign_create
+      description: |-
+        Visits.
+
+        The queryset is role-scoped on top of the tenant scope: a cleaner sees the
+        jobs they are on, a customer sees their own, a dispatcher sees everything.
+      summary: Take a cleaner off this job
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Job.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/plans/:
+    get:
+      operationId: scheduling_plans_list
+      description: Standing appointments. Dispatcher and above.
+      parameters:
+      - in: query
+        name: customer
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: location
+        schema:
+          type: string
+          format: uuid
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRecurringPlanList'
+          description: ''
+    post:
+      operationId: scheduling_plans_create
+      description: Standing appointments. Dispatcher and above.
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecurringPlanRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RecurringPlanRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RecurringPlanRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringPlan'
+          description: ''
+  /api/scheduling/plans/{id}/:
+    get:
+      operationId: scheduling_plans_retrieve
+      description: Standing appointments. Dispatcher and above.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringPlan'
+          description: ''
+    put:
+      operationId: scheduling_plans_update
+      description: |-
+        Edit the plan, then reconcile the jobs it already created.
+
+        The response carries `regenerated` and `kept` so the dispatcher can see
+        what happened to the eight weeks of visits already on the board --
+        which is the whole point of ADR-020's rule.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecurringPlanRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RecurringPlanRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RecurringPlanRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringPlan'
+          description: ''
+    patch:
+      operationId: scheduling_plans_partial_update
+      description: Standing appointments. Dispatcher and above.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedRecurringPlanRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedRecurringPlanRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedRecurringPlanRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecurringPlan'
+          description: ''
+    delete:
+      operationId: scheduling_plans_destroy
+      description: Standing appointments. Dispatcher and above.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/scheduling/plans/{id}/materialize/:
+    post:
+      operationId: scheduling_plans_materialize_create
+      description: Standing appointments. Dispatcher and above.
+      summary: Create this plan's jobs out to the horizon now
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterializeResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/plans/{id}/preview/:
+    get:
+      operationId: scheduling_plans_preview_retrieve
+      description: |-
+        The next N occurrences, in local and UTC form.
+
+        This is what lets the UI show "so: Tue Sep 16, Sep 23, Sep 30..." while
+        someone types an RRULE, instead of making them save and find out.
+      summary: Preview the next occurrences without saving them
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewResponse'
+          description: ''
+  /api/scheduling/plans/{id}/regenerate/:
+    post:
+      operationId: scheduling_plans_regenerate_create
+      description: Standing appointments. Dispatcher and above.
+      summary: Rebuild untouched future jobs from the current definition
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Recurring plan.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegenerateResponse'
+          description: ''
+  /api/scheduling/time-entries/:
+    get:
+      operationId: scheduling_time_entries_list
+      description: |-
+        Recorded hours. Staff read; dispatchers correct.
+
+        Creation goes through the job's clock-in action, not here -- that is where
+        the "one open entry" rule and the status side effect live.
+      parameters:
+      - in: query
+        name: date_from
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: date_to
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: job
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: user
+        schema:
+          type: string
+          format: uuid
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTimeEntryList'
+          description: ''
+  /api/scheduling/time-entries/{id}/:
+    get:
+      operationId: scheduling_time_entries_retrieve
+      description: |-
+        Recorded hours. Staff read; dispatchers correct.
+
+        Creation goes through the job's clock-in action, not here -- that is where
+        the "one open entry" rule and the status side effect live.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Time entry.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimeEntry'
+          description: ''
+    patch:
+      operationId: scheduling_time_entries_partial_update
+      description: |-
+        Recorded hours. Staff read; dispatchers correct.
+
+        Creation goes through the job's clock-in action, not here -- that is where
+        the "one open entry" rule and the status side effect live.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Time entry.
+        required: true
+      tags:
+      - scheduling
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedTimeEntryRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedTimeEntryRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedTimeEntryRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TimeEntry'
+          description: ''
+  /api/users/logout/:
+    post:
+      operationId: users_logout_create
+      summary: Sign out
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/magic-link/:
+    post:
+      operationId: users_magic_link_create
+      description: |-
+        Passwordless sign-in for customers.
+
+        Always returns 202, whether or not the address matches an account -- a
+        different response would turn this into an account-enumeration oracle.
+      summary: Request a sign-in link
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MagicLinkRequestRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MagicLinkRequestRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MagicLinkRequestRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MagicLinkSent'
+          description: ''
+  /api/users/magic-link/consume/:
+    post:
+      operationId: users_magic_link_consume_create
+      summary: Exchange a sign-in link for a session
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MagicLinkConsumeRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/MagicLinkConsumeRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/MagicLinkConsumeRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+          description: ''
+        '401':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/memberships/:
+    get:
+      operationId: users_memberships_list
+      description: Who belongs to the current organization. Read-only in Phase 1.
+      parameters:
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedMembershipList'
+          description: ''
+  /api/users/memberships/{id}/:
+    get:
+      operationId: users_memberships_retrieve
+      description: Who belongs to the current organization. Read-only in Phase 1.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Membership.
+        required: true
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Membership'
+          description: ''
+  /api/users/session/:
+    get:
+      operationId: users_session_retrieve
+      description: Returns an empty object when nobody is signed in. Always sets the
+        csrftoken cookie, which is what the SPA needs before its first POST.
+      summary: Current session
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+          description: ''
+  /health/live/:
+    get:
+      operationId: health_live_retrieve
+      summary: Liveness probe
+      tags:
+      - health
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Liveness'
+          description: ''
+  /health/ready/:
+    get:
+      operationId: health_ready_retrieve
+      summary: Readiness probe
+      tags:
+      - health
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+          description: ''
+components:
+  schemas:
+    AccessReveal:
+      type: object
+      description: Read-only view of the trail, for admins reviewing end-of-day flags.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        location:
+          type: string
+          format: uuid
+          readOnly: true
+        location_label:
+          type: string
+          readOnly: true
+        job:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        job_scheduled_start:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        customer_name:
+          type: string
+          readOnly: true
+        fields_revealed:
+          readOnly: true
+          description: e.g. ["gate_code", "alarm_code"]
+        acknowledged:
+          type: boolean
+          readOnly: true
+          description: User confirmed the logging warning before proceeding.
+        ip_address:
+          type: string
+          readOnly: true
+          nullable: true
+        user_agent:
+          type: string
+          readOnly: true
+        evaluated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        is_flagged:
+          type: boolean
+          readOnly: true
+        flag_reason:
+          type: string
+          readOnly: true
+        reviewed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        reviewed_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        reviewed_by_email:
+          type: string
+          format: email
+          readOnly: true
+        review_note:
+          type: string
+          readOnly: true
+      required:
+      - acknowledged
+      - created_at
+      - customer_name
+      - evaluated_at
+      - fields_revealed
+      - flag_reason
+      - id
+      - ip_address
+      - is_flagged
+      - job
+      - job_scheduled_start
+      - location
+      - location_label
+      - review_note
+      - reviewed_at
+      - reviewed_by
+      - reviewed_by_email
+      - user
+      - user_agent
+      - user_email
+      - user_name
+    AccessWarning:
+      type: object
+      description: |-
+        The acknowledgement copy, served so the frontend never hardcodes it.
+
+        One string, in one place: the words shown to the user and the words the
+        audit row claims they were shown cannot drift apart (ADR-016, ADR-023).
+      properties:
+        warning:
+          type: string
+      required:
+      - warning
+    AssignRequest:
+      type: object
+      properties:
+        user:
+          type: string
+          format: uuid
+      required:
+      - user
+    ChallengeIssued:
+      type: object
+      description: '202 body: a code went out and the client should collect it.'
+      properties:
+        detail:
+          type: string
+        two_factor_required:
+          type: boolean
+          default: true
+        dev_code:
+          type: string
+          description: Local development only. Never present in a deployed environment.
+      required:
+      - detail
+    Customer:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set only if this customer has portal access.
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        company_name:
+          type: string
+          description: For commercial accounts.
+          maxLength: 255
+        display_name:
+          type: string
+          readOnly: true
+        email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        phone:
+          type: string
+          maxLength: 30
+        preferred_contact_method:
+          $ref: '#/components/schemas/PreferredContactMethodEnum'
+        billing_line1:
+          type: string
+          maxLength: 255
+        billing_line2:
+          type: string
+          maxLength: 255
+        billing_city:
+          type: string
+          maxLength: 255
+        billing_state:
+          type: string
+          maxLength: 100
+        billing_postal_code:
+          type: string
+          maxLength: 30
+        billing_country:
+          type: string
+          maxLength: 2
+        status:
+          $ref: '#/components/schemas/CustomerStatusEnum'
+        source:
+          type: string
+          description: How they found you.
+          maxLength: 255
+        notes:
+          type: string
+        locations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceLocationSummary'
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - display_name
+      - id
+      - locations
+      - organization
+      - updated_at
+    CustomerRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        user:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set only if this customer has portal access.
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        company_name:
+          type: string
+          description: For commercial accounts.
+          maxLength: 255
+        email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        phone:
+          type: string
+          maxLength: 30
+        preferred_contact_method:
+          $ref: '#/components/schemas/PreferredContactMethodEnum'
+        billing_line1:
+          type: string
+          maxLength: 255
+        billing_line2:
+          type: string
+          maxLength: 255
+        billing_city:
+          type: string
+          maxLength: 255
+        billing_state:
+          type: string
+          maxLength: 100
+        billing_postal_code:
+          type: string
+          maxLength: 30
+        billing_country:
+          type: string
+          maxLength: 2
+        status:
+          $ref: '#/components/schemas/CustomerStatusEnum'
+        source:
+          type: string
+          description: How they found you.
+          maxLength: 255
+        notes:
+          type: string
+    CustomerStatusEnum:
+      enum:
+      - lead
+      - active
+      - inactive
+      - archived
+      type: string
+      description: |-
+        * `lead` - Lead
+        * `active` - Active
+        * `inactive` - Inactive
+        * `archived` - Archived
+    CustomerSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        display_name:
+          type: string
+          readOnly: true
+        phone:
+          type: string
+          readOnly: true
+        preferred_contact_method:
+          allOf:
+          - $ref: '#/components/schemas/PreferredContactMethodEnum'
+          readOnly: true
+      required:
+      - display_name
+      - id
+      - phone
+      - preferred_contact_method
+    Detail:
+      type: object
+      description: 'The `{"detail": "..."}` body DRF and this codebase use for messages.'
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    Job:
+      type: object
+      description: |-
+        The dispatcher's and cleaner's view of a visit.
+
+        Writes take plain ids for customer/location/service; reads get the nested
+        summaries. `price_cents` is optional on write and quoted from the service
+        when omitted.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        customer:
+          type: string
+          format: uuid
+        customer_detail:
+          allOf:
+          - $ref: '#/components/schemas/CustomerSummary'
+          readOnly: true
+        location:
+          type: string
+          format: uuid
+        location_detail:
+          allOf:
+          - $ref: '#/components/schemas/LocationSummary'
+          readOnly: true
+        service:
+          type: string
+          format: uuid
+        service_detail:
+          allOf:
+          - $ref: '#/components/schemas/ServiceSummary'
+          readOnly: true
+        plan:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        plan_occurrence:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+          description: The UTC instant this occurrence was originally planned for.
+            Immutable. This, not scheduled_start, is the materializer's idempotency
+            key -- a rescheduled job must not be re-created at its old slot.
+        scheduled_start:
+          type: string
+          format: date-time
+        scheduled_end:
+          type: string
+          format: date-time
+        duration_minutes:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/JobStatusEnum'
+          readOnly: true
+        status_changed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        price_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        notes:
+          type: string
+        cancellation_reason:
+          type: string
+          readOnly: true
+        assignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobAssignment'
+          readOnly: true
+        open_time_entry:
+          allOf:
+          - $ref: '#/components/schemas/TimeEntry'
+          nullable: true
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - assignments
+      - cancellation_reason
+      - created_at
+      - customer
+      - customer_detail
+      - duration_minutes
+      - id
+      - location
+      - location_detail
+      - open_time_entry
+      - organization
+      - plan
+      - plan_occurrence
+      - scheduled_end
+      - scheduled_start
+      - service
+      - service_detail
+      - status
+      - status_changed_at
+      - updated_at
+    JobAssignment:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        assigned_at:
+          type: string
+          format: date-time
+          readOnly: true
+        accepted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - accepted_at
+      - assigned_at
+      - id
+      - user
+      - user_email
+      - user_name
+    JobNote:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        job:
+          type: string
+          format: uuid
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        body:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - body
+      - created_at
+      - id
+      - job
+      - user
+      - user_name
+    JobNoteRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        job:
+          type: string
+          format: uuid
+        body:
+          type: string
+          minLength: 1
+      required:
+      - body
+      - job
+    JobPhoto:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        job:
+          type: string
+          format: uuid
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        image:
+          type: string
+          format: uri
+        caption:
+          type: string
+          maxLength: 255
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - image
+      - job
+      - user
+      - user_name
+    JobPhotoRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        job:
+          type: string
+          format: uuid
+        image:
+          type: string
+          format: binary
+        caption:
+          type: string
+          maxLength: 255
+      required:
+      - image
+      - job
+    JobRequest:
+      type: object
+      description: |-
+        The dispatcher's and cleaner's view of a visit.
+
+        Writes take plain ids for customer/location/service; reads get the nested
+        summaries. `price_cents` is optional on write and quoted from the service
+        when omitted.
+      properties:
+        customer:
+          type: string
+          format: uuid
+        location:
+          type: string
+          format: uuid
+        service:
+          type: string
+          format: uuid
+        scheduled_start:
+          type: string
+          format: date-time
+        scheduled_end:
+          type: string
+          format: date-time
+        price_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        notes:
+          type: string
+      required:
+      - customer
+      - location
+      - scheduled_end
+      - scheduled_start
+      - service
+    JobStatusEnum:
+      enum:
+      - scheduled
+      - en_route
+      - in_progress
+      - complete
+      - cancelled
+      - no_access
+      type: string
+      description: |-
+        * `scheduled` - Scheduled
+        * `en_route` - En route
+        * `in_progress` - In progress
+        * `complete` - Complete
+        * `cancelled` - Cancelled
+        * `no_access` - No access
+    Liveness:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+      - status
+    LocationSummary:
+      type: object
+      description: |-
+        What a cleaner needs to get in the door and do the work -- and nothing more.
+
+        `has_access_codes` says whether codes exist; the codes themselves come only
+        from the audited reveal action, which writes a row saying who looked.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        label:
+          type: string
+          readOnly: true
+          description: e.g. "Home", "Rental - Oak St".
+        one_line_address:
+          type: string
+          readOnly: true
+        access_notes:
+          type: string
+          readOnly: true
+          description: Non-sensitive entry instructions.
+        parking_notes:
+          type: string
+          readOnly: true
+        has_pets:
+          type: boolean
+          readOnly: true
+        pet_notes:
+          type: string
+          readOnly: true
+        has_access_codes:
+          type: boolean
+          readOnly: true
+      required:
+      - access_notes
+      - has_access_codes
+      - has_pets
+      - id
+      - label
+      - one_line_address
+      - parking_notes
+      - pet_notes
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - email
+      - password
+    MagicLinkConsumeRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+      required:
+      - token
+    MagicLinkRequestRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+      required:
+      - email
+    MagicLinkSent:
+      type: object
+      description: |-
+        Always the same body whether or not the address matched an account -- a
+        different one would make this an account-enumeration oracle.
+      properties:
+        detail:
+          type: string
+        dev_link:
+          type: string
+          description: Local development only. Never present in a deployed environment.
+      required:
+      - detail
+    MaterializeResponse:
+      type: object
+      properties:
+        created:
+          type: integer
+      required:
+      - created
+    Membership:
+      type: object
+      description: |-
+        Who belongs to this organization.
+
+        The user fields are what make this usable as a staff directory: the
+        frontend's assignee pickers need a *user* id to POST to the job assign
+        action, and the membership id is not it. `JobAssignmentSerializer` already
+        exposes the same name and email to the same audience (staff only), so this
+        widens nothing.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          allOf:
+          - $ref: '#/components/schemas/OrganizationSummary'
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+      required:
+      - id
+      - is_active
+      - organization
+      - role
+      - user
+      - user_email
+      - user_name
+    NullEnum:
+      enum:
+      - null
+    OccurrencePreview:
+      type: object
+      description: One upcoming occurrence, in both the forms a UI needs.
+      properties:
+        local:
+          type: string
+          format: date-time
+        utc:
+          type: string
+          format: date-time
+      required:
+      - local
+      - utc
+    Organization:
+      type: object
+      description: |-
+        The organization as its own admins see it.
+
+        Writes are gated to admin+ by `CurrentOrganizationView.get_permissions`,
+        so the operating-window fields need no further permission handling here.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        slug:
+          type: string
+          readOnly: true
+          pattern: ^[-a-zA-Z0-9_]+$
+        timezone:
+          type: string
+        email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        phone:
+          type: string
+          maxLength: 30
+        address_line1:
+          type: string
+          maxLength: 255
+        address_line2:
+          type: string
+          maxLength: 255
+        address_city:
+          type: string
+          maxLength: 255
+        address_state:
+          type: string
+          maxLength: 100
+        address_postal_code:
+          type: string
+          maxLength: 30
+        address_country:
+          type: string
+          maxLength: 2
+        logo:
+          type: string
+          format: uri
+          nullable: true
+        primary_color:
+          type: string
+          maxLength: 7
+        business_hours_start:
+          type: string
+          format: time
+        business_hours_end:
+          type: string
+          format: time
+        working_days:
+          type: array
+          items:
+            type: integer
+            maximum: 7
+            minimum: 1
+          description: 'ISO weekday numbers: 1 = Monday .. 7 = Sunday.'
+        reveal_buffer_before_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        reveal_buffer_after_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        is_active:
+          type: boolean
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - is_active
+      - name
+      - slug
+      - timezone
+    OrganizationRequest:
+      type: object
+      description: |-
+        The organization as its own admins see it.
+
+        Writes are gated to admin+ by `CurrentOrganizationView.get_permissions`,
+        so the operating-window fields need no further permission handling here.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        timezone:
+          type: string
+          minLength: 1
+        email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        phone:
+          type: string
+          maxLength: 30
+        address_line1:
+          type: string
+          maxLength: 255
+        address_line2:
+          type: string
+          maxLength: 255
+        address_city:
+          type: string
+          maxLength: 255
+        address_state:
+          type: string
+          maxLength: 100
+        address_postal_code:
+          type: string
+          maxLength: 30
+        address_country:
+          type: string
+          maxLength: 2
+        logo:
+          type: string
+          format: binary
+          nullable: true
+        primary_color:
+          type: string
+          maxLength: 7
+        business_hours_start:
+          type: string
+          format: time
+        business_hours_end:
+          type: string
+          format: time
+        working_days:
+          type: array
+          items:
+            type: integer
+            maximum: 7
+            minimum: 1
+          description: 'ISO weekday numbers: 1 = Monday .. 7 = Sunday.'
+        reveal_buffer_before_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        reveal_buffer_after_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+      required:
+      - name
+      - timezone
+    OrganizationSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        slug:
+          type: string
+          readOnly: true
+          pattern: ^[-a-zA-Z0-9_]+$
+        timezone:
+          type: string
+          readOnly: true
+          description: IANA timezone name, e.g. America/Denver.
+        primary_color:
+          type: string
+          readOnly: true
+        logo:
+          type: string
+          format: uri
+          nullable: true
+          readOnly: true
+      required:
+      - id
+      - logo
+      - name
+      - primary_color
+      - slug
+      - timezone
+    PaginatedAccessRevealList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessReveal'
+    PaginatedCustomerList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Customer'
+    PaginatedJobList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Job'
+    PaginatedJobNoteList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobNote'
+    PaginatedJobPhotoList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobPhoto'
+    PaginatedMembershipList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Membership'
+    PaginatedRecurringPlanList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecurringPlan'
+    PaginatedServiceList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Service'
+    PaginatedServiceLocationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceLocation'
+    PaginatedTimeEntryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimeEntry'
+    PatchedCustomerRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        user:
+          type: string
+          format: uuid
+          nullable: true
+          description: Set only if this customer has portal access.
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        company_name:
+          type: string
+          description: For commercial accounts.
+          maxLength: 255
+        email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        phone:
+          type: string
+          maxLength: 30
+        preferred_contact_method:
+          $ref: '#/components/schemas/PreferredContactMethodEnum'
+        billing_line1:
+          type: string
+          maxLength: 255
+        billing_line2:
+          type: string
+          maxLength: 255
+        billing_city:
+          type: string
+          maxLength: 255
+        billing_state:
+          type: string
+          maxLength: 100
+        billing_postal_code:
+          type: string
+          maxLength: 30
+        billing_country:
+          type: string
+          maxLength: 2
+        status:
+          $ref: '#/components/schemas/CustomerStatusEnum'
+        source:
+          type: string
+          description: How they found you.
+          maxLength: 255
+        notes:
+          type: string
+    PatchedJobNoteRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        job:
+          type: string
+          format: uuid
+        body:
+          type: string
+          minLength: 1
+    PatchedJobPhotoRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        job:
+          type: string
+          format: uuid
+        image:
+          type: string
+          format: binary
+        caption:
+          type: string
+          maxLength: 255
+    PatchedJobRequest:
+      type: object
+      description: |-
+        The dispatcher's and cleaner's view of a visit.
+
+        Writes take plain ids for customer/location/service; reads get the nested
+        summaries. `price_cents` is optional on write and quoted from the service
+        when omitted.
+      properties:
+        customer:
+          type: string
+          format: uuid
+        location:
+          type: string
+          format: uuid
+        service:
+          type: string
+          format: uuid
+        scheduled_start:
+          type: string
+          format: date-time
+        scheduled_end:
+          type: string
+          format: date-time
+        price_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        notes:
+          type: string
+    PatchedOrganizationRequest:
+      type: object
+      description: |-
+        The organization as its own admins see it.
+
+        Writes are gated to admin+ by `CurrentOrganizationView.get_permissions`,
+        so the operating-window fields need no further permission handling here.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        timezone:
+          type: string
+          minLength: 1
+        email:
+          oneOf:
+          - type: string
+            format: email
+            maxLength: 254
+          - type: string
+            maxLength: 0
+        phone:
+          type: string
+          maxLength: 30
+        address_line1:
+          type: string
+          maxLength: 255
+        address_line2:
+          type: string
+          maxLength: 255
+        address_city:
+          type: string
+          maxLength: 255
+        address_state:
+          type: string
+          maxLength: 100
+        address_postal_code:
+          type: string
+          maxLength: 30
+        address_country:
+          type: string
+          maxLength: 2
+        logo:
+          type: string
+          format: binary
+          nullable: true
+        primary_color:
+          type: string
+          maxLength: 7
+        business_hours_start:
+          type: string
+          format: time
+        business_hours_end:
+          type: string
+          format: time
+        working_days:
+          type: array
+          items:
+            type: integer
+            maximum: 7
+            minimum: 1
+          description: 'ISO weekday numbers: 1 = Monday .. 7 = Sunday.'
+        reveal_buffer_before_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        reveal_buffer_after_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+    PatchedRecurringPlanRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        customer:
+          type: string
+          format: uuid
+        location:
+          type: string
+          format: uuid
+        service:
+          type: string
+          format: uuid
+        rrule:
+          type: string
+          minLength: 1
+        starts_on:
+          type: string
+          format: date
+          description: Local date of the first possible occurrence.
+        ends_on:
+          type: string
+          format: date
+          nullable: true
+          description: Inclusive. Null runs forever.
+        preferred_start_time:
+          type: string
+          format: time
+          description: Local wall-clock time.
+        duration_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        price_override_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        default_assignees:
+          type: array
+          items:
+            type: string
+            format: uuid
+        is_active:
+          type: boolean
+        notes:
+          type: string
+    PatchedServiceLocationRequest:
+      type: object
+      description: |-
+        Access codes are write-only here.
+
+        They can be set and changed through this endpoint, but reading them back
+        requires the audited reveal action -- otherwise anyone opening a location
+        detail page would see them with no record, which defeats the log.
+      properties:
+        customer:
+          type: string
+          format: uuid
+        label:
+          type: string
+          description: e.g. "Home", "Rental - Oak St".
+          maxLength: 255
+        line1:
+          type: string
+          minLength: 1
+          maxLength: 255
+        line2:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          minLength: 1
+          maxLength: 255
+        state:
+          type: string
+          minLength: 1
+          maxLength: 100
+        postal_code:
+          type: string
+          minLength: 1
+          maxLength: 30
+        country:
+          type: string
+          minLength: 1
+          maxLength: 2
+        square_feet:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        bedrooms:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        bathrooms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,1})?$
+          nullable: true
+          description: Half baths as .5
+        parking_notes:
+          type: string
+        access_notes:
+          type: string
+          description: Non-sensitive entry instructions.
+        gate_code:
+          type: string
+          writeOnly: true
+        alarm_code:
+          type: string
+          writeOnly: true
+        key_location:
+          type: string
+          writeOnly: true
+        has_pets:
+          type: boolean
+        pet_notes:
+          type: string
+        is_active:
+          type: boolean
+    PatchedServiceRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        pricing_model:
+          $ref: '#/components/schemas/PricingModelEnum'
+        base_price_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          description: Flat price, or the minimum charge for other models.
+        hourly_rate_cents:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          description: Cents per hour. Used when pricing model is Hourly.
+        per_sqft_rate_cents:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,7}(?:\.\d{0,3})?$
+          description: Cents per square foot. Used when pricing model is Per square
+            foot.
+        default_duration_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          description: Used to lay out the schedule before actual times are known.
+        is_active:
+          type: boolean
+    PatchedTimeEntryRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        clock_in:
+          type: string
+          format: date-time
+        clock_out:
+          type: string
+          format: date-time
+          nullable: true
+    PreferredContactMethodEnum:
+      enum:
+      - email
+      - sms
+      - phone
+      type: string
+      description: |-
+        * `email` - Email
+        * `sms` - Text message
+        * `phone` - Phone call
+    PreviewResponse:
+      type: object
+      properties:
+        timezone:
+          type: string
+        occurrences:
+          type: array
+          items:
+            $ref: '#/components/schemas/OccurrencePreview'
+      required:
+      - occurrences
+      - timezone
+    PricingModelEnum:
+      enum:
+      - flat
+      - hourly
+      - per_sqft
+      type: string
+      description: |-
+        * `flat` - Flat rate
+        * `hourly` - Hourly
+        * `per_sqft` - Per square foot
+    Quote:
+      type: object
+      description: Inputs for `POST /api/catalog/services/{id}/quote/`.
+      properties:
+        square_feet:
+          type: integer
+          minimum: 0
+        hours:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
+    QuoteRequest:
+      type: object
+      description: Inputs for `POST /api/catalog/services/{id}/quote/`.
+      properties:
+        square_feet:
+          type: integer
+          minimum: 0
+        hours:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
+    Readiness:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ReadinessStatusEnum'
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+          description: 'Per-dependency result: "ok", or "error: <reason>".'
+      required:
+      - checks
+      - status
+    ReadinessStatusEnum:
+      enum:
+      - ok
+      - degraded
+      type: string
+      description: |-
+        * `ok` - ok
+        * `degraded` - degraded
+    RecurringPlan:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        customer:
+          type: string
+          format: uuid
+        customer_detail:
+          allOf:
+          - $ref: '#/components/schemas/CustomerSummary'
+          readOnly: true
+        location:
+          type: string
+          format: uuid
+        location_detail:
+          allOf:
+          - $ref: '#/components/schemas/LocationSummary'
+          readOnly: true
+        service:
+          type: string
+          format: uuid
+        service_detail:
+          allOf:
+          - $ref: '#/components/schemas/ServiceSummary'
+          readOnly: true
+        rrule:
+          type: string
+        starts_on:
+          type: string
+          format: date
+          description: Local date of the first possible occurrence.
+        ends_on:
+          type: string
+          format: date
+          nullable: true
+          description: Inclusive. Null runs forever.
+        preferred_start_time:
+          type: string
+          format: time
+          description: Local wall-clock time.
+        duration_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        price_override_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        default_assignees:
+          type: array
+          items:
+            type: string
+            format: uuid
+        is_active:
+          type: boolean
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - customer
+      - customer_detail
+      - id
+      - location
+      - location_detail
+      - organization
+      - preferred_start_time
+      - rrule
+      - service
+      - service_detail
+      - starts_on
+      - updated_at
+    RecurringPlanRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        customer:
+          type: string
+          format: uuid
+        location:
+          type: string
+          format: uuid
+        service:
+          type: string
+          format: uuid
+        rrule:
+          type: string
+          minLength: 1
+        starts_on:
+          type: string
+          format: date
+          description: Local date of the first possible occurrence.
+        ends_on:
+          type: string
+          format: date
+          nullable: true
+          description: Inclusive. Null runs forever.
+        preferred_start_time:
+          type: string
+          format: time
+          description: Local wall-clock time.
+        duration_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        price_override_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        default_assignees:
+          type: array
+          items:
+            type: string
+            format: uuid
+        is_active:
+          type: boolean
+        notes:
+          type: string
+      required:
+      - customer
+      - location
+      - preferred_start_time
+      - rrule
+      - service
+      - starts_on
+    RegenerateResponse:
+      type: object
+      properties:
+        regenerated:
+          type: integer
+        kept:
+          type: integer
+      required:
+      - kept
+      - regenerated
+    RoleEnum:
+      enum:
+      - owner
+      - admin
+      - dispatcher
+      - cleaner
+      - customer
+      type: string
+      description: |-
+        * `owner` - Owner
+        * `admin` - Admin
+        * `dispatcher` - Dispatcher
+        * `cleaner` - Cleaner
+        * `customer` - Customer
+    Service:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        pricing_model:
+          $ref: '#/components/schemas/PricingModelEnum'
+        base_price_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          description: Flat price, or the minimum charge for other models.
+        hourly_rate_cents:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          description: Cents per hour. Used when pricing model is Hourly.
+        per_sqft_rate_cents:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,7}(?:\.\d{0,3})?$
+          description: Cents per square foot. Used when pricing model is Per square
+            foot.
+        default_duration_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          description: Used to lay out the schedule before actual times are known.
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - id
+      - name
+      - organization
+      - updated_at
+    ServiceLocation:
+      type: object
+      description: |-
+        Access codes are write-only here.
+
+        They can be set and changed through this endpoint, but reading them back
+        requires the audited reveal action -- otherwise anyone opening a location
+        detail page would see them with no record, which defeats the log.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        customer:
+          type: string
+          format: uuid
+        label:
+          type: string
+          description: e.g. "Home", "Rental - Oak St".
+          maxLength: 255
+        line1:
+          type: string
+          maxLength: 255
+        line2:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          maxLength: 255
+        state:
+          type: string
+          maxLength: 100
+        postal_code:
+          type: string
+          maxLength: 30
+        country:
+          type: string
+          maxLength: 2
+        one_line_address:
+          type: string
+          readOnly: true
+        square_feet:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        bedrooms:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        bathrooms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,1})?$
+          nullable: true
+          description: Half baths as .5
+        parking_notes:
+          type: string
+        access_notes:
+          type: string
+          description: Non-sensitive entry instructions.
+        has_access_codes:
+          type: boolean
+          readOnly: true
+        has_pets:
+          type: boolean
+        pet_notes:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - city
+      - created_at
+      - customer
+      - has_access_codes
+      - id
+      - line1
+      - one_line_address
+      - organization
+      - postal_code
+      - state
+      - updated_at
+    ServiceLocationRequest:
+      type: object
+      description: |-
+        Access codes are write-only here.
+
+        They can be set and changed through this endpoint, but reading them back
+        requires the audited reveal action -- otherwise anyone opening a location
+        detail page would see them with no record, which defeats the log.
+      properties:
+        customer:
+          type: string
+          format: uuid
+        label:
+          type: string
+          description: e.g. "Home", "Rental - Oak St".
+          maxLength: 255
+        line1:
+          type: string
+          minLength: 1
+          maxLength: 255
+        line2:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+          minLength: 1
+          maxLength: 255
+        state:
+          type: string
+          minLength: 1
+          maxLength: 100
+        postal_code:
+          type: string
+          minLength: 1
+          maxLength: 30
+        country:
+          type: string
+          minLength: 1
+          maxLength: 2
+        square_feet:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          nullable: true
+        bedrooms:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          nullable: true
+        bathrooms:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,1})?$
+          nullable: true
+          description: Half baths as .5
+        parking_notes:
+          type: string
+        access_notes:
+          type: string
+          description: Non-sensitive entry instructions.
+        gate_code:
+          type: string
+          writeOnly: true
+        alarm_code:
+          type: string
+          writeOnly: true
+        key_location:
+          type: string
+          writeOnly: true
+        has_pets:
+          type: boolean
+        pet_notes:
+          type: string
+        is_active:
+          type: boolean
+      required:
+      - city
+      - customer
+      - line1
+      - postal_code
+      - state
+    ServiceLocationSummary:
+      type: object
+      description: |-
+        Nested inside a customer. Deliberately omits the encrypted access fields:
+        a list of customers should not spray gate codes across the wire.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        label:
+          type: string
+          readOnly: true
+          description: e.g. "Home", "Rental - Oak St".
+        one_line_address:
+          type: string
+          readOnly: true
+        square_feet:
+          type: integer
+          readOnly: true
+          nullable: true
+        is_active:
+          type: boolean
+          readOnly: true
+      required:
+      - id
+      - is_active
+      - label
+      - one_line_address
+      - square_feet
+    ServiceRequest:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        pricing_model:
+          $ref: '#/components/schemas/PricingModelEnum'
+        base_price_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          description: Flat price, or the minimum charge for other models.
+        hourly_rate_cents:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,8}(?:\.\d{0,2})?$
+          description: Cents per hour. Used when pricing model is Hourly.
+        per_sqft_rate_cents:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,7}(?:\.\d{0,3})?$
+          description: Cents per square foot. Used when pricing model is Per square
+            foot.
+        default_duration_minutes:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+          description: Used to lay out the schedule before actual times are known.
+        is_active:
+          type: boolean
+      required:
+      - name
+    ServiceSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          readOnly: true
+        default_duration_minutes:
+          type: integer
+          readOnly: true
+          description: Used to lay out the schedule before actual times are known.
+      required:
+      - default_duration_minutes
+      - id
+      - name
+    Session:
+      type: object
+      description: |-
+        What the frontend needs to render a signed-in shell.
+
+        Includes every membership so a multi-organization user can be offered a
+        switcher; the active one is echoed back as `current_organization`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        first_name:
+          type: string
+          readOnly: true
+        last_name:
+          type: string
+          readOnly: true
+        full_name:
+          type: string
+          readOnly: true
+        phone:
+          type: string
+          readOnly: true
+        is_superuser:
+          type: boolean
+          readOnly: true
+          title: Superuser status
+          description: Designates that this user has all permissions without explicitly
+            assigning them.
+        memberships:
+          type: array
+          items:
+            $ref: '#/components/schemas/Membership'
+          readOnly: true
+        current_organization:
+          allOf:
+          - $ref: '#/components/schemas/OrganizationSummary'
+          nullable: true
+          readOnly: true
+        current_role:
+          nullable: true
+          readOnly: true
+          oneOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          - $ref: '#/components/schemas/NullEnum'
+      required:
+      - current_organization
+      - current_role
+      - email
+      - first_name
+      - full_name
+      - id
+      - is_superuser
+      - last_name
+      - memberships
+      - phone
+    StatusChangeRequest:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/JobStatusEnum'
+        reason:
+          type: string
+          default: ''
+      required:
+      - status
+    TimeEntry:
+      type: object
+      description: |-
+        Base serializer for tenant-owned models.
+
+        `organization` is read-only: the viewset supplies it. Belt and braces
+        alongside `TenantViewSetMixin.perform_create`.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        job:
+          type: string
+          format: uuid
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        clock_in:
+          type: string
+          format: date-time
+        clock_out:
+          type: string
+          format: date-time
+          nullable: true
+        duration_minutes:
+          type: integer
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - clock_in
+      - created_at
+      - duration_minutes
+      - id
+      - job
+      - user
+      - user_name
+    VerifyRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+        remember_device:
+          type: boolean
+          default: false
+          description: Skip the code on this device until the trusted-device cookie
+            expires.
+      required:
+      - code
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid

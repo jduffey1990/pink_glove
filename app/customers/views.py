@@ -1,11 +1,12 @@
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema
 from rest_framework import filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from audit.models import ACCESS_WARNING
-from audit.serializers import RevealRequestSerializer
+from audit.serializers import AccessWarningSerializer, RevealRequestSerializer
 from audit.services import record_reveal, resolve_reveal_job
 from base.permissions import IsDispatcherOrHigher
 from base.viewsets import TenantViewSetMixin
@@ -45,11 +46,32 @@ class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):
         # this location is refused outright rather than logged and reviewed
         # later, because there is no legitimate reason for that request and a
         # flag cannot undo the exposure.
-        if self.action == "reveal_access":
+        if self.action in ("reveal_access", "access_warning"):
             from scheduling.permissions import IsAssignedCleaner
 
             return [(IsDispatcherOrHigher | IsAssignedCleaner)()]
         return super().get_permissions()
+
+    @extend_schema(
+        request=None,
+        responses={200: AccessWarningSerializer},
+        summary="The warning a user must acknowledge before codes are revealed",
+    )
+    @action(detail=True, methods=["get"], url_path="access-warning")
+    def access_warning(self, request, pk=None):
+        """
+        The copy the frontend must show before revealing codes.
+
+        Served on its own rather than leaving the client to scrape it out of
+        the 400 that an unacknowledged reveal returns. Both put the wording in
+        one place, which is the point (ADR-023) -- but a deliberate 400 on a
+        healthy path is indistinguishable from a real failure in a browser
+        console, a server log, or an error tracker.
+
+        Nothing is logged here: no reveal has happened.
+        """
+        self.get_object()  # 404s for another organization's location
+        return Response({"warning": ACCESS_WARNING})
 
     @action(detail=True, methods=["post"], url_path="reveal-access")
     def reveal_access(self, request, pk=None):

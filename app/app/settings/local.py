@@ -3,7 +3,7 @@
 from decouple import config
 
 from .base import *  # noqa: F403
-from .base import FIELD_ENCRYPTION_KEY, MIDDLEWARE, SECRET_KEY
+from .base import FIELD_ENCRYPTION_KEY, MIDDLEWARE, REST_FRAMEWORK, SECRET_KEY
 
 DEBUG = True
 ENV = "local"
@@ -31,6 +31,20 @@ CORS_ALLOWED_ORIGINS = [
 CSRF_TRUSTED_ORIGINS = list(CORS_ALLOWED_ORIGINS)
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# Five sign-ins an hour is right for a deployed environment and unworkable for
+# development: building the login screen means signing in dozens of times, and
+# the throttle is keyed on IP, so every developer and every browser profile on
+# the machine shares one bucket. Raised here and only here -- production keeps
+# the real rates from base.py.
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,
+    "DEFAULT_THROTTLE_RATES": {
+        "two_factor_issue": "1000/hour",
+        "two_factor_verify": "1000/hour",
+        "magic_link": "1000/hour",
+    },
+}
 
 # Prints every query and a running count per request. Noisy on purpose.
 if config("QUERY_COUNT_DEBUG", default=False, cast=bool):

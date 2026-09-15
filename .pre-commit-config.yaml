@@ -20,6 +20,20 @@ repos:
         args: [--maxkb=1024]
       - id: detect-private-key
 
+  - repo: local
+    hooks:
+      # Runs the project's own eslint rather than a pinned mirror: the config
+      # is eslint-config-vuetify, which has to agree with the versions in
+      # ui/package-lock.json. The wrapper picks up ui/.nvmrc and fails with a
+      # readable message on an older Node, rather than the TypeError eslint
+      # throws from inside a dependency there.
+      - id: ui-eslint
+        name: eslint (ui)
+        entry: ui/bin/lint.sh
+        language: system
+        files: ^ui/.*\.(ts|vue|js|mts)$
+        pass_filenames: false
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.0
     hooks:

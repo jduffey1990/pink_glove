@@ -455,3 +455,58 @@ class TestTheEvaluatorJudgesBoundReveals:
         reveal.refresh_from_db()
         assert reveal.is_flagged
         assert reveal.flag_reason == OUTSIDE_JOB_WINDOW
+
+
+@pytest.mark.django_db
+class TestAccessWarningEndpoint:
+    """
+    The warning is served on its own so the frontend never hardcodes it.
+
+    It used to be scraped out of the 400 an unacknowledged reveal returns.
+    Same single source of truth, but a deliberate 400 on a healthy path is
+    indistinguishable from a real failure in a console or an error tracker.
+    """
+
+    def warning_url(self, location):
+        return reverse("customers:location-access-warning", args=[location.id])
+
+    def test_it_serves_the_backends_own_copy(self, authed_client, location):
+        response = authed_client.get(self.warning_url(location))
+
+        assert response.status_code == 200
+        assert response.json()["warning"] == ACCESS_WARNING
+
+    def test_asking_for_it_logs_nothing(self, authed_client, location):
+        """No reveal happened, so there is nothing to record."""
+        authed_client.get(self.warning_url(location))
+
+        assert not AccessReveal.objects.exists()
+
+    def test_a_cleaner_with_no_assignment_cannot_read_it(
+        self, api_client, organization, location, make_member
+    ):
+        """Gated exactly as the reveal is; it is the same door."""
+        api_client.force_login(make_member(organization, role=Role.CLEANER))
+
+        assert api_client.get(self.warning_url(location)).status_code == 403
+
+    def test_another_organizations_location_is_a_404(
+        self, api_client, other_organization, location, make_member
+    ):
+        api_client.force_login(make_member(other_organization, role=Role.OWNER))
+
+        assert api_client.get(self.warning_url(location)).status_code == 404
+
+    def test_a_customer_cannot_read_it(self, api_client, organization, location, make_member):
+        api_client.force_login(make_member(organization, role=Role.CUSTOMER))
+
+        assert api_client.get(self.warning_url(location)).status_code == 403
+
+    def test_it_matches_what_the_unacknowledged_reveal_returns(self, authed_client, location):
+        """The two paths must not drift; that is the whole point."""
+        served = authed_client.get(self.warning_url(location)).json()["warning"]
+        refused = authed_client.post(
+            reveal_url(location), {"acknowledged": False}, format="json"
+        ).json()["detail"]
+
+        assert served == refused

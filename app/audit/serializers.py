@@ -24,6 +24,17 @@ class RevealRequestSerializer(serializers.Serializer):
     )
 
 
+class AccessWarningSerializer(serializers.Serializer):
+    """
+    The acknowledgement copy, served so the frontend never hardcodes it.
+
+    One string, in one place: the words shown to the user and the words the
+    audit row claims they were shown cannot drift apart (ADR-016, ADR-023).
+    """
+
+    warning = serializers.CharField()
+
+
 class AccessRevealSerializer(TenantModelSerializer):
     """Read-only view of the trail, for admins reviewing end-of-day flags."""
 
