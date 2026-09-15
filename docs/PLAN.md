@@ -23,7 +23,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **460 passing** in `app/`, and **65** in `ui/` (`cd ui && npm test`).
+Expect **466 passing** in `app/`, and **65** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -832,7 +832,7 @@ Open decisions are listed under **Start here** at the top of this file.
 
 Delivered as specified: all seven screens, the API client, the session store,
 and the generated contract. 65 Vitest tests over the interceptors, the session
-boot sequence, and the timezone helpers. The backend grew to 460.
+boot sequence, and the timezone helpers. The backend grew to 466.
 
 **Vuetify 4, not 3 (ADR-022).** ADR-018 named the then-current major. Node 22
 is a hard requirement — the lint toolchain calls `Object.groupBy`, absent
@@ -868,9 +868,10 @@ organization's own timezone, job detail, the customer screens, the reveal
 dialog showing the backend's own warning and then the codes, and the cleaner's
 clock-in → clock-out → complete at 400px with no horizontal overflow.
 
-**Still open:** the stale-`FIELD_ENCRYPTION_KEY` row noted under "Phase 3a as
-built" makes Sparkle Clean's customer list 500, so the customer screens were
-walked through in the second organization. Re-seeding clears it.
+**Resolved since:** the stale-`FIELD_ENCRYPTION_KEY` row noted under "Phase 3a
+as built" had its three unreadable fields blanked in the dev database, so both
+organizations' customer screens work. The trap itself still applies to any
+database that outlives a key change — the message names the field.
 
 **Not in 3b, unchanged:** customer portal, billing, notifications, offline
 support, push, a production build pipeline for `ui/`.

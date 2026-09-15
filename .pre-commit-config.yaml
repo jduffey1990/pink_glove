@@ -27,6 +27,15 @@ repos:
       # ui/package-lock.json. The wrapper picks up ui/.nvmrc and fails with a
       # readable message on an older Node, rather than the TypeError eslint
       # throws from inside a dependency there.
+      # ADR-019: the committed schema IS the frontend's contract. Without this,
+      # a serializer change without `npm run api:types` leaves it quietly wrong.
+      - id: openapi-schema-current
+        name: openapi schema is current
+        entry: app/bin/check-schema.sh
+        language: system
+        files: ^app/.*/(serializers|views|urls|models|enums)\.py$
+        pass_filenames: false
+
       - id: ui-eslint
         name: eslint (ui)
         entry: ui/bin/lint.sh

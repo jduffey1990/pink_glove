@@ -10,6 +10,11 @@
   ],
   "compilerOptions": {
     "composite": true,
+    // vue-router's Volar plugin resolves typed routes against this and warns
+    // on every type-check without it. Routes here are declared by hand in
+    // src/router, so this only quiets the warning -- but a warning nobody can
+    // act on is one everybody learns to ignore.
+    "rootDir": ".",
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "paths": {
       "@/*": [
