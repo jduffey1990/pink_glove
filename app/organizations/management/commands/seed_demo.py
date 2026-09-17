@@ -166,10 +166,25 @@ class Command(BaseCommand):
     # -- organization and people --------------------------------------------
 
     def _organization(self, spec) -> Organization:
-        defaults = {key: value for key, value in spec.items() if key != "name"}
+        """
+        The demo tenant, with its settings applied whether or not it is new.
+
+        Everything else here is `get_or_create` and leaves an existing row
+        alone, but the settings are different: a seed run against a database
+        from before Phase 4 would otherwise build invoices at 0% tax with an
+        INV prefix and claim to have demonstrated per-tenant billing. These
+        two organizations exist to be overwritten.
+        """
+        settings_fields = {key: value for key, value in spec.items() if key != "name"}
         organization, created = Organization.objects.get_or_create(
-            name=spec["name"], defaults=defaults
+            name=spec["name"], defaults=settings_fields
         )
+
+        if not created:
+            for field, value in settings_fields.items():
+                setattr(organization, field, value)
+            organization.save(update_fields=[*settings_fields, "updated_at"])
+
         self.stdout.write(
             self.style.SUCCESS(f"{'Created' if created else 'Found'} {organization.name}")
         )

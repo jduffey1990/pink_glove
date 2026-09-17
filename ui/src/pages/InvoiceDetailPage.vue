@@ -40,6 +40,7 @@
   const invoice = ref<Invoice | null>(null)
   const loading = ref(false)
   const error = ref('')
+  const notice = ref('')
   const busy = ref('')
 
   const notes = ref('')
@@ -100,6 +101,7 @@
   async function run (name: string, action: () => Promise<Invoice>): Promise<boolean> {
     busy.value = name
     error.value = ''
+    notice.value = ''
 
     try {
       invoice.value = await action()
@@ -132,10 +134,26 @@
     }
   }
 
+  /**
+   * Email the invoice.
+   *
+   * The API answers 202: a worker does the sending, and `sent_at` is stamped
+   * only once the mail is actually away, so the response almost always comes
+   * back before the field is set. Saying "queued" is the honest thing to show
+   * -- "Emailed" appears on the next read, when it is true.
+   */
   async function send (): Promise<void> {
     const id = invoice.value?.id
-    if (id) {
-      await run('send', () => sendInvoice(id))
+    if (!id) {
+      return
+    }
+
+    notice.value = ''
+    const ok = await run('send', () => sendInvoice(id))
+    if (ok) {
+      notice.value = invoice.value?.sent_at
+        ? 'Emailed.'
+        : `Queued to ${invoice.value?.bill_to_email || 'the customer'}.`
     }
   }
 
@@ -334,6 +352,9 @@
     </v-btn>
 
     <v-alert v-if="error" class="mb-4" type="error" variant="tonal">{{ error }}</v-alert>
+
+    <v-alert v-if="notice" class="mb-4" type="success" variant="tonal">{{ notice }}</v-alert>
+
     <v-progress-linear v-if="loading" class="mb-2" indeterminate />
 
     <template v-if="invoice">
