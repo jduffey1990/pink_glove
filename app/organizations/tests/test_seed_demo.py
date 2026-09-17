@@ -130,3 +130,85 @@ class TestSeedGuards:
 
         with pytest.raises(CommandError):
             call_command("seed_demo", verbosity=0)
+
+
+@pytest.mark.django_db
+class TestSeededBilling:
+    """
+    The seed builds invoices through `billing.services`, not by writing rows,
+    so these assertions also stand as a check that numbering, the snapshot and
+    the ledger still agree with each other.
+    """
+
+    def test_the_two_organizations_bill_differently(self, seeded):
+        """A rule read from the wrong tenant shows up as a wrong number here."""
+        from decimal import Decimal
+
+        from organizations.enums import NoAccessFeeType
+
+        sparkle = Organization.objects.get(name="Sparkle Clean")
+        rival = Organization.objects.get(name="Rival Cleaners")
+
+        assert sparkle.tax_rate_percent == Decimal("8.250")
+        assert rival.tax_rate_percent == Decimal("0.000")
+        assert sparkle.no_access_fee_type == NoAccessFeeType.FLAT
+        assert rival.no_access_fee_type == NoAccessFeeType.PERCENT
+        assert (sparkle.invoice_prefix, rival.invoice_prefix) == ("SPK", "RIV")
+
+    def test_the_past_is_finished_and_one_visit_was_locked_out(self, seeded):
+        from django.utils import timezone
+
+        from scheduling.enums import JobStatus
+
+        for organization in Organization.objects.all():
+            past = Job.objects.filter(organization=organization, scheduled_end__lt=timezone.now())
+            assert past.exists()
+            assert not past.filter(status=JobStatus.SCHEDULED).exists()
+            assert past.filter(status=JobStatus.NO_ACCESS).count() == 1
+
+    def test_each_organization_has_invoices_in_several_states(self, seeded):
+        from billing.enums import InvoiceStatus
+        from billing.models import Invoice
+
+        for organization in Organization.objects.all():
+            invoices = Invoice.objects.filter(organization=organization)
+            statuses = set(invoices.values_list("status", flat=True))
+
+            assert invoices.count() >= 2
+            assert InvoiceStatus.DRAFT in statuses or InvoiceStatus.ISSUED in statuses
+
+    def test_numbers_use_the_organizations_own_prefix_and_sequence(self, seeded):
+        from billing.models import Invoice
+
+        for organization in Organization.objects.all():
+            numbers = sorted(
+                Invoice.objects.filter(organization=organization)
+                .exclude(number="")
+                .values_list("number", flat=True)
+            )
+            assert numbers
+            assert numbers[0] == f"{organization.invoice_prefix}-0001"
+
+    def test_there_is_a_paid_one_a_part_paid_one_and_an_overdue_one(self, seeded):
+        from billing import services as billing
+        from billing.enums import InvoiceStatus, PaymentState
+        from billing.models import Invoice
+
+        for organization in Organization.objects.all():
+            issued = Invoice.objects.filter(
+                organization=organization, status=InvoiceStatus.ISSUED
+            ).select_related("organization")
+            states = {billing.payment_state(invoice) for invoice in issued}
+
+            assert PaymentState.PAID in states
+            assert PaymentState.PARTIAL in states
+            assert any(billing.is_overdue(invoice) for invoice in issued)
+
+    def test_the_part_paid_one_carries_a_tip_that_settles_nothing(self, seeded):
+        from billing.models import Payment
+
+        tipped = Payment.objects.filter(tip_cents__gt=0).select_related("invoice")
+
+        assert tipped.exists()
+        for payment in tipped:
+            assert payment.amount_cents < payment.invoice.total_cents

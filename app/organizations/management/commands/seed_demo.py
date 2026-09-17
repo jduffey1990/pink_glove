@@ -15,21 +15,47 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from billing import services as billing
+from billing.enums import PaymentMethod
 from catalog.enums import PricingModel
 from catalog.models import Service
 from customers.models import Customer, ServiceLocation
+from organizations.enums import NoAccessFeeType
 from organizations.models import Organization
-from scheduling.models import RecurringPlan
-from scheduling.services import materialize_plan
+from scheduling.enums import JobStatus
+from scheduling.models import Job, RecurringPlan
+from scheduling.services import materialize_plan, transition_job
 from scheduling.tasks import materialize_organization
 from users.enums import Role
 from users.models import CustomUser, Membership
 
 DEMO_PASSWORD = "demo-password-change-me"
 
+#: Deliberately different billing settings per tenant. One charges sales tax
+#: and a flat no-access fee; the other charges no tax and a percentage of the
+#: visit. A rule read from the wrong organization then shows up as a wrong
+#: number rather than as nothing at all.
 ORGANIZATIONS = [
-    ("Sparkle Clean", "America/Denver"),
-    ("Rival Cleaners", "America/New_York"),
+    {
+        "name": "Sparkle Clean",
+        "timezone": "America/Denver",
+        "tax_rate_percent": Decimal("8.250"),
+        "no_access_fee_type": NoAccessFeeType.FLAT,
+        "no_access_fee_value": Decimal("2500"),
+        "invoice_prefix": "SPK",
+        "invoice_terms_days": 14,
+        "invoice_footer": "Make checks payable to Sparkle Clean. Thank you!",
+    },
+    {
+        "name": "Rival Cleaners",
+        "timezone": "America/New_York",
+        "tax_rate_percent": Decimal("0.000"),
+        "no_access_fee_type": NoAccessFeeType.PERCENT,
+        "no_access_fee_value": Decimal("50"),
+        "invoice_prefix": "RIV",
+        "invoice_terms_days": 30,
+        "invoice_footer": "Zelle to billing@rivalcleaners.test.",
+    },
 ]
 
 ROLES = [Role.OWNER, Role.ADMIN, Role.DISPATCHER, Role.CLEANER, Role.CUSTOMER]
@@ -94,6 +120,9 @@ SERVICES = [
         "base_price_cents": 25000,
         "per_sqft_rate_cents": Decimal("18.000"),
         "default_duration_minutes": 300,
+        # The one taxable service, so an organization with a rate has
+        # something to apply it to and one without still reads correctly.
+        "is_taxable": True,
     },
 ]
 
@@ -118,8 +147,8 @@ class Command(BaseCommand):
         if Organization.objects.exists() and not options["force"]:
             raise CommandError("Organizations already exist. Pass --force to seed anyway.")
 
-        for name, tz in ORGANIZATIONS:
-            organization = self._organization(name, tz)
+        for spec in ORGANIZATIONS:
+            organization = self._organization(spec)
             users = self._users(organization)
             customers = self._customers(organization)
             services = self._services(organization)
@@ -128,14 +157,18 @@ class Command(BaseCommand):
             created = self._materialize(organization, plans)
             self.stdout.write(f"  materialized {created} jobs")
 
+            self._close_the_past(organization, actor=users[Role.OWNER])
+            self._billing(organization, actor=users[Role.DISPATCHER])
+
         self.stdout.write("")
         self.stdout.write(self.style.WARNING(f"All demo passwords: {DEMO_PASSWORD}"))
 
     # -- organization and people --------------------------------------------
 
-    def _organization(self, name, tz) -> Organization:
+    def _organization(self, spec) -> Organization:
+        defaults = {key: value for key, value in spec.items() if key != "name"}
         organization, created = Organization.objects.get_or_create(
-            name=name, defaults={"timezone": tz}
+            name=spec["name"], defaults=defaults
         )
         self.stdout.write(
             self.style.SUCCESS(f"{'Created' if created else 'Found'} {organization.name}")
@@ -283,3 +316,104 @@ class Command(BaseCommand):
 
         self.stdout.write(f"  {len(plans)} recurring plans (weekly + fortnightly)")
         return plans
+
+    # -- history, and the money that follows from it -------------------------
+
+    def _close_the_past(self, organization, *, actor) -> None:
+        """
+        Finish every visit that has already happened.
+
+        The materializer has no business inventing history, so a seeded board
+        has a fortnight of past visits all still "scheduled" -- which reads as
+        a business that never turned up. Walking them through the real state
+        machine rather than setting the column keeps the demo honest about
+        what the transitions allow.
+
+        The most recent one becomes NO_ACCESS instead, so the no-access fee has
+        something to price and the invoice screens show a fee line.
+        """
+        past = list(
+            Job.objects.filter(
+                organization=organization,
+                status=JobStatus.SCHEDULED,
+                scheduled_end__lt=timezone.now(),
+            ).order_by("scheduled_start")
+        )
+        if not past:
+            return
+
+        locked_out = past[-1]
+        for job in past:
+            transition_job(job=job, to_status=JobStatus.IN_PROGRESS, actor=actor)
+            if job.pk == locked_out.pk:
+                transition_job(
+                    job=job,
+                    to_status=JobStatus.NO_ACCESS,
+                    actor=actor,
+                    reason="Nobody home and the side gate was bolted.",
+                )
+            else:
+                transition_job(job=job, to_status=JobStatus.COMPLETE, actor=actor)
+
+        self.stdout.write(f"  closed {len(past)} past visits ({1} of them no-access)")
+
+    def _billing(self, organization, *, actor) -> None:
+        """
+        Four invoices in the four states a dispatcher actually sees: paid,
+        part-paid with a tip, overdue, and still a draft.
+
+        Built from `billing.services`, not by writing rows, so the seed
+        exercises the same numbering, snapshot and ledger rules the API does --
+        and breaks loudly here if any of them changes.
+        """
+        today = organization.today()
+        billable = list(billing.billable_jobs(organization))
+        if not billable:
+            self.stdout.write("  no billable visits, so no invoices")
+            return
+
+        # One job per invoice, oldest first, so each invoice is legible.
+        plans = [
+            ("paid", 0),
+            ("part-paid", 1),
+            ("overdue", 2),
+            ("draft", 3),
+        ]
+
+        made = []
+        for kind, index in plans:
+            if index >= len(billable):
+                break
+            job = billable[index]
+            invoice = billing.draft_invoice(customer=job.customer, jobs=[job], actor=actor)
+
+            if kind == "draft":
+                made.append(f"{kind}")
+                continue
+
+            issued_on = today - dt.timedelta(days=60 if kind == "overdue" else 3)
+            billing.issue_invoice(invoice, actor=actor, today=issued_on)
+
+            if kind == "paid":
+                billing.record_payment(
+                    invoice,
+                    method=PaymentMethod.CHECK,
+                    amount_cents=invoice.total_cents,
+                    received_on=issued_on + dt.timedelta(days=2),
+                    reference="Check 1047",
+                    actor=actor,
+                )
+            elif kind == "part-paid":
+                billing.record_payment(
+                    invoice,
+                    method=PaymentMethod.CASH,
+                    amount_cents=invoice.total_cents // 2,
+                    tip_cents=2000,
+                    received_on=issued_on + dt.timedelta(days=1),
+                    reference="Left on the counter",
+                    actor=actor,
+                )
+
+            made.append(f"{invoice.number} {kind}")
+
+        self.stdout.write(f"  invoices: {', '.join(made)}")
