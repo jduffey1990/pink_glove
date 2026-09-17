@@ -1235,6 +1235,8 @@ export interface components {
             readonly status: components["schemas"]["JobStatusEnum"];
             /** Format: date-time */
             readonly status_changed_at: string | null;
+            readonly is_terminal: boolean;
+            readonly next_statuses: components["schemas"]["NextStatus"][];
             price_cents?: number;
             notes?: string;
             readonly cancellation_reason: string;
@@ -1423,6 +1425,10 @@ export interface components {
             readonly user_email: string;
             readonly role: components["schemas"]["RoleEnum"];
             readonly is_active: boolean;
+        };
+        NextStatus: {
+            status: components["schemas"]["JobStatusEnum"];
+            reason_required: boolean;
         };
         /** @enum {unknown} */
         NullEnum: null;

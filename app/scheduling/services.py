@@ -332,6 +332,23 @@ def unassign_user(*, job: Job, user) -> bool:
     return True
 
 
+def next_statuses(job: Job, *, is_dispatcher: bool) -> list[str]:
+    """
+    Where `job` may go next, for this kind of caller.
+
+    The one statement of the role rules on top of `ALLOWED_TRANSITIONS`:
+    reopening a finished visit and cancelling one are dispatcher decisions.
+    `transition_job` enforces it and `JobSerializer` publishes it, so the
+    buttons a page draws and the moves the server accepts cannot drift.
+    """
+    allowed = ALLOWED_TRANSITIONS.get(job.status, ())
+    if is_dispatcher:
+        return list(allowed)
+    if job.is_terminal:
+        return []
+    return [status for status in allowed if status != JobStatus.CANCELLED]
+
+
 @transaction.atomic
 def transition_job(*, job: Job, to_status: str, actor, reason: str = "") -> Job:
     """
@@ -356,19 +373,17 @@ def transition_job(*, job: Job, to_status: str, actor, reason: str = "") -> Job:
         )
 
     is_dispatcher = _is_dispatcher_or_higher(actor, job.organization)
+    permitted = next_statuses(job, is_dispatcher=is_dispatcher)
 
-    # Reopening a finished visit is a correction, not part of the forward flow.
-    if job.is_terminal and not is_dispatcher:
-        raise ConflictError(
-            "Only a dispatcher can reopen a job that is already finished.",
-            {"status": job.status, "allowed": []},
+    if to_status not in permitted:
+        # Legal for the machine, not for this caller. Reopening a finished
+        # visit is a correction, and cancelling is a business decision.
+        message = (
+            "Only a dispatcher can reopen a job that is already finished."
+            if job.is_terminal
+            else "Only a dispatcher can cancel a job."
         )
-
-    if to_status == JobStatus.CANCELLED and not is_dispatcher:
-        raise ConflictError(
-            "Only a dispatcher can cancel a job.",
-            {"status": job.status, "allowed": [s for s in allowed if s != JobStatus.CANCELLED]},
-        )
+        raise ConflictError(message, {"status": job.status, "allowed": permitted})
 
     if to_status in REASON_REQUIRED_STATUSES and not (reason or "").strip():
         raise ValidationError(

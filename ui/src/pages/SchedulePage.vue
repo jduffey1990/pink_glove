@@ -18,8 +18,10 @@
     formatDayLabel,
     formatTime,
     todayIn,
+    toIsoDate,
     weekOf,
   } from '@/lib/datetime'
+  import { JOB_STATUS_OPTIONS } from '@/lib/jobStatus'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -46,7 +48,7 @@
 
     for (const job of jobs.value) {
       // Bucket on the date the API filtered by, which is the local one.
-      const day = localDateOf(job)
+      const day = toIsoDate(job.scheduled_start, timeZone.value)
       buckets.get(day)?.push(job)
     }
 
@@ -56,24 +58,6 @@
 
     return buckets
   })
-
-  function localDateOf (job: Job): string {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: timeZone.value,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date(job.scheduled_start))
-  }
-
-  const STATUSES: { value: JobStatus, label: string }[] = [
-    { value: 'scheduled', label: 'Scheduled' },
-    { value: 'en_route', label: 'En route' },
-    { value: 'in_progress', label: 'In progress' },
-    { value: 'complete', label: 'Complete' },
-    { value: 'cancelled', label: 'Cancelled' },
-    { value: 'no_access', label: 'No access' },
-  ]
 
   async function load () {
     loading.value = true
@@ -139,7 +123,7 @@
     <div class="d-flex flex-wrap ga-2 mb-4">
       <v-chip-group v-model="statusFilter" column multiple>
         <v-chip
-          v-for="status in STATUSES"
+          v-for="status in JOB_STATUS_OPTIONS"
           :key="status.value"
           filter
           size="small"

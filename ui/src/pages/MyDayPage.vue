@@ -11,9 +11,11 @@
   import { computed, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
   import { clockIn, clockOut, listJobs, setJobStatus } from '@/api/endpoints'
+  import { errorDetail } from '@/api/errors'
   import JobStatusChip from '@/components/JobStatusChip.vue'
   import RevealCodesDialog from '@/components/RevealCodesDialog.vue'
   import { addDays, formatDayLabel, formatTime, todayIn } from '@/lib/datetime'
+  import { canMoveTo } from '@/lib/jobStatus'
   import { statusOf, useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -67,12 +69,8 @@
       const updated = await action()
       jobs.value = jobs.value.map(existing => (existing.id === updated.id ? updated : existing))
     } catch (error_) {
-      const detail = (error_ as { response?: { data?: { detail?: string } } })
-        .response
-        ?.data
-        ?.detail
       message.value = statusOf(error_) === 409
-        ? (detail ?? 'That is not possible right now.')
+        ? (errorDetail(error_) ?? 'That is not possible right now.')
         : 'Something went wrong. Try again.'
     } finally {
       busyId.value = null
@@ -197,7 +195,7 @@
           v-if="!job.open_time_entry"
           block
           color="primary"
-          :disabled="job.status === 'complete' || job.status === 'cancelled'"
+          :disabled="job.is_terminal"
           :loading="busyId === job.id"
           prepend-icon="mdi-clock-start"
           variant="flat"
@@ -219,7 +217,7 @@
 
         <div class="d-flex ga-1 w-100 mt-1">
           <v-btn
-            v-if="job.status === 'scheduled'"
+            v-if="canMoveTo(job, 'en_route')"
             class="flex-grow-1"
             :loading="busyId === job.id"
             size="small"
@@ -230,7 +228,7 @@
           </v-btn>
 
           <v-btn
-            v-if="job.status === 'in_progress'"
+            v-if="canMoveTo(job, 'complete')"
             class="flex-grow-1"
             color="success"
             :loading="busyId === job.id"
@@ -244,7 +242,7 @@
           <v-btn
             class="flex-grow-1"
             color="warning"
-            :disabled="job.status === 'complete' || job.status === 'cancelled'"
+            :disabled="!canMoveTo(job, 'no_access')"
             size="small"
             variant="outlined"
             @click="askReason(job)"

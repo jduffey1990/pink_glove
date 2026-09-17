@@ -14,7 +14,6 @@
  */
 
 import type { Membership, Role, Session } from '@/api/types'
-import axios from 'axios'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import {
@@ -256,7 +255,5 @@ export function connectSessionToClient (store: ReturnType<typeof useSessionStore
   })
 }
 
-/** Narrow an axios error to its status, for callers that branch on it. */
-export function statusOf (error: unknown): number | null {
-  return axios.isAxiosError(error) ? (error.response?.status ?? null) : null
-}
+// Lives with the other error readers now; re-exported for its existing callers.
+export { statusOf } from '@/api/errors'

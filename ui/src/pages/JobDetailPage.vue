@@ -4,12 +4,12 @@
    * cleaner standing at the door.
    *
    * The status buttons are NOT driven by a copy of the state machine. The
-   * server owns it, and when it refuses a transition it answers 409 with the
-   * allowed next states -- which is what gets rendered. A client-side copy
-   * would drift the first time the backend's rules changed.
+   * server owns it: each job arrives with `next_statuses`, the moves this
+   * caller may make, and a refused transition answers 409 with the list as it
+   * now stands. Both are rendered as given. A client-side copy would drift the
+   * first time the backend's rules changed.
    */
   import type { Job, JobNote, JobPhoto, JobStatus, TransitionConflict } from '@/api/types'
-  import axios from 'axios'
   import { computed, ref, watch } from 'vue'
   import { useRoute } from 'vue-router'
   import {
@@ -26,9 +26,11 @@
     unassignJob,
     uploadJobPhoto,
   } from '@/api/endpoints'
+  import { bodyOf, errorDetail } from '@/api/errors'
   import JobStatusChip from '@/components/JobStatusChip.vue'
   import RevealCodesDialog from '@/components/RevealCodesDialog.vue'
   import { formatCents, formatDateTime, formatDuration } from '@/lib/datetime'
+  import { statusLabel } from '@/lib/jobStatus'
   import { statusOf, useSessionStore } from '@/stores/session'
 
   const route = useRoute()
@@ -57,39 +59,10 @@
   const staff = ref<{ id: string, label: string }[]>([])
   const assigneeToAdd = ref<string | null>(null)
 
-  /** The transitions offered before the server has told us otherwise. */
-  const FORWARD: Record<JobStatus, JobStatus[]> = {
-    scheduled: ['en_route', 'in_progress', 'no_access', 'cancelled'],
-    en_route: ['in_progress', 'scheduled', 'no_access', 'cancelled'],
-    in_progress: ['complete', 'no_access'],
-    complete: ['scheduled'],
-    cancelled: ['scheduled'],
-    no_access: ['scheduled'],
-  }
-
-  const STATUS_LABEL: Record<JobStatus, string> = {
-    scheduled: 'Scheduled',
-    en_route: 'En route',
-    in_progress: 'In progress',
-    complete: 'Complete',
-    cancelled: 'Cancelled',
-    no_access: 'No access',
-  }
-
-  const REASON_REQUIRED = new Set<JobStatus>(['cancelled', 'no_access'])
-
-  const nextStatuses = computed<JobStatus[]>(() => {
-    if (allowedStatuses.value) {
-      return allowedStatuses.value
-    }
-    if (!job.value) {
-      return []
-    }
-    const offered = FORWARD[job.value.status] ?? []
-    // Cleaners cannot cancel; the server refuses it, and offering a button
-    // that always fails is just a worse way to find that out.
-    return session.isDispatcherOrHigher ? offered : offered.filter(s => s !== 'cancelled')
-  })
+  /** The server's list: from the job itself, or from a 409 if that is newer. */
+  const nextStatuses = computed<JobStatus[]>(
+    () => allowedStatuses.value ?? job.value?.next_statuses.map(next => next.status) ?? [],
+  )
 
   const isAssignedToMe = computed(
     () => job.value?.assignments.some(a => a.user === session.user?.id) ?? false,
@@ -135,7 +108,10 @@
   }
 
   function requestStatus (status: JobStatus) {
-    if (REASON_REQUIRED.has(status)) {
+    // Which moves need a reason is the server's rule too. After a 409 the job
+    // may be stale, so an unknown move is sent bare and the 400 says so.
+    const move = job.value?.next_statuses.find(next => next.status === status)
+    if (move?.reason_required) {
       pendingStatus.value = status
       reason.value = ''
       reasonDialog.value = true
@@ -153,13 +129,13 @@
       allowedStatuses.value = null
       reasonDialog.value = false
     } catch (error_) {
-      if (axios.isAxiosError(error_) && error_.response?.status === 409) {
+      if (statusOf(error_) === 409) {
         // The server's own list of what this job may become next.
-        const body = error_.response.data as TransitionConflict
-        conflictMessage.value = body.detail
-        allowedStatuses.value = body.allowed ?? []
+        const body = bodyOf<TransitionConflict>(error_)
+        conflictMessage.value = body?.detail ?? 'That is not possible right now.'
+        allowedStatuses.value = body?.allowed ?? []
       } else if (statusOf(error_) === 400) {
-        conflictMessage.value = 'A reason is required for that.'
+        conflictMessage.value = errorDetail(error_) ?? 'That was not accepted.'
       } else {
         conflictMessage.value = 'Could not change the status.'
       }
@@ -177,12 +153,8 @@
     } catch (error_) {
       // The 409 detail is the server's own explanation ("You are already
       // clocked in to this job"), which is better than anything invented here.
-      const detail = (error_ as { response?: { data?: { detail?: string } } })
-        .response
-        ?.data
-        ?.detail
       conflictMessage.value = statusOf(error_) === 409
-        ? (detail ?? 'That is not possible right now.')
+        ? (errorDetail(error_) ?? 'That is not possible right now.')
         : 'Could not update the clock.'
     } finally {
       busy.value = false
@@ -419,7 +391,7 @@
                 variant="tonal"
                 @click="requestStatus(status)"
               >
-                {{ STATUS_LABEL[status] }}
+                {{ statusLabel(status) }}
               </v-btn>
 
               <p v-if="nextStatuses.length === 0" class="text-caption text-medium-emphasis">
@@ -546,7 +518,7 @@
       <v-dialog v-model="reasonDialog" max-width="420">
         <v-card>
           <v-card-title class="text-subtitle-1">
-            Why {{ pendingStatus ? STATUS_LABEL[pendingStatus].toLowerCase() : '' }}?
+            Why {{ pendingStatus ? statusLabel(pendingStatus).toLowerCase() : '' }}?
           </v-card-title>
 
           <v-card-text>

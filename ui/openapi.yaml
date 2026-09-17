@@ -2934,6 +2934,14 @@ components:
           format: date-time
           readOnly: true
           nullable: true
+        is_terminal:
+          type: boolean
+          readOnly: true
+        next_statuses:
+          type: array
+          items:
+            $ref: '#/components/schemas/NextStatus'
+          readOnly: true
         price_cents:
           type: integer
           maximum: 2147483647
@@ -2969,8 +2977,10 @@ components:
       - customer_detail
       - duration_minutes
       - id
+      - is_terminal
       - location
       - location_detail
+      - next_statuses
       - open_time_entry
       - organization
       - plan
@@ -3331,6 +3341,16 @@ components:
       - user
       - user_email
       - user_name
+    NextStatus:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/JobStatusEnum'
+        reason_required:
+          type: boolean
+      required:
+      - reason_required
+      - status
     NullEnum:
       enum:
       - null

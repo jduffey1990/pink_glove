@@ -172,6 +172,75 @@ class TestWhoMayTransition:
 
 
 @pytest.mark.django_db
+class TestPublishedNextStatuses:
+    """
+    A job says which moves its reader may make. The pages draw their buttons
+    from this, so what matters is that it is the same answer `transition_job`
+    gives -- the last test tries every published move, and every unpublished
+    one, against the real endpoint.
+    """
+
+    def _detail(self, client, job):
+        return client.get(reverse("scheduling:job-detail", args=[job.id])).json()
+
+    def _offered(self, client, job):
+        return [row["status"] for row in self._detail(client, job)["next_statuses"]]
+
+    def test_a_dispatcher_is_offered_the_whole_machine(self, dispatcher_client, job):
+        assert set(self._offered(dispatcher_client, job)) == {
+            "en_route",
+            "in_progress",
+            "cancelled",
+            "no_access",
+        }
+
+    def test_a_cleaner_is_not_offered_cancel(self, cleaner_client, assigned_job):
+        assert "cancelled" not in self._offered(cleaner_client, assigned_job)
+
+    @pytest.mark.parametrize(
+        "finished", [JobStatus.COMPLETE, JobStatus.CANCELLED, JobStatus.NO_ACCESS]
+    )
+    def test_a_finished_job_offers_a_cleaner_nothing(
+        self, cleaner_client, dispatcher_client, assigned_job, finished
+    ):
+        assigned_job.status = finished
+        assigned_job.save()
+
+        body = self._detail(cleaner_client, assigned_job)
+
+        assert body["is_terminal"] is True
+        assert body["next_statuses"] == []
+        assert self._offered(dispatcher_client, assigned_job) == ["scheduled"]
+
+    def test_the_moves_that_need_a_reason_say_so(self, dispatcher_client, job):
+        needs_reason = {
+            row["status"]
+            for row in self._detail(dispatcher_client, job)["next_statuses"]
+            if row["reason_required"]
+        }
+
+        assert needs_reason == {"cancelled", "no_access"}
+
+    @pytest.mark.parametrize("start", JobStatus.values)
+    @pytest.mark.parametrize("who", ["dispatcher", "cleaner"])
+    def test_what_is_published_is_exactly_what_is_accepted(
+        self, dispatcher_client, cleaner_client, assigned_job, start, who
+    ):
+        client = dispatcher_client if who == "dispatcher" else cleaner_client
+        assigned_job.status = start
+        assigned_job.save()
+        offered = self._offered(client, assigned_job)
+
+        for target in JobStatus.values:
+            assigned_job.status = start
+            assigned_job.save()
+
+            accepted = _move(client, assigned_job, target, reason="Because").status_code == 200
+
+            assert accepted == (target in offered), f"{who}: {start} -> {target}"
+
+
+@pytest.mark.django_db
 class TestAssignment:
     def test_a_dispatcher_can_assign_a_cleaner(self, dispatcher_client, job, cleaner):
         response = dispatcher_client.post(assign_url(job), {"user": str(cleaner.id)}, format="json")

@@ -5,9 +5,8 @@
    * Two things here are deliberate and should not be "simplified":
    *
    * 1. The warning text is fetched from the backend, never hardcoded. The API
-   *    returns it in the 400 you get for asking without acknowledgement, so
-   *    the words shown and the words the audit row claims were shown are the
-   *    same string.
+   *    serves it from `access-warning`, so the words shown and the words the
+   *    audit row claims were shown are the same string.
    * 2. The codes are held in memory and dropped when the dialog closes. Every
    *    look costs another logged reveal, which is the entire point: the log is
    *    a record of doors opened, not of pages loaded.

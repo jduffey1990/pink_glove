@@ -18,7 +18,7 @@ from rest_framework import serializers
 from base.viewsets import TenantModelSerializer
 from catalog.models import Service
 from customers.models import Customer, ServiceLocation
-from scheduling.enums import JobStatus
+from scheduling.enums import REASON_REQUIRED_STATUSES, JobStatus
 from scheduling.models import (
     Job,
     JobAssignment,
@@ -28,6 +28,8 @@ from scheduling.models import (
     TimeEntry,
 )
 from scheduling.models import validate_rrule as _validate_rrule
+from scheduling.services import next_statuses
+from users.enums import DISPATCHER_ROLES, Role
 
 
 def validate_rrule_field(value: str) -> str:
@@ -143,6 +145,11 @@ class JobPhotoSerializer(TenantModelSerializer):
         read_only_fields = ("id", "user", "user_name", "created_at")
 
 
+class NextStatusSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=JobStatus.choices)
+    reason_required = serializers.BooleanField()
+
+
 class JobSerializer(TenantModelSerializer):
     """
     The dispatcher's and cleaner's view of a visit.
@@ -158,6 +165,8 @@ class JobSerializer(TenantModelSerializer):
     assignments = JobAssignmentSerializer(many=True, read_only=True)
     open_time_entry = serializers.SerializerMethodField()
     duration_minutes = serializers.IntegerField(read_only=True)
+    is_terminal = serializers.BooleanField(read_only=True)
+    next_statuses = serializers.SerializerMethodField()
 
     class Meta(TenantModelSerializer.Meta):
         model = Job
@@ -177,6 +186,8 @@ class JobSerializer(TenantModelSerializer):
             "duration_minutes",
             "status",
             "status_changed_at",
+            "is_terminal",
+            "next_statuses",
             "price_cents",
             "notes",
             "cancellation_reason",
@@ -199,6 +210,28 @@ class JobSerializer(TenantModelSerializer):
             "updated_at",
         )
         extra_kwargs = {"price_cents": {"required": False}}
+
+    @extend_schema_field(NextStatusSerializer(many=True))
+    def get_next_statuses(self, obj):
+        """
+        The moves *this caller* may make, so the frontend draws its buttons
+        from the server's state machine instead of keeping a copy (ADR-023).
+        Read off the request's membership: no query per row on a list.
+        """
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated:
+            return []
+
+        role = getattr(getattr(request, "membership", None), "role", None)
+        is_dispatcher = user.is_superuser or role in DISPATCHER_ROLES
+        if not is_dispatcher and role != Role.CLEANER:
+            return []
+
+        return [
+            {"status": status, "reason_required": status in REASON_REQUIRED_STATUSES}
+            for status in next_statuses(obj, is_dispatcher=is_dispatcher)
+        ]
 
     @extend_schema_field(TimeEntrySerializer(allow_null=True))
     def get_open_time_entry(self, obj):
