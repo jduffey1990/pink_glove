@@ -8,7 +8,10 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 ## Start here
 
 Everything through Phase 3 is on `main`, tests green — backend and the first
-frontend slice both. Next work is Phase 4, billing. Read "Phase 3b as built"
+frontend slice both. Next work is **Phase 4a** (invoices and recorded payments,
+no Stripe), specified below under "Phase 4 — Billing". Work on a branch
+(`phase-4-billing`), never on `main`; run the phase gate in `CLAUDE.md` at the
+end of each of 4a, 4b and 4c. Read "Phase 3b as built"
 before touching `ui/`, and "Phase gate — baseline" at the end of this file: it
 records what was fixed and decided before Phase 4, the coverage gaps still
 open, and a backlog to fold in as files are touched.
@@ -33,9 +36,9 @@ testing gotchas that will otherwise cost you an hour each.
 
 1. **Deploy target** — deliberately deferred (ADR-006). Nothing in the code
    assumes one. Now also covers how the `ui/` build is served.
-2. **Stripe Connect** — one Stripe account is right for one tenant; real
-   paying tenants change the model (ADR-007). Decide before building Phase 4
-   hard against the single-account assumption.
+2. ~~Stripe Connect~~ — **decided**: Connect with direct charges, plus a
+   platform subscription (ADR-024). Payments are a ledger and Stripe is one
+   method (ADR-025); an invoice is a snapshot (ADR-026).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -45,8 +48,11 @@ testing gotchas that will otherwise cost you an hour each.
 | 2.5 | Access audit trail | **Done** (flagging pass landed in 3a) |
 | 3a | Scheduling backend, audit evaluator, OpenAPI | **Done** |
 | 3b | Frontend slice (`ui/`), built against 3a | **Done** |
-| 4 | Billing | Not started |
-| 5 | Notifications + customer portal | Not started |
+| 4a | Invoices, recorded payments, invoice email — no Stripe | **Next** |
+| D | Deploy target, staging, CI (ADR-006) — before 4b | Not started |
+| 4b | Stripe Connect: tenants take card payments | Not started |
+| 4c | Platform subscription: tenants pay for pink_glove | Not started |
+| 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
 ---
 
@@ -817,14 +823,239 @@ both organizations, with the browser at desktop and 400px widths.
 
 ---
 
+## Phase 4 — Billing
+
+Decisions are in ADR-024 (two Stripe relationships), ADR-025 (payments are a
+ledger) and ADR-026 (an invoice is a snapshot). Do not re-open them here. Split
+in three, each ending with the phase gate:
+
+- **4a** — invoices and recorded payments. No Stripe anywhere. A tenant who
+  never connects Stripe gets a complete product from this alone.
+- **4b** — Stripe Connect. Needs a public URL for webhooks, so **Phase D comes
+  first**.
+- **4c** — the platform subscription.
+
+Same rules as 3a: checkpoints in order, each ending with the full suite green,
+ruff clean, and the schema regenerated in the same commit as any serializer or
+view change. No checkpoint's API before its models and services have tests.
+Every new endpoint gets a cross-tenant test and a test per role on each side of
+its permission line — for update, delete and actions, not only list and
+retrieve; that was the gap the baseline gate found everywhere.
+
+### 4a.0 — Prep
+
+1. New app `billing`. Enums in `billing/enums.py`, rules in
+   `billing/services.py`, rows for tests from `billing/tests/factories.py`
+   (an invoice needs a customer, jobs, lines and payments that all agree about
+   the tenant — by hand that is a test about fixtures).
+2. Fold in two backlog items this phase will otherwise trip over:
+   `Organization.today()` / `local_day_bounds()` (currently computed three
+   ways; invoice dates are organization-local dates), and handling
+   `ConflictError` once in `app/exceptions.py` (billing raises it too).
+
+### 4a.1 — Settings the rules read
+
+One migration each, all defaulted so existing rows need no backfill.
+
+```
+Organization
+    tax_rate_percent        DecimalField(6,3), default 0          # 8.250 = 8.25%
+    no_access_fee_type      CharField NoAccessFeeType: NONE | FLAT | PERCENT, default NONE
+    no_access_fee_value     DecimalField(10,3), default 0         # cents if FLAT, percent if PERCENT
+    invoice_prefix          CharField(8), default "INV"
+    invoice_terms_days      PositiveSmallIntegerField, default 14
+    invoice_footer          TextField, blank                       # "Make checks payable to ..."
+
+Service
+    is_taxable              BooleanField, default False
+```
+
+Admin+ writes them (they are on `OrganizationSerializer` and
+`ServiceSerializer` already gated that way). `Organization.no_access_fee_cents(
+job_price_cents) -> int` does the arithmetic, rounding once, half up. Test:
+NONE is 0, FLAT ignores the price, PERCENT rounds a half-cent up.
+
+### 4a.2 — Models
+
+```
+InvoiceStatus   DRAFT, ISSUED, VOID
+                # PAID / PARTIALLY_PAID / OVERDUE are NOT statuses. They are
+                # derived from the ledger and the due date (ADR-025), exposed
+                # as `payment_state`. Storing them would be a second source of
+                # truth that a voided payment silently falsifies.
+PaymentMethod   CASH, CHECK, MONEY_ORDER, ZELLE, CARD, OTHER
+LineKind        VISIT, NO_ACCESS_FEE, ADJUSTMENT
+
+Invoice(TenantModel)
+    customer            FK Customer, PROTECT
+    number              CharField, null until issued; unique per organization
+    status              InvoiceStatus, default DRAFT, db_index
+    issued_on           DateField, null          # organization-local date
+    due_on              DateField, null
+    # --- snapshot, written at issue, never recomputed (ADR-026) ---
+    bill_to_name, bill_to_email, bill_to_address   (Char/Text)
+    tax_rate_percent    DecimalField(6,3)
+    subtotal_cents, tax_cents, total_cents         PositiveIntegerField
+    notes               TextField, blank          # shown to the customer
+    voided_at / voided_by / void_reason
+    sent_at             DateTimeField, null
+    indexes: (organization, status), (organization, customer), (organization, due_on)
+
+InvoiceLine(TenantModel)
+    invoice             FK Invoice, CASCADE, related_name="lines"
+    kind                LineKind
+    job                 FK Job, PROTECT, null     # null only for ADJUSTMENT
+    description         CharField                 # snapshot: "Standard clean -- Tue 14 Oct"
+    amount_cents        IntegerField              # negative allowed for ADJUSTMENT only
+    is_taxable          BooleanField              # snapshot of Service.is_taxable
+    position            PositiveSmallIntegerField
+    constraint: a job appears on at most one line of a non-VOID invoice
+
+Payment(TenantModel)
+    invoice             FK Invoice, PROTECT, related_name="payments"
+    method              PaymentMethod
+    amount_cents        PositiveIntegerField      # applied to the invoice; > 0
+    tip_cents           PositiveIntegerField, default 0   # never settles the invoice
+    received_on         DateField
+    reference           CharField(255), blank     # check no., Zelle confirmation
+    recorded_by         FK CustomUser, PROTECT, null      # null = written by a provider
+    provider            CharField, blank          # "" | "stripe"  (4b)
+    provider_reference  CharField, blank, db_index
+    voided_at / voided_by / void_reason
+    constraint: unique (provider, provider_reference) where provider != ""
+
+InvoiceSequence(TenantModel)
+    next_number         PositiveIntegerField, default 1   # one row per organization
+```
+
+`Meta(TenantModel.Meta)` on all four (invariant 6). `Payment.delete()` and
+`Invoice.delete()` on a non-draft raise, as `AccessReveal` does.
+
+**The one-line-per-job rule has the soft-delete trap.** A partial unique
+constraint sees soft-deleted lines and lines on void invoices. Enforce it in
+`services`, under `select_for_update` on the job, and test: a job whose invoice
+was voided can be invoiced again; a job on a live invoice cannot.
+
+### 4a.3 — Services (`billing/services.py`)
+
+- `billable_jobs(organization, customer=None)` — COMPLETE jobs, plus NO_ACCESS
+  jobs when the organization charges a fee, that are on no live invoice line.
+  This is the dispatcher's "ready to invoice" list.
+- `draft_invoice(customer, jobs, actor)` — one line per job. VISIT lines take
+  `job.price_cents` and the service's `is_taxable`; NO_ACCESS_FEE lines take
+  `organization.no_access_fee_cents(job.price_cents)` and are skipped at 0.
+  Refuses jobs of another customer, jobs already invoiced, jobs not billable.
+- `reprice_line_from_time_worked(line)` — hourly services only: sum of closed
+  `TimeEntry` minutes across the crew x `hourly_rate_cents`, floored at the
+  service minimum like `quote_cents`. Draft only. Never automatic (ADR-026).
+- `totals(invoice)` — subtotal, tax (taxable subtotal x rate, rounded once, half
+  up), total. Pure; used live for drafts and once at issue.
+- `issue_invoice(invoice, actor)` — takes the next number under
+  `select_for_update` on `InvoiceSequence` (two dispatchers issuing at once get
+  consecutive numbers, never the same one), writes the snapshot, sets
+  `issued_on` to the organization's today and `due_on` from the terms. An
+  invoice with no lines, or a total of 0 or less, is refused.
+- `void_invoice(invoice, actor, reason)` — refused while it has live payments
+  (void those first, so money never points at a void document). Frees its jobs.
+- `record_payment(invoice, ...)` — issued invoices only. `amount_cents` may not
+  exceed the balance; the excess is either a tip or a mistake and the caller
+  must say which. `void_payment(payment, actor, reason)`.
+- `payment_state(invoice)` — UNPAID | PARTIAL | PAID from live payments, and
+  `is_overdue` from `due_on` against the organization's today.
+- `send_invoice(invoice, actor)` — plain, readable email: lines, tax, total,
+  balance, terms, the footer. Bill-to email required. Sets `sent_at`. Through a
+  Celery task taking `organization_id` and `invoice_id`. No PDF in 4a; in 4b
+  the same email gains a pay link.
+
+Test the money hard: three taxable lines whose per-line tax would round to a
+different sum than the invoice-level tax; a percent no-access fee landing on
+half a cent; an adjustment taking the taxable subtotal below zero (tax floors
+at 0); two concurrent issues; payment + void + payment.
+
+### 4a.4 — API (`/api/billing/`)
+
+Dispatcher and above throughout; cleaners and customers get 403 (the customer's
+view of their own invoices is Phase 5).
+
+- `invoices/` — list (filters: `customer`, `status`, `payment_state`,
+  `overdue`, `issued_from`/`issued_to` as organization-local dates), retrieve,
+  create (`{customer, jobs: [...]}` -> `draft_invoice`), PATCH (draft only:
+  notes), DELETE (draft only).
+- `invoices/{id}/lines/` — add an ADJUSTMENT, edit or remove a line. Draft only.
+- Actions, each with `@extend_schema` (the schema test now fails without it):
+  `issue`, `void {reason}`, `send`, `lines/{id}/reprice`.
+- `invoices/billable-jobs/?customer=` — the ready-to-invoice list.
+- `payments/` — list (filters: `invoice`, `method`, `received_from/to`), create,
+  `{id}/void {reason}`. No PATCH, no DELETE.
+- The serializer publishes `payment_state`, `balance_cents`, `is_overdue` and
+  `available_actions`, so the pages draw their buttons from the server's rules
+  rather than a copy (ADR-023; the same shape as `Job.next_statuses`).
+- A state refusal (issuing twice, paying a draft, voiding a paid invoice) is a
+  409 with `detail`; a bad amount is a 400 naming the field.
+
+### 4a.5 — Frontend
+
+Regenerate the contract first. Then: **Billing** (ready-to-invoice grouped by
+customer; drafts; issued with balance and overdue chips), **Invoice detail**
+(lines, totals, payments, the actions the server offers, record-payment dialog
+with method / amount / tip / date / reference), and an **Invoices** card on the
+customer page. Organization settings gain tax rate, no-access fee, prefix,
+terms and footer; the service form gains "taxable". Money goes in through one
+`dollarsToCents` helper in `src/lib/` with a spec — the per-square-foot rounding
+bug came from doing this inline. Vitest for the helper and for any page logic
+that is more than rendering.
+
+### 4a.6 — Seed, docs, gate
+
+`seed_demo` gains, per organization: a tax rate on one and not the other, a
+no-access fee, a few issued invoices (one paid by check, one part-paid in cash
+with a tip, one overdue), and a draft. Update `CLAUDE.md` (layout, any new
+invariant — likely "payments and issued invoices are never edited, only
+voided"), write "Phase 4a as built", run the phase gate and record it.
+
+**4a exit criteria:** a dispatcher can take a week of completed visits for a
+customer, invoice them, email the invoice, record a check against it, void a
+mistaken payment and see the balance come back — and the same actions in the
+other organization touch nothing in the first.
+
+### Phase D — Deploy target, staging, CI (before 4b)
+
+ADR-006 deferred this on purpose; 4b ends the deferral, because Stripe cannot
+deliver a webhook to localhost. Decide the target, stand up a staging
+environment, serve the `ui/` build, set `NUM_PROXIES` to the real proxy depth,
+configure private media (the storage options are already in `base.py`), and
+add a GitHub Actions workflow running pytest, ruff and the three `ui/` checks
+on every push — today pre-commit is the only gate and it depends on each
+checkout having installed it. Production remains Jordan's alone (`CLAUDE.md`).
+
+### 4b — Stripe Connect (outline; spec it when 4a is built)
+
+`Organization.stripe_account_id` and onboarding status; Stripe-hosted
+onboarding from the settings page; a pay link on the invoice email and a
+hosted payment page (direct charge on the connected account, application fee
+from a platform setting that ships at 0%); the Connect webhook through the
+source repo's pipeline — verify, resolve `account` to an organization, enqueue
+with `organization_id`, `StripeEvent` ledger keyed on (event id, account),
+dispatch — writing a `Payment` with `provider="stripe"`. Refunds and disputes
+arrive as events and void or annotate the payment; they are never initiated
+from here in 4b. Read actual fees from balance transactions, never a constant.
+
+### 4c — Platform subscription (outline)
+
+Stripe Billing on the platform account; the platform webhook (separate
+endpoint and secret); a grace period, then `Organization.is_active = False`,
+which is already read-only (baseline gate, decision 2). Needs the standing
+"this organization is deactivated" banner the gate left undone, with a link to
+fix billing, and `is_active` on the session payload to drive it.
+
+---
+
 ## Later phases
 
-**Phase 4 — billing.** `Invoice`, `InvoiceLine`, `Payment`, `PaymentMethod`.
-Ports the source repo's Stripe webhook pipeline nearly verbatim (ADR-007).
-Organization subscription models come over renamed but unwired.
-
-**Phase 5 — notifications.** Email/SMS reminders, invoice delivery, magic-link
-delivery.
+**Phase 5 — notifications and the customer portal.** Visit reminders by email
+and SMS; the customer's own view of their visits and invoices, reached by
+magic link (already built and restricted to customers). Invoice email is *not*
+here — it moved into 4a, because an invoice nobody receives is not a feature.
 
 Open decisions are listed under **Start here** at the top of this file.
 

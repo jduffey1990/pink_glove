@@ -119,6 +119,8 @@ brief was explicitly "docker container → build → deploy."
 repo's subscription models — tenants paying for the software — come over renamed
 but unwired, so turning them on later is wiring, not a rebuild.
 
+**The fork below is now decided -- see ADR-024.** Kept for the reasoning.
+
 **Flagged fork:** one Stripe account is correct while there is one tenant. Real
 paying tenants means **Stripe Connect**, which changes customer ownership and
 webhook routing. Know this before building hard against the single-account
@@ -595,3 +597,109 @@ behaviour still has to come from a live response.
 and a first-time render of the status buttons uses a local list until the
 server has had a chance to disagree. Both are cheap next to the failure they
 prevent.
+
+---
+
+## ADR-024: Two Stripe relationships -- a platform subscription, and Connect with direct charges
+
+**Decided (2026-09-17).** Settles the fork ADR-007 flagged.
+
+Money moves in two directions and they share nothing but the word Stripe:
+
+| | Tenant pays for pink_glove | Tenant's customers pay the tenant |
+|---|---|---|
+| Stripe object | Subscription on the **platform** account | Charge on the tenant's **connected** account |
+| Required | Yes, to use the product | No -- optional per tenant |
+| Webhook | platform endpoint, platform secret | Connect endpoint, Connect secret, `account` on every event |
+| Effect here | lapse -> `Organization.is_active = False` -> read-only | a `Payment` row (ADR-025) |
+
+**Connect uses direct charges, Stripe-hosted onboarding, and the tenant's own
+Stripe dashboard.** The charge, its refunds, its disputes and any negative
+balance belong to the cleaning company.
+
+**Rejected -- destination charges through the platform account.** A smoother,
+fully branded flow, and it makes the platform liable for every tenant's
+chargebacks and the first line of support for every payment question. Wrong
+trade for a one-person platform.
+
+**Rejected -- one Stripe account for everything** (what the source repo does).
+Correct for one tenant. With two, customer ownership and payouts are tangled in
+a way that cannot be untangled without moving money.
+
+**An application fee setting exists and ships at 0%.** Revenue is the
+subscription. A fee on card payments makes cards dearer through pink_glove than
+direct, which pushes tenants back to cash -- but turning one on later should be
+configuration, not a release.
+
+**Tenant resolution for webhooks.** A Connect event names an `account`; the view
+resolves it to an organization *before* enqueuing, and the task takes
+`organization_id` like every other (invariant 3, ADR-004). An event for an
+unknown account is ledgered and dropped, never guessed at. The `StripeEvent`
+idempotency ledger keys on (event id, account).
+
+**Order of build:** invoicing first (4a, no Stripe), then Connect (4b), then the
+subscription (4c). The subscription is needed before anyone is charged, not
+before a pilot tenant can use the product.
+
+---
+
+## ADR-025: Payments are a ledger, and Stripe is one payment method
+
+**Decided (2026-09-17).** Cleaning customers pay by cash, check, money order and
+Zelle at least as often as by card. Recording those is not a workaround beside
+the real system -- it **is** the system, and Stripe is one more way a row gets
+written.
+
+- An invoice is paid when its non-voided payments sum to its total. Status is
+  derived from the ledger, never set by hand. Partial payments fall out for
+  free.
+- A `Payment` has a `method`, an amount, a received date, a free-text
+  `reference` (check number, Zelle confirmation), who recorded it, and -- for a
+  provider -- `provider` and `provider_reference`. A Stripe payment differs
+  only in that a webhook wrote it.
+- **Payments are voided with a reason, never edited or deleted.** "Did they pay
+  me?" is the dispute this table exists to settle; same reasoning as the
+  reveal trail (ADR-016).
+- **Tips are a separate amount on the payment** (`tip_cents`). They are not
+  revenue, are not taxed, and never count toward settling the invoice.
+
+**Rejected -- a payment-provider abstraction now.** There is one provider. Two
+columns are the seam; an interface designed against a single implementation
+encodes that implementation's shape. Build it when a second provider arrives.
+
+**Rejected -- splitting tips among the assigned cleaners.** That is payroll
+logic arriving before there is a payroll feature. A per-job tip report is
+enough to hand the money on.
+
+---
+
+## ADR-026: An invoice is a snapshot
+
+**Decided (2026-09-17).** Everything an invoice says is fixed when it is issued:
+line amounts, the tax rate, the tax, the total, the bill-to name and address.
+Changing a service price, the organization's tax rate or a customer's address
+must never alter a document that has already been sent. This extends the rule
+`Job.price_cents` already follows.
+
+- **A completed visit's line is `Job.price_cents`** -- the price agreed when the
+  visit was scheduled, not a re-quote. For an hourly service the dispatcher is
+  shown the time actually worked beside it and can re-price the line from
+  actuals in one action; it is never automatic, because a crew running long is
+  not self-evidently the customer's bill.
+- **A no-access visit bills the organization's no-access fee** (flat cents or a
+  percentage of the job price, default 0 = no line), editable or waivable per
+  invoice before issue.
+- **Tax is one flat rate per organization, and each service is taxable or not.**
+  Rates are `Decimal` (ADR-009); tax is computed once per invoice over the
+  taxable lines and rounded once to whole cents, so per-line rounding cannot
+  accumulate.
+- **A draft is editable; an issued invoice is not.** Corrections after issue are
+  a void and a new invoice, so numbers are never reused and the sequence has no
+  silent rewrites.
+
+**Rejected -- Stripe Tax.** It covers only Stripe-paid invoices; a cash invoice
+would still need a rate from somewhere, so there would be two tax systems.
+**Rejected -- a rate per service location.** More correct for a multi-city
+operator and more data entry for everyone else; it layers onto this design
+later (the snapshot already stores the rate used). **Rejected -- no tax.**
+Adding it afterwards means migrating every total and every screen showing one.
