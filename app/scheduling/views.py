@@ -18,7 +18,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -489,15 +489,28 @@ class JobRelatedViewSet(TenantViewSetMixin, ModelViewSet):
         if not job.assignments.filter(user=user).exists():
             raise PermissionDenied("You are not assigned to that job.")
 
-    def perform_destroy(self, instance):
+    def _assert_author_or_dispatcher(self, instance, verb):
         """The author, or a dispatcher. Not any cleaner who can see it."""
         user = self.request.user
         membership = getattr(self.request, "membership", None)
         role = membership.role if membership else None
 
         if not (user.is_superuser or role in DISPATCHER_ROLES or instance.user_id == user.id):
-            raise PermissionDenied("You can only delete your own notes.")
+            raise PermissionDenied(f"You can only {verb} your own notes and photos.")
 
+    def perform_update(self, serializer):
+        self._assert_author_or_dispatcher(serializer.instance, "edit")
+
+        # A note is evidence about one visit. Re-pointing it would move it past
+        # the assignment check that `perform_create` ran against the first job.
+        job = serializer.validated_data.get("job")
+        if job is not None and job.pk != serializer.instance.job_id:
+            raise ValidationError({"job": "This cannot be moved to another job."})
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._assert_author_or_dispatcher(instance, "delete")
         instance.delete()
 
 

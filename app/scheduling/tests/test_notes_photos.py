@@ -123,19 +123,73 @@ class TestReadingNotes:
 
         assert [row["body"] for row in response.json()["results"]] == ["B"]
 
-    def test_another_organizations_notes_are_invisible(self, dispatcher_client, other_organization):
-        rival_job = JobFactory(organization=other_organization)
-        JobNote.objects.create(
-            organization=other_organization,
-            job=rival_job,
-            user=rival_job.organization.pk
-            and __import__("users").models.CustomUser.objects.create_user(
-                email="ghost@example.com", password="pw-for-tests-only"
-            ),
-            body="Rival",
+    def test_another_organizations_notes_are_invisible(
+        self, dispatcher_client, rival_job, rival_cleaner
+    ):
+        note = JobNote.objects.create(
+            organization=rival_job.organization, job=rival_job, user=rival_cleaner, body="Rival"
         )
 
         assert dispatcher_client.get(NOTES).json()["count"] == 0
+        assert dispatcher_client.get(note_detail(note)).status_code == 404
+
+
+@pytest.mark.django_db
+class TestEditingNotes:
+    """Editing follows deleting: the author, or a dispatcher. Never the job it hangs off."""
+
+    def test_the_author_can_edit_their_own(self, cleaner_client, assigned_job):
+        created = cleaner_client.post(
+            NOTES, {"job": str(assigned_job.id), "body": "Frige"}, format="json"
+        ).json()
+        note = JobNote.objects.get(id=created["id"])
+
+        response = cleaner_client.patch(note_detail(note), {"body": "Fridge"}, format="json")
+
+        note.refresh_from_db()
+        assert response.status_code == 200
+        assert note.body == "Fridge"
+
+    def test_a_cleaner_cannot_edit_someone_elses(
+        self, cleaner_client, dispatcher_client, assigned_job
+    ):
+        created = dispatcher_client.post(
+            NOTES, {"job": str(assigned_job.id), "body": "Dispatcher's"}, format="json"
+        ).json()
+        note = JobNote.objects.get(id=created["id"])
+
+        response = cleaner_client.patch(note_detail(note), {"body": "Rewritten"}, format="json")
+
+        note.refresh_from_db()
+        assert response.status_code == 403
+        assert note.body == "Dispatcher's"
+
+    def test_a_note_cannot_be_moved_to_another_job(
+        self, dispatcher_client, assigned_job, other_job
+    ):
+        created = dispatcher_client.post(
+            NOTES, {"job": str(assigned_job.id), "body": "Stays put"}, format="json"
+        ).json()
+        note = JobNote.objects.get(id=created["id"])
+
+        response = dispatcher_client.patch(
+            note_detail(note), {"job": str(other_job.id)}, format="json"
+        )
+
+        note.refresh_from_db()
+        assert response.status_code == 400
+        assert note.job_id == assigned_job.id
+
+    def test_another_organizations_note_cannot_be_edited(
+        self, dispatcher_client, rival_job, rival_cleaner
+    ):
+        note = JobNote.objects.create(
+            organization=rival_job.organization, job=rival_job, user=rival_cleaner, body="Rival"
+        )
+
+        response = dispatcher_client.patch(note_detail(note), {"body": "Ours now"}, format="json")
+
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db

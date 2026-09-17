@@ -169,6 +169,16 @@ class TestCrossOrganizationIsolation:
 
         assert response.status_code == 403
 
+    def test_a_deactivated_membership_loses_access(self, authed_client, owner):
+        """Removing someone is `is_active = False`; the session may well outlive it."""
+        from users.models import Membership
+
+        assert authed_client.get(reverse("users:membership-list")).status_code == 200
+
+        Membership.objects.filter(user=owner).update(is_active=False)
+
+        assert authed_client.get(reverse("users:membership-list")).status_code == 403
+
     def test_anonymous_is_rejected(self, api_client, organization):
         assert api_client.get(reverse("users:membership-list")).status_code == 403
 
