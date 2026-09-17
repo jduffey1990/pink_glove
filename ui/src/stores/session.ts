@@ -17,7 +17,12 @@ import type { Membership, Role, Session } from '@/api/types'
 import axios from 'axios'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, setOrganizationIdGetter, setSessionLostHandler } from '@/api/client'
+import {
+  api,
+  setOrganizationIdGetter,
+  setSessionDoubtedHandler,
+  setSessionLostHandler,
+} from '@/api/client'
 
 /** Mirrors users.enums.DISPATCHER_ROLES on the backend. */
 const DISPATCHER_ROLES = new Set<Role>(['owner', 'admin', 'dispatcher'])
@@ -225,6 +230,29 @@ export function connectSessionToClient (store: ReturnType<typeof useSessionStore
     if (store.isAuthenticated) {
       store.clear()
     }
+  })
+
+  // A 403 might be an expired session or might be a plain "no". Ask, and sign
+  // out only if the server says nobody is signed in. One probe at a time: a
+  // page that fires five requests gets five 403s.
+  let probing = false
+  setSessionDoubtedHandler(() => {
+    if (!store.isAuthenticated || probing) {
+      return
+    }
+    probing = true
+    store.refresh()
+      .then(user => {
+        if (user === null) {
+          store.clear()
+        }
+      })
+      .catch(() => {
+        // Could not ask. Leave the session alone; the next request will tell.
+      })
+      .finally(() => {
+        probing = false
+      })
   })
 }
 

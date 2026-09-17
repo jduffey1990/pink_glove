@@ -11,7 +11,7 @@ import MockAdapter from 'axios-mock-adapter'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api } from '@/api/client'
-import { useSessionStore } from './session'
+import { connectSessionToClient, useSessionStore } from './session'
 
 let mock: MockAdapter
 
@@ -268,5 +268,38 @@ describe('role helpers', () => {
     expect(store.isDispatcherOrHigher).toBe(expected.dispatcher)
     expect(store.isCleaner).toBe(expected.cleaner)
     expect(store.isCustomer).toBe(expected.customer)
+  })
+})
+
+describe('a 403 while signed in', () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0))
+
+  it('keeps the session when the server says it is still there', async () => {
+    const store = useSessionStore()
+    connectSessionToClient(store)
+    mock.onGet('/api/users/session/').reply(200, session())
+    await store.boot()
+
+    mock.onPost('/api/customers/locations/l-1/reveal-access/').reply(403, {
+      detail: 'You are not assigned to this job.',
+    })
+    await expect(api.post('/api/customers/locations/l-1/reveal-access/')).rejects.toThrow()
+    await settle()
+
+    expect(store.isAuthenticated).toBe(true)
+  })
+
+  it('signs out when the server says the session is gone', async () => {
+    const store = useSessionStore()
+    connectSessionToClient(store)
+    mock.onGet('/api/users/session/').replyOnce(200, session())
+    await store.boot()
+
+    mock.onGet('/api/users/session/').reply(200, {})
+    mock.onGet('/api/scheduling/jobs/').reply(403, {})
+    await expect(api.get('/api/scheduling/jobs/')).rejects.toThrow()
+    await settle()
+
+    expect(store.isAuthenticated).toBe(false)
   })
 })

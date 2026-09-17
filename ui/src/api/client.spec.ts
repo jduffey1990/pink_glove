@@ -14,6 +14,7 @@ import {
   createClient,
   readCookie,
   setOrganizationIdGetter,
+  setSessionDoubtedHandler,
   setSessionLostHandler,
 } from './client'
 
@@ -157,24 +158,40 @@ describe('losing the session', () => {
   let client: AxiosInstance
   let mock: MockAdapter
   const onLost = vi.fn()
+  const onDoubted = vi.fn()
 
   beforeEach(() => {
     onLost.mockClear()
+    onDoubted.mockClear()
     setCookie('csrftoken=t')
     setOrganizationIdGetter(() => null)
     setSessionLostHandler(onLost)
+    setSessionDoubtedHandler(onDoubted)
     client = createClient()
     mock = new MockAdapter(client)
   })
 
   afterEach(() => mock.restore())
 
-  it.each([401, 403])('a %i clears the session', async status => {
-    mock.onGet('/api/thing/').reply(status, {})
+  it('a 401 clears the session', async () => {
+    mock.onGet('/api/thing/').reply(401, {})
 
     await expect(client.get('/api/thing/')).rejects.toThrow()
 
     expect(onLost).toHaveBeenCalledOnce()
+    expect(onDoubted).not.toHaveBeenCalled()
+  })
+
+  it('a 403 does NOT clear the session -- it asks whether there still is one', async () => {
+    // "Signed in, not allowed" is an ordinary answer: an unassigned cleaner
+    // asking for codes gets a 403 by design. Signing them out for it would
+    // turn every permission rule on the backend into a logout.
+    mock.onGet('/api/thing/').reply(403, {})
+
+    await expect(client.get('/api/thing/')).rejects.toThrow()
+
+    expect(onLost).not.toHaveBeenCalled()
+    expect(onDoubted).toHaveBeenCalledOnce()
   })
 
   it('a 404 does NOT clear the session', async () => {

@@ -31,13 +31,30 @@ export function readCookie (name: string): string | null {
   return match ? decodeURIComponent(match[2]) : null
 }
 
-/** Called on a 401, or on a 403 while a session was believed to be active. */
+/** Called on a 401: the server says there is no session. */
 type SessionLostHandler = () => void
 
 let onSessionLost: SessionLostHandler = () => {}
 
 export function setSessionLostHandler (handler: SessionLostHandler): void {
   onSessionLost = handler
+}
+
+/**
+ * Called on a 403, which does not say whether there is a session.
+ *
+ * DRF answers 403 both for "signed in, not allowed" and for an expired session
+ * (session auth has no challenge header to put on a 401). The first is an
+ * ordinary answer -- an unassigned cleaner asking for codes gets one by design
+ * (ADR-017) -- so a 403 must not sign anyone out on its own. The handler asks
+ * the server which it was.
+ */
+type SessionDoubtedHandler = () => void
+
+let onSessionDoubted: SessionDoubtedHandler = () => {}
+
+export function setSessionDoubtedHandler (handler: SessionDoubtedHandler): void {
+  onSessionDoubted = handler
 }
 
 /**
@@ -85,16 +102,18 @@ export function createClient (): AxiosInstance {
     (error: AxiosError) => {
       const status = error.response?.status
 
-      // 401 is "you are not signed in". 403 covers both "signed in but not
-      // allowed" and an expired session that DRF reports as a permission
-      // failure, so it is treated the same way when we believed we had one.
+      // 401 is "you are not signed in". 403 is either "signed in but not
+      // allowed" or an expired session DRF reports as a permission failure;
+      // only the session endpoint can tell them apart, so it is asked.
       //
       // 404 is NOT treated as a wrong-organization signal: the API returns 404
       // for a cross-tenant read by design (a 403 would confirm the record
       // exists), so reacting to it would sign people out for opening a stale
       // link.
-      if (status === 401 || status === 403) {
+      if (status === 401) {
         onSessionLost()
+      } else if (status === 403) {
+        onSessionDoubted()
       }
 
       return Promise.reject(error)
