@@ -189,3 +189,89 @@ customers use magic links and are never challenged.
 - One app per bounded concern; enums in `<app>/enums.py`.
 - Views: DRF generic views and viewsets. Business logic that outgrows a view
   goes in `<app>/services.py`, not a fat model.
+
+
+## Branches and production
+
+New work happens on a branch, never directly on `main`. Cut one per phase or
+per coherent piece of work (`phase-4-billing`, `fix-reveal-buffer`), commit
+there, and leave merging into `main` to Jordan. Agents never commit on, merge
+into, or push to `main`, and never force-push anything. Push a branch only
+when Jordan asks.
+
+There is no production yet — the deploy target is deliberately deferred
+(ADR-006). When one exists, it is Jordan's alone: agents do not run anything
+against a live database or service, do not read or use production credentials,
+and do not change DNS, hosting settings, CI secrets, or deploy triggers.
+Deploy and cutover steps are written and rehearsed locally by agents and
+executed by Jordan.
+
+## Commits
+
+Commit early and often, one commit per coherent goal (a model with its
+migration, an endpoint with its tests, a page). Do not leave long-running
+uncommitted work. Every commit passes, for the side it touches:
+
+- backend (`app/`): `pytest -q` and `ruff check . && ruff format --check .`;
+- frontend (`ui/`): `npm run lint`, `npm run type-check` and `npm test`;
+- a serializer, view, url, model or enum change also carries the regenerated
+  `ui/openapi.yaml` and `ui/src/api/schema.d.ts` in the same commit (ADR-019).
+
+There is no CI; pre-commit (ruff, schema currency, eslint, gitleaks) is the
+only automatic check, so do not bypass it with `--no-verify`.
+
+## Phase gate
+
+Run this at the end of every phase, before starting the next. Spawn review
+subagents in parallel, or work through the goals in sequence. Fix what they
+find, and record the outcome in the phase's "as built" section of
+`docs/PLAN.md` under a **Phase gate** heading — one line per item below, so a
+fresh session can read what was checked and what was left.
+
+1. **Test coverage.** New models, endpoints, services and Celery tasks have
+   pytest tests; new stores, `src/lib/` helpers and non-trivial page logic have
+   vitest specs. Every new tenant-scoped endpoint has a cross-tenant test (a
+   user in organization A gets nothing of organization B's), and every new
+   permission rule has a test per role on each side of the line. Update the
+   expected test counts in `docs/PLAN.md`. List any gap explicitly.
+2. **DRY.** Remove duplication the phase introduced or touched. Usual suspects
+   here: date handling outside `ui/src/lib/datetime.ts`, API calls outside
+   `ui/src/api/`, hand-built scheduling fixtures instead of
+   `scheduling/tests/factories.py`, and client-side copies of server-owned
+   rules or copy (ADR-023).
+3. **Modularity.** Pages and components reach the backend through
+   `ui/src/api/` and the stores, never `fetch` directly. Backend logic that
+   outgrows a view lives in `<app>/services.py`; apps talk to each other
+   through those services and model relations, not by reaching into another
+   app's views or serializers.
+4. **Orthogonality.** A change to one concern (auth, tenancy, scheduling,
+   billing, a page) should not force edits in another. Where coupling is
+   unavoidable, note it in a code comment and in the list below. Known
+   unavoidable cases:
+   - `ui/src/api/schema.d.ts` mirrors the serializers and views (ADR-019) —
+     mechanical, and enforced by the pre-commit schema check;
+   - `ENUM_NAME_OVERRIDES` in settings needs an entry per choice set whose
+     field name collides (`Role`, `JobStatus`/`CustomerStatus`);
+   - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`;
+   - the job state machine lives on the server and the UI renders the 409's
+     `allowed` list, so a new status touches backend enum, transitions and
+     schema, but no client-side table.
+5. **Security (authentication and authorization).**
+   - Every new model holding tenant data inherits `TenantModel`, and every
+     view over it inherits `TenantViewSetMixin` (invariant 1).
+   - `organization` is stamped from the resolved tenant, never accepted from
+     request data (invariant 2); new Celery tasks take `organization_id`
+     (invariant 3).
+   - No view relies on the global default by accident: each states its role
+     permission, and anything `AllowAny` is deliberate and listed in the gate
+     record (invariant 4).
+   - No authorization decision lives only in the UI — hiding a button is not
+     a permission.
+   - Access codes stay write-only and encrypted, and are read only through the
+     audited reveal (ADR-014, ADR-016); nothing sensitive is logged.
+   - No secrets in git or in the `ui/` bundle (invariant 7).
+   - The deploy audit (`check --deploy`) comes back clean.
+   - Run `/security-review` on the phase diff.
+6. **Branch and production guard.** Confirm the phase's work is on its branch,
+   nothing was committed to `main`, and — once a production exists — nothing
+   touched it.
