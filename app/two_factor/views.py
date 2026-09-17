@@ -22,6 +22,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from app.admin import TWO_FACTOR_VERIFIED_SESSION_KEY
 from base.serializers import DetailSerializer
 from base.throttles import LoginAccountThrottle
 from two_factor.models import TrustedDevice, TwoFactorCode
@@ -139,6 +140,8 @@ class VerifyView(APIView):
         user = challenge.user
         del request.session[PENDING_CHALLENGE_SESSION_KEY]
         login(request, user)  # cycles the session key
+        # After login(), which may flush: this is what the admin site checks.
+        request.session[TWO_FACTOR_VERIFIED_SESSION_KEY] = True
 
         response = Response(SessionSerializer(user, context={"request": request}).data)
 

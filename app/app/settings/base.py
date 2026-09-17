@@ -52,7 +52,9 @@ AUTH_USER_MODEL = "users.CustomUser"
 # --------------------------------------------------------------------------
 
 DJANGO_APPS = [
-    "django.contrib.admin",
+    # Not django.contrib.admin: the default site is swapped for one that only
+    # admits a 2FA-verified session. See app/admin.py.
+    "app.admin.PinkGloveAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
