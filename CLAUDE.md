@@ -153,7 +153,13 @@ Instead the API returns the code in the login response as `dev_code` whenever
 it runs with `LOCAL = True`, and the verify page shows it with a "Use it"
 button. It is absent in any deployed environment, so nothing renders there.
 Cleaners can tick "Trust this device" and skip the challenge for 30 days;
-customers use magic links and are never challenged.
+customers use magic links and are never challenged. Magic links are issued to
+customers *only* -- staff asking for one get the same 202 and no email.
+
+**Django admin has no login form.** `/admin/` admits only a session that has
+cleared a 2FA challenge (`app/admin.py`), so sign in through the app as a
+superuser first, then open `/admin/` on the API host. A `force_login`'d or
+trusted-device session is refused on purpose.
 
 ## Conventions
 

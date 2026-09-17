@@ -10,8 +10,8 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 Everything through Phase 3 is on `main`, tests green — backend and the first
 frontend slice both. Next work is Phase 4, billing. Read "Phase 3b as built"
 before touching `ui/`, and "Phase gate — baseline" at the end of this file: it
-lists decisions that are yours to make before Phase 4 and a backlog to fold in
-as files are touched.
+records what was fixed and decided before Phase 4, the coverage gaps still
+open, and a backlog to fold in as files are touched.
 
 ```bash
 cd app
@@ -25,7 +25,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **522 passing** in `app/`, and **77** in `ui/` (`cd ui && npm test`).
+Expect **552 passing** in `app/`, and **77** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -886,7 +886,7 @@ The gate in `CLAUDE.md` was adopted after Phase 3b, so this first run covers
 everything through 3b rather than one phase. Branch `phase-gate-baseline`.
 Three reviewers ran in parallel (coverage; DRY / modularity / orthogonality;
 authentication and authorization); every finding acted on was reproduced with a
-failing test before it was fixed. Backend 466 → 522 tests, frontend 65 → 77.
+failing test before it was fixed. Backend 466 → 552 tests, frontend 65 → 77.
 
 ### Fixed
 
@@ -943,22 +943,28 @@ failing test before it was fixed. Backend 466 → 522 tests, frontend 65 → 77.
   `pre-commit` was configured but **not installed** in this checkout, so no
   hook had been running; it is now, and all hooks pass.
 
-### Yours to decide (not changed)
+### Decided by Jordan, 2026-09-17, and implemented
 
-1. **Django admin is a password-only door into the same session.** No 2FA, no
-   throttle, and a superuser can then act in any tenant. Options: 2FA on
-   `AdminSite.login`, lockout (django-axes), a separate host or IP allow-list.
-   Decide before anything is deployed.
-2. **`Organization.is_active` is not enforced on requests** — only the beat
-   fan-out respects it. Members of a deactivated organization keep working.
-   What it should mean belongs with Phase 4 (non-payment).
-3. **An admin can review their own flagged reveal**, and a second review
-   silently overwrites the first.
-4. **The membership directory shows customer-role members' emails to
-   cleaners.** Probably should be staff-only rows for non-dispatchers.
-5. **No upload size cap** on job photos or the logo; with S3/GCS media,
-   **photo privacy depends on bucket settings nothing in the repo sets**.
-6. The 2FA code is in the email *subject* (lock-screen previews, mail logs).
+1. **Django admin requires the 2FA flow.** `app/admin.py` replaces the default
+   site: no login form, and only a session `VerifyView` has marked as verified
+   is admitted. Rejected: lockout alone (a stolen password is still a
+   cross-tenant session), disabling admin in production, deferring to network
+   controls.
+2. **A deactivated organization is read-only.** Unsafe methods are refused in
+   `IsOrgMember`; reads still work so a suspended tenant can see what they have
+   and, from Phase 4, what they owe. Superusers exempt. Rejected: blocking
+   entirely. *Not done:* the UI shows the server's message on a refused write
+   but has no standing "this organization is deactivated" banner, and
+   `is_active` is not on the session payload to drive one.
+3. **No self-review of reveals except by the owner; reviews are final** (409 on
+   a second). `audit.services.mark_reviewed`. The owner exception exists so a
+   one-person office can clear its own flags.
+4. **Cleaners see staff rows only** in the membership directory.
+5. **Uploads capped** (10 MB photos, 2 MB logo, on the model fields) **and
+   cloud media is private**, read through 5-minute signed URLs. A page left
+   open longer than that will need a refetch to show a photo it had not yet
+   loaded.
+6. **The 2FA code is in the email body only.**
 
 ### Coverage gaps left open
 

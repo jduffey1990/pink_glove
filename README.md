@@ -82,6 +82,14 @@ host-specific is behind an environment variable:
   object storage is required to deploy at all**
 - `SECURE_SSL_REDIRECT` — leave off where the platform already redirects at the
   edge; turn on for a bare VPS
+- `NUM_PROXIES` — how many proxies you control sit in front of the app
+  (default 1 in production). The sign-in throttles key on the client IP, and
+  this is how it is found: too low and every client shares the proxy's bucket,
+  too high and `X-Forwarded-For` is spoofable. A CDN in front of a load
+  balancer is 2.
+- `MEDIA_URL_TTL_SECONDS` — lifetime of a signed media URL on `s3`/`gcs`
+  (default 300). Objects are written private regardless of bucket policy.
+- Redis also holds the throttle counters, so it is required, not optional.
 
 Before deploying anywhere, this must come back clean:
 
@@ -94,5 +102,4 @@ running container needs no write access to `STATIC_ROOT`.
 
 ## Status
 
-Phase 0 (scaffold) is complete. Phase 1 (tenancy core and identity) is next —
-see `docs/PLAN.md`.
+See `docs/PLAN.md` for the phase table and what is next.
