@@ -18,6 +18,7 @@ from django.db import models
 from django.utils import timezone
 
 from base.models import TenantModel
+from base.validators import MaxFileSize
 from catalog.models import Service
 from customers.models import Customer, ServiceLocation
 from scheduling.enums import JobStatus
@@ -346,7 +347,7 @@ class JobPhoto(TenantModel):
 
     job = models.ForeignKey(Job, on_delete=models.CASCADE, related_name="photos")
     user = models.ForeignKey(CustomUser, on_delete=models.PROTECT, related_name="job_photos")
-    image = models.ImageField(upload_to="job_photos/%Y/%m/")
+    image = models.ImageField(upload_to="job_photos/%Y/%m/", validators=[MaxFileSize(10)])
     caption = models.CharField(max_length=255, blank=True, default="")
 
     class Meta(TenantModel.Meta):

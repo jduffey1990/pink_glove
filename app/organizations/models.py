@@ -6,6 +6,7 @@ from django.db import models
 from django.utils.text import slugify
 
 from base.models import Base
+from base.validators import MaxFileSize
 
 #: ISO weekday numbers, the convention `datetime.isoweekday()` returns.
 MONDAY, SUNDAY = 1, 7
@@ -69,7 +70,9 @@ class Organization(Base):
     address_postal_code = models.CharField(max_length=30, blank=True, default="")
     address_country = models.CharField(max_length=2, blank=True, default="US")
 
-    logo = models.ImageField(upload_to="organization_logos/", null=True, blank=True)
+    logo = models.ImageField(
+        upload_to="organization_logos/", null=True, blank=True, validators=[MaxFileSize(2)]
+    )
     primary_color = models.CharField(max_length=7, blank=True, default="")
 
     # --- Operating window ---------------------------------------------------

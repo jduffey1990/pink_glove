@@ -249,6 +249,20 @@ class TestPhotos:
         assert response.status_code == 201
         assert JobPhoto.objects.get(job=assigned_job).user_id == cleaner.id
 
+    def test_an_oversized_photo_is_refused(self, cleaner_client, assigned_job, monkeypatch):
+        """The cap is 10 MB; shrunk here so the test does not build a 10 MB file."""
+        from base.validators import MaxFileSize
+
+        monkeypatch.setattr(MaxFileSize, "__call__", MaxFileSize(0).__call__)
+
+        response = cleaner_client.post(
+            PHOTOS, {"job": str(assigned_job.id), "image": _png()}, format="multipart"
+        )
+
+        assert response.status_code == 400
+        assert "limit" in response.json()["image"][0]
+        assert not JobPhoto.objects.exists()
+
     def test_an_image_is_required(self, cleaner_client, assigned_job):
         response = cleaner_client.post(
             PHOTOS, {"job": str(assigned_job.id), "caption": "No picture"}, format="multipart"

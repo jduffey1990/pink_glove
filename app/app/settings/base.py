@@ -6,6 +6,7 @@ override. Nothing in this file may contain a secret or an environment-specific
 hostname -- those come from the environment. See .env.example.
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -273,10 +274,35 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 _media_backend = config("MEDIA_BACKEND", default="filesystem")
 
+# Media here is photographs of the inside of people's homes. Whatever the
+# bucket's own policy says, objects are written private and read only through
+# a signed URL that expires in minutes -- so a misconfigured bucket, or a URL
+# pasted into a chat, does not publish someone's living room. Names are never
+# overwritten: a job photo is evidence, and a second upload must not replace it.
+MEDIA_URL_TTL_SECONDS = config("MEDIA_URL_TTL_SECONDS", default=300, cast=int)
+
 _MEDIA_BACKENDS = {
     "filesystem": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
-    "s3": {"BACKEND": "storages.backends.s3.S3Storage"},
-    "gcs": {"BACKEND": "storages.backends.gcloud.GoogleCloudStorage"},
+    "s3": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "default_acl": "private",
+            "querystring_auth": True,
+            "querystring_expire": MEDIA_URL_TTL_SECONDS,
+            "file_overwrite": False,
+        },
+    },
+    "gcs": {
+        "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
+        "OPTIONS": {
+            # None, not "private": buckets with uniform bucket-level access
+            # (the default for new ones) reject any per-object ACL.
+            "default_acl": None,
+            "querystring_auth": True,
+            "expiration": timedelta(seconds=MEDIA_URL_TTL_SECONDS),
+            "file_overwrite": False,
+        },
+    },
 }
 
 if _media_backend not in _MEDIA_BACKENDS:
