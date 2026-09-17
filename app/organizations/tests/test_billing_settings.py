@@ -117,6 +117,51 @@ class TestApi:
         assert organization.no_access_fee_cents(20000) == 2500
         assert organization.invoice_terms_days == 30
 
+    def test_an_owner_can_too(self, api_client, organization, make_member):
+        api_client.force_login(make_member(organization, Role.OWNER))
+
+        response = api_client.patch(
+            "/api/organizations/current/", {"invoice_terms_days": 7}, format="json"
+        )
+
+        assert response.status_code == 200
+        organization.refresh_from_db()
+        assert organization.invoice_terms_days == 7
+
+    @pytest.mark.parametrize("role", [Role.CLEANER, Role.CUSTOMER])
+    def test_neither_a_cleaner_nor_a_customer_can(
+        self, api_client, organization, make_member, role
+    ):
+        api_client.force_login(make_member(organization, role))
+
+        response = api_client.patch(
+            "/api/organizations/current/", {"invoice_prefix": "HAX"}, format="json"
+        )
+
+        assert response.status_code == 403
+        organization.refresh_from_db()
+        assert organization.invoice_prefix == "INV"
+
+    def test_a_negative_no_access_fee_is_refused(self, api_client, organization, make_member):
+        api_client.force_login(make_member(organization, Role.ADMIN))
+
+        response = api_client.patch(
+            "/api/organizations/current/", {"no_access_fee_value": "-1.000"}, format="json"
+        )
+
+        assert response.status_code == 400
+        assert "no_access_fee_value" in response.data
+
+    def test_an_over_long_prefix_is_refused(self, api_client, organization, make_member):
+        api_client.force_login(make_member(organization, Role.ADMIN))
+
+        response = api_client.patch(
+            "/api/organizations/current/", {"invoice_prefix": "TOOLONGPREFIX"}, format="json"
+        )
+
+        assert response.status_code == 400
+        assert "invoice_prefix" in response.data
+
     def test_a_dispatcher_cannot(self, api_client, organization, make_member):
         api_client.force_login(make_member(organization, Role.DISPATCHER))
 

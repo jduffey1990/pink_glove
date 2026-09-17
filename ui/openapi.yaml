@@ -3500,6 +3500,22 @@ components:
           format: uuid
       required:
       - user
+    AvailableActionsEnum:
+      enum:
+      - edit
+      - delete
+      - issue
+      - void
+      - send
+      - record_payment
+      type: string
+      description: |-
+        * `edit` - edit
+        * `delete` - delete
+        * `issue` - issue
+        * `void` - void
+        * `send` - send
+        * `record_payment` - record_payment
     BillableJob:
       type: object
       description: One row of the ready-to-invoice list, priced as it will bill.
@@ -3849,13 +3865,19 @@ components:
         available_actions:
           type: array
           items:
-            type: string
+            $ref: '#/components/schemas/AvailableActionsEnum'
           readOnly: true
         sent_at:
           type: string
           format: date-time
           readOnly: true
           nullable: true
+        created_by_name:
+          type: string
+          readOnly: true
+        issued_by_name:
+          type: string
+          readOnly: true
         voided_at:
           type: string
           format: date-time
@@ -3879,11 +3901,13 @@ components:
       - bill_to_email
       - bill_to_name
       - created_at
+      - created_by_name
       - customer
       - customer_detail
       - due_on
       - id
       - is_overdue
+      - issued_by_name
       - issued_on
       - lines
       - number

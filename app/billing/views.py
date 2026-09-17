@@ -16,6 +16,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
@@ -24,6 +25,7 @@ from base.permissions import IsDispatcherOrHigher
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 from billing import services
+from billing.enums import LineKind
 from billing.filters import InvoiceFilterSet, PaymentFilterSet
 from billing.models import Invoice, InvoiceLine, Payment
 from billing.serializers import (
@@ -192,8 +194,46 @@ class InvoiceLineViewSet(TenantViewSetMixin, ModelViewSet):
     filterset_fields = ["invoice", "kind"]
     ordering_fields = ["position", "created_at"]
 
+    def perform_create(self, serializer):
+        # Through `assert_draft` like the other two, so adding a line to an
+        # issued invoice is refused the same way editing one is -- a 409, not
+        # a 400. The page treats the two differently: a 409 means re-read the
+        # record, and that is the right instruction in both cases.
+        services.assert_draft(serializer.validated_data["invoice"], "add a line to")
+        super().perform_create(serializer)
+
     def perform_update(self, serializer):
-        services.assert_draft(serializer.instance.invoice, "edit a line on")
+        line = serializer.instance
+        services.assert_draft(line.invoice, "edit a line on")
+
+        # A line is evidence about one invoice, and a visit line is a snapshot
+        # of one visit. Two rules, both of which the model stated and neither
+        # of which the API enforced, because DRF never calls `full_clean()`:
+        #
+        # * it cannot be moved to another invoice. `TenantModel.save()` only
+        #   compares organizations, so a move to another *customer's* draft in
+        #   the same tenant went through -- billing them for a visit they
+        #   never had, and printing its description in their invoice email.
+        # * only an adjustment is editable. Rewriting a visit line's amount
+        #   and clearing `is_taxable` rewrote history with no record: the
+        #   invoice then read as though the visit had always cost that. A
+        #   correction is an adjustment line, which the customer can see.
+        if "invoice" in serializer.validated_data:
+            if serializer.validated_data["invoice"].pk != line.invoice_id:
+                raise ValidationError({"invoice": "This cannot be moved to another invoice."})
+            serializer.validated_data.pop("invoice")
+
+        if line.kind != LineKind.ADJUSTMENT:
+            raise ValidationError(
+                {
+                    "kind": (
+                        "A visit line is a snapshot of that visit. Re-price it from "
+                        "the hours worked, remove it, or add an adjustment -- but it "
+                        "cannot be rewritten in place."
+                    )
+                }
+            )
+
         super().perform_update(serializer)
 
     def perform_destroy(self, instance):

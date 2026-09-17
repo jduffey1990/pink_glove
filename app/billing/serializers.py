@@ -14,7 +14,7 @@ from rest_framework import serializers
 
 from base.viewsets import TenantModelSerializer
 from billing import services
-from billing.enums import InvoiceStatus, LineKind, PaymentMethod, PaymentState
+from billing.enums import LineKind, PaymentMethod, PaymentState
 from billing.models import Invoice, InvoiceLine, Payment
 from scheduling.serializers import CustomerSummarySerializer
 
@@ -72,13 +72,6 @@ class InvoiceLineSerializer(TenantModelSerializer):
             raise serializers.ValidationError(
                 "Only an adjustment can be written by hand. Visit and no-access "
                 "lines come from the visits themselves."
-            )
-        return value
-
-    def validate_invoice(self, value):
-        if value.status != InvoiceStatus.DRAFT:
-            raise serializers.ValidationError(
-                "That invoice is issued. Corrections after issue are a void and a new invoice."
             )
         return value
 
@@ -149,6 +142,8 @@ class InvoiceSerializer(TenantModelSerializer):
     """
 
     customer_detail = CustomerSummarySerializer(source="customer", read_only=True)
+    created_by_name = serializers.CharField(source="created_by.full_name", read_only=True)
+    issued_by_name = serializers.CharField(source="issued_by.full_name", read_only=True)
     lines = InvoiceLineSerializer(many=True, read_only=True)
     payments = serializers.SerializerMethodField()
 
@@ -187,6 +182,8 @@ class InvoiceSerializer(TenantModelSerializer):
             "is_overdue",
             "available_actions",
             "sent_at",
+            "created_by_name",
+            "issued_by_name",
             "voided_at",
             "void_reason",
             "created_at",
@@ -229,7 +226,13 @@ class InvoiceSerializer(TenantModelSerializer):
     def get_is_overdue(self, obj) -> bool:
         return services.is_overdue(obj)
 
-    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    @extend_schema_field(
+        serializers.ListField(
+            child=serializers.ChoiceField(
+                choices=[(action, action) for action in services.INVOICE_ACTIONS]
+            )
+        )
+    )
     def get_available_actions(self, obj) -> list[str]:
         return services.available_actions(obj)
 

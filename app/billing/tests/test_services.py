@@ -18,6 +18,7 @@ from app.exceptions import ConflictError
 from billing import services
 from billing.enums import InvoiceStatus, LineKind, PaymentMethod, PaymentState
 from billing.models import Invoice, InvoiceLine, InvoiceSequence, Payment
+from billing.tests.conftest import completed_job
 from billing.tests.factories import InvoiceFactory, InvoiceLineFactory
 from catalog.enums import PricingModel
 from organizations.enums import NoAccessFeeType
@@ -31,52 +32,14 @@ from scheduling.tests.factories import (
     UserFactory,
 )
 
-
-@pytest.fixture
-def org(db):
-    return OrganizationFactory(timezone="America/Denver")
-
-
-@pytest.fixture
-def customer(org):
-    return CustomerFactory(
-        organization=org,
-        first_name="Dana",
-        last_name="Henderson",
-        email="dana@example.com",
-        billing_line1="14 Oak Street",
-        billing_city="Denver",
-        billing_state="CO",
-        billing_postal_code="80202",
-    )
-
-
-@pytest.fixture
-def service(org):
-    return ServiceFactory(organization=org, name="Standard clean", base_price_cents=15000)
-
-
-def _completed_job(org, customer, service, *, price_cents=15000, days_ago=1):
-    start = timezone.now() - dt.timedelta(days=days_ago)
-    return JobFactory(
-        organization=org,
-        customer=customer,
-        service=service,
-        status=JobStatus.COMPLETE,
-        price_cents=price_cents,
-        scheduled_start=start,
-        scheduled_end=start + dt.timedelta(hours=2),
-    )
-
-
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
 class TestBillableJobs:
     def test_lists_completed_visits_oldest_first(self, org, customer, service):
-        second = _completed_job(org, customer, service, days_ago=1)
-        first = _completed_job(org, customer, service, days_ago=5)
+        second = completed_job(org, customer, service, days_ago=1)
+        first = completed_job(org, customer, service, days_ago=5)
 
         assert list(services.billable_jobs(org)) == [first, second]
 
@@ -112,13 +75,13 @@ class TestBillableJobs:
         assert list(services.billable_jobs(org)) == []
 
     def test_a_visit_on_a_live_invoice_drops_out(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         services.draft_invoice(customer=customer, jobs=[job])
 
         assert list(services.billable_jobs(org)) == []
 
-    def test_a_visit_comes_back_when_its_invoice_is_voided(self, org, customer, service, owner):
-        job = _completed_job(org, customer, service)
+    def test_a_visit_comes_back_when_its_invoice_is_voided(self, org, customer, service):
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
         services.issue_invoice(invoice)
 
@@ -127,7 +90,7 @@ class TestBillableJobs:
         assert list(services.billable_jobs(org)) == [job]
 
     def test_a_visit_comes_back_when_its_draft_is_deleted(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         invoice.delete()
@@ -140,7 +103,7 @@ class TestBillableJobs:
         makes the whole comparison NULL. Without an explicit isnull guard, one
         discount anywhere would hide every billable visit in the organization.
         """
-        billable = _completed_job(org, customer, service)
+        billable = completed_job(org, customer, service)
         invoice = InvoiceFactory(organization=org, customer=customer)
         InvoiceLine.objects.create(
             organization=org,
@@ -153,7 +116,7 @@ class TestBillableJobs:
         assert list(services.billable_jobs(org)) == [billable]
 
     def test_is_scoped_to_one_organization(self, org, customer, service):
-        mine = _completed_job(org, customer, service)
+        mine = completed_job(org, customer, service)
         rival_org = OrganizationFactory()
         rival_customer = CustomerFactory(organization=rival_org)
         JobFactory(organization=rival_org, customer=rival_customer, status=JobStatus.COMPLETE)
@@ -161,9 +124,9 @@ class TestBillableJobs:
         assert list(services.billable_jobs(org)) == [mine]
 
     def test_can_be_narrowed_to_one_customer(self, org, customer, service):
-        mine = _completed_job(org, customer, service)
+        mine = completed_job(org, customer, service)
         other = CustomerFactory(organization=org)
-        _completed_job(org, other, service)
+        completed_job(org, other, service)
 
         assert list(services.billable_jobs(org, customer=customer)) == [mine]
 
@@ -174,7 +137,7 @@ class TestBillableJobs:
 @pytest.mark.django_db
 class TestDraftInvoice:
     def test_makes_one_line_per_visit_at_the_price_agreed_then(self, org, customer, service):
-        job = _completed_job(org, customer, service, price_cents=15000)
+        job = completed_job(org, customer, service, price_cents=15000)
         service.base_price_cents = 99000  # a price rise after the visit
         service.save()
 
@@ -205,7 +168,7 @@ class TestDraftInvoice:
     def test_snapshots_whether_the_service_was_taxable(self, org, customer, service):
         service.is_taxable = True
         service.save()
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
 
         invoice = services.draft_invoice(customer=customer, jobs=[job])
         line = invoice.lines.get()
@@ -254,7 +217,7 @@ class TestDraftInvoice:
 
     def test_refuses_a_visit_belonging_to_another_customer(self, org, customer, service):
         other = CustomerFactory(organization=org)
-        job = _completed_job(org, other, service)
+        job = completed_job(org, other, service)
 
         with pytest.raises(ValidationError) as excinfo:
             services.draft_invoice(customer=customer, jobs=[job])
@@ -281,7 +244,7 @@ class TestDraftInvoice:
             services.draft_invoice(customer=customer, jobs=[job])
 
     def test_refuses_a_visit_already_on_a_live_invoice(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         services.draft_invoice(customer=customer, jobs=[job])
 
         with pytest.raises(ConflictError) as excinfo:
@@ -290,7 +253,7 @@ class TestDraftInvoice:
         assert excinfo.value.payload["jobs"] == [str(job.pk)]
 
     def test_allows_a_visit_whose_earlier_invoice_was_voided(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         first = services.draft_invoice(customer=customer, jobs=[job])
         services.issue_invoice(first)
         services.void_invoice(first, reason="Wrong customer")
@@ -316,8 +279,8 @@ class TestDraftInvoice:
         assert Invoice.objects.count() == 0
 
     def test_lines_are_ordered_by_when_the_visit_happened(self, org, customer, service):
-        later = _completed_job(org, customer, service, days_ago=1)
-        earlier = _completed_job(org, customer, service, days_ago=9)
+        later = completed_job(org, customer, service, days_ago=1)
+        earlier = completed_job(org, customer, service, days_ago=9)
 
         invoice = services.draft_invoice(customer=customer, jobs=[later, earlier])
 
@@ -418,7 +381,7 @@ class TestTotals:
     def test_an_issued_invoice_keeps_its_own_rate_forever(self, org, customer, service):
         org.tax_rate_percent = Decimal("8.250")
         org.save()
-        job = _completed_job(org, customer, service, price_cents=10000)
+        job = completed_job(org, customer, service, price_cents=10000)
         service.is_taxable = True
         service.save()
         job.refresh_from_db()
@@ -444,7 +407,7 @@ class TestIssueInvoice:
     def test_numbers_the_invoice_from_the_organizations_prefix(self, org, customer, service):
         org.invoice_prefix = "SPK"
         org.save()
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         services.issue_invoice(invoice)
@@ -454,7 +417,7 @@ class TestIssueInvoice:
 
     def test_numbers_run_consecutively(self, org, customer, service):
         for _ in range(3):
-            job = _completed_job(org, customer, service)
+            job = completed_job(org, customer, service)
             services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
 
         assert list(Invoice.objects.order_by("number").values_list("number", flat=True)) == [
@@ -465,19 +428,19 @@ class TestIssueInvoice:
 
     def test_a_voided_invoice_keeps_its_number_spent(self, org, customer, service):
         first = services.issue_invoice(
-            services.draft_invoice(customer=customer, jobs=[_completed_job(org, customer, service)])
+            services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)])
         )
         services.void_invoice(first, reason="Mistake")
 
         second = services.issue_invoice(
-            services.draft_invoice(customer=customer, jobs=[_completed_job(org, customer, service)])
+            services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)])
         )
 
         assert (first.number, second.number) == ("INV-0001", "INV-0002")
 
     def test_each_organization_numbers_from_one(self, org, customer, service):
         services.issue_invoice(
-            services.draft_invoice(customer=customer, jobs=[_completed_job(org, customer, service)])
+            services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)])
         )
 
         other_org = OrganizationFactory()
@@ -486,7 +449,7 @@ class TestIssueInvoice:
         theirs = services.issue_invoice(
             services.draft_invoice(
                 customer=other_customer,
-                jobs=[_completed_job(other_org, other_customer, other_service)],
+                jobs=[completed_job(other_org, other_customer, other_service)],
             )
         )
 
@@ -496,7 +459,7 @@ class TestIssueInvoice:
     def test_dates_are_the_organizations_own(self, org, customer, service):
         org.invoice_terms_days = 30
         org.save()
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         services.issue_invoice(invoice, today=dt.date(2027, 6, 14))
@@ -505,7 +468,7 @@ class TestIssueInvoice:
         assert invoice.due_on == dt.date(2027, 7, 14)
 
     def test_freezes_the_bill_to_details(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         services.issue_invoice(invoice)
@@ -518,8 +481,8 @@ class TestIssueInvoice:
         assert "14 Oak Street" in invoice.bill_to_address
         assert invoice.bill_to_email == "dana@example.com"
 
-    def test_records_who_issued_it_in_the_amounts(self, org, customer, service):
-        job = _completed_job(org, customer, service, price_cents=15000)
+    def test_freezes_the_amounts(self, org, customer, service):
+        job = completed_job(org, customer, service, price_cents=15000)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         services.issue_invoice(invoice)
@@ -529,6 +492,27 @@ class TestIssueInvoice:
             0,
             15000,
         )
+
+    def test_records_who_opened_it_and_who_issued_it(self, org, customer, service):
+        """
+        Not always the same person: a dispatcher prepares the month and an
+        owner signs it off.
+        """
+        opener, issuer = UserFactory(), UserFactory()
+        job = completed_job(org, customer, service)
+        invoice = services.draft_invoice(customer=customer, jobs=[job], actor=opener)
+
+        services.issue_invoice(invoice, actor=issuer)
+
+        assert invoice.created_by == opener
+        assert invoice.issued_by == issuer
+
+    def test_a_draft_has_nobody_down_as_having_issued_it(self, org, customer, service):
+        job = completed_job(org, customer, service)
+
+        invoice = services.draft_invoice(customer=customer, jobs=[job], actor=UserFactory())
+
+        assert invoice.issued_by is None
 
     def test_an_invoice_with_no_lines_is_refused(self, org, customer):
         invoice = InvoiceFactory(organization=org, customer=customer)
@@ -550,7 +534,7 @@ class TestIssueInvoice:
             services.issue_invoice(invoice)
 
     def test_issuing_twice_is_refused(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
 
         with pytest.raises(ConflictError) as excinfo:
@@ -565,10 +549,10 @@ class TestIssueInvoice:
         table that a second transaction is writing to.
         """
         first = services.draft_invoice(
-            customer=customer, jobs=[_completed_job(org, customer, service)]
+            customer=customer, jobs=[completed_job(org, customer, service)]
         )
         second = services.draft_invoice(
-            customer=customer, jobs=[_completed_job(org, customer, service)]
+            customer=customer, jobs=[completed_job(org, customer, service)]
         )
 
         services.issue_invoice(first)
@@ -586,7 +570,7 @@ class TestVoidInvoice:
     @pytest.fixture
     def issued(self, org, customer, service):
         return services.issue_invoice(
-            services.draft_invoice(customer=customer, jobs=[_completed_job(org, customer, service)])
+            services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)])
         )
 
     def test_records_who_and_why(self, issued, org):
@@ -656,7 +640,7 @@ class TestPayments:
         return services.issue_invoice(
             services.draft_invoice(
                 customer=customer,
-                jobs=[_completed_job(org, customer, service, price_cents=15000)],
+                jobs=[completed_job(org, customer, service, price_cents=15000)],
             )
         )
 
@@ -797,7 +781,7 @@ class TestOverdue:
     @pytest.fixture
     def issued(self, org, customer, service):
         invoice = services.draft_invoice(
-            customer=customer, jobs=[_completed_job(org, customer, service)]
+            customer=customer, jobs=[completed_job(org, customer, service)]
         )
         return services.issue_invoice(invoice, today=dt.date(2027, 6, 1))
 
@@ -848,7 +832,7 @@ class TestRepriceFromTimeWorked:
         )
 
     def _job_with_time(self, org, customer, hourly, *, minutes, crew=1):
-        job = _completed_job(org, customer, hourly, price_cents=10000)
+        job = completed_job(org, customer, hourly, price_cents=10000)
         for _ in range(crew):
             clock_in = timezone.now() - dt.timedelta(minutes=minutes)
             TimeEntryFactory(
@@ -903,7 +887,7 @@ class TestRepriceFromTimeWorked:
         assert line.amount_cents == 6000
 
     def test_refuses_a_service_that_is_not_hourly(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         with pytest.raises(ConflictError) as excinfo:
@@ -912,7 +896,7 @@ class TestRepriceFromTimeWorked:
         assert "not priced hourly" in excinfo.value.detail
 
     def test_refuses_when_nobody_recorded_any_time(self, org, customer, hourly):
-        job = _completed_job(org, customer, hourly)
+        job = completed_job(org, customer, hourly)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         with pytest.raises(ConflictError):
@@ -953,19 +937,19 @@ class TestAvailableActions:
         assert services.available_actions(invoice) == ["edit", "delete"]
 
     def test_a_draft_with_lines_can_be_issued(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.draft_invoice(customer=customer, jobs=[job])
 
         assert "issue" in services.available_actions(invoice)
 
     def test_an_issued_invoice_can_be_sent_paid_or_voided(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
 
         assert set(services.available_actions(invoice)) == {"send", "record_payment", "void"}
 
     def test_a_paid_invoice_offers_neither_payment_nor_void(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
         services.record_payment(
             invoice,
@@ -977,8 +961,113 @@ class TestAvailableActions:
         assert services.available_actions(invoice) == ["send"]
 
     def test_a_void_invoice_offers_nothing(self, org, customer, service):
-        job = _completed_job(org, customer, service)
+        job = completed_job(org, customer, service)
         invoice = services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
         services.void_invoice(invoice, reason="Mistake")
 
         assert services.available_actions(invoice) == []
+
+
+@pytest.mark.django_db
+class TestTheRowLocks:
+    """
+    Each transition reads a status and then writes one. Read off an instance
+    nobody holds, the two can disagree -- and every case below was a silent
+    200 that left a permanent wrong record.
+    """
+
+    @pytest.fixture
+    def issued(self, org, customer, service):
+        return services.issue_invoice(
+            services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)])
+        )
+
+    def test_issuing_a_draft_twice_from_two_stale_copies_takes_one_number(
+        self, org, customer, service
+    ):
+        """
+        Two dispatchers pressing Issue. Both once passed the draft check, both
+        took a number, and the first one's number ended up on no document --
+        a permanent gap in a sequence ADR-026 says has none.
+        """
+        invoice = services.draft_invoice(
+            customer=customer, jobs=[completed_job(org, customer, service)]
+        )
+        stale = Invoice.objects.get(pk=invoice.pk)
+
+        services.issue_invoice(invoice)
+
+        with pytest.raises(ConflictError):
+            services.issue_invoice(stale)
+
+        assert InvoiceSequence.objects.get(organization=org).next_number == 2
+        assert Invoice.objects.filter(number="INV-0001").count() == 1
+
+    def test_voiding_from_a_stale_copy_cannot_strand_a_payment(self, issued, org):
+        """
+        The copy was read before the payment existed. Unlocked, its `exists()`
+        check saw nothing and the invoice went void with live money against
+        it -- money that then vanished from every screen, because the balance
+        short-circuits on a non-issued invoice.
+        """
+        stale = Invoice.objects.get(pk=issued.pk)
+        services.record_payment(
+            issued,
+            method=PaymentMethod.CHECK,
+            amount_cents=issued.total_cents,
+            received_on=org.today(),
+        )
+
+        with pytest.raises(ConflictError):
+            services.void_invoice(stale, reason="Mistake")
+
+        issued.refresh_from_db()
+        assert issued.status == InvoiceStatus.ISSUED
+
+    def test_paying_from_a_stale_copy_cannot_pay_a_void_invoice(self, issued, org):
+        stale = Invoice.objects.get(pk=issued.pk)
+        services.void_invoice(issued, reason="Billed the wrong address")
+
+        with pytest.raises(ConflictError):
+            services.record_payment(
+                stale,
+                method=PaymentMethod.CASH,
+                amount_cents=100,
+                received_on=org.today(),
+            )
+
+        assert Payment.objects.filter(invoice=issued).count() == 0
+
+
+@pytest.mark.django_db
+class TestBillableJobsAndSoftDeletes:
+    """
+    The soft-delete manager filters the model being queried and nothing it
+    joins to. That trap cost the baseline gate three bugs; this is the same
+    one, one join further out.
+    """
+
+    def test_a_deleted_customers_visits_leave_the_queue(self, org, customer, service):
+        completed_job(org, customer, service)
+        assert len(services.billable_jobs(org)) == 1
+
+        customer.delete()
+
+        # Otherwise they sit there for ever, showing a name that was meant to
+        # be gone -- and unbillable anyway, because drafting looks the
+        # customer up through a manager that does filter.
+        assert list(services.billable_jobs(org)) == []
+
+    def test_a_deleted_locations_visits_leave_too(self, org, customer, service):
+        job = completed_job(org, customer, service)
+
+        job.location.delete()
+
+        assert list(services.billable_jobs(org)) == []
+
+    def test_a_deleted_services_visits_leave_too(self, org, customer, service):
+        completed_job(org, customer, service)
+
+        service.delete()
+
+        assert list(services.billable_jobs(org)) == []

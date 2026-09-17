@@ -285,7 +285,7 @@ class Command(BaseCommand):
         materialized jobs come out already crewed and the "My Day" screen has
         something in it without anyone clicking Assign.
         """
-        today = timezone.now().astimezone(organization.tz).date()
+        today = organization.today()
         # A fortnight back, so the seeded board has recent history as well as a
         # future. A calendar that starts empty behind today looks broken.
         monday = today - dt.timedelta(days=today.weekday() + 14)

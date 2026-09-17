@@ -74,6 +74,16 @@ class Invoice(TenantModel):
     #: Shown to the customer on the invoice itself.
     notes = models.TextField(blank=True, default="")
 
+    #: Who opened the draft, and who issued it. Usually the same person, not
+    #: always: a dispatcher prepares the month and an owner signs it off.
+    #: SET_NULL because a document outlives the employment of whoever made it.
+    created_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    issued_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"

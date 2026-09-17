@@ -167,6 +167,10 @@ class TestSeededBilling:
             assert past.filter(status=JobStatus.NO_ACCESS).count() == 1
 
     def test_each_organization_has_invoices_in_several_states(self, seeded):
+        """
+        Both states, not either: a demo that seeds four drafts and no issued
+        invoice passes an `or` and shows a dispatcher nothing worth seeing.
+        """
         from billing.enums import InvoiceStatus
         from billing.models import Invoice
 
@@ -174,8 +178,8 @@ class TestSeededBilling:
             invoices = Invoice.objects.filter(organization=organization)
             statuses = set(invoices.values_list("status", flat=True))
 
-            assert invoices.count() >= 2
-            assert InvoiceStatus.DRAFT in statuses or InvoiceStatus.ISSUED in statuses
+            assert invoices.count() == 4
+            assert {InvoiceStatus.DRAFT, InvoiceStatus.ISSUED} <= statuses
 
     def test_numbers_use_the_organizations_own_prefix_and_sequence(self, seeded):
         from billing.models import Invoice

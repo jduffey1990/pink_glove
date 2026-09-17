@@ -1415,6 +1415,16 @@ export interface components {
             /** Format: uuid */
             user: string;
         };
+        /**
+         * @description * `edit` - edit
+         *     * `delete` - delete
+         *     * `issue` - issue
+         *     * `void` - void
+         *     * `send` - send
+         *     * `record_payment` - record_payment
+         * @enum {string}
+         */
+        AvailableActionsEnum: "edit" | "delete" | "issue" | "void" | "send" | "record_payment";
         /** @description One row of the ready-to-invoice list, priced as it will bill. */
         BillableJob: {
             /** Format: uuid */
@@ -1569,9 +1579,11 @@ export interface components {
             readonly payment_state: components["schemas"]["PaymentStateEnum"];
             readonly balance_cents: number;
             readonly is_overdue: boolean;
-            readonly available_actions: string[];
+            readonly available_actions: components["schemas"]["AvailableActionsEnum"][];
             /** Format: date-time */
             readonly sent_at: string | null;
+            readonly created_by_name: string;
+            readonly issued_by_name: string;
             /** Format: date-time */
             readonly voided_at: string | null;
             readonly void_reason: string;

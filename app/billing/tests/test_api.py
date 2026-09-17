@@ -16,16 +16,10 @@ from django.utils import timezone
 from billing import services
 from billing.enums import InvoiceStatus, LineKind, PaymentMethod
 from billing.models import Invoice, InvoiceLine, Payment
+from billing.tests.conftest import completed_job, staff_in
 from billing.tests.factories import InvoiceFactory
 from scheduling.enums import JobStatus
-from scheduling.tests.factories import (
-    CustomerFactory,
-    JobFactory,
-    MembershipFactory,
-    OrganizationFactory,
-    ServiceFactory,
-    UserFactory,
-)
+from scheduling.tests.factories import CustomerFactory, OrganizationFactory, ServiceFactory
 from users.enums import Role
 
 INVOICES_URL = reverse("billing:invoice-list")
@@ -53,65 +47,14 @@ def payment_url(payment, suffix=""):
 
 
 @pytest.fixture
-def org(db):
-    return OrganizationFactory(name="Sparkle Clean")
-
-
-@pytest.fixture
-def customer(org):
-    return CustomerFactory(
-        organization=org, first_name="Dana", last_name="Henderson", email="dana@example.com"
-    )
-
-
-@pytest.fixture
-def service(org):
-    return ServiceFactory(organization=org, name="Standard clean")
-
-
-@pytest.fixture
-def dispatcher(org):
-    user = UserFactory()
-    MembershipFactory(user=user, organization=org, role=Role.DISPATCHER)
-    return user
-
-
-@pytest.fixture
-def client_as(api_client):
-    def _sign_in(user):
-        api_client.force_login(user)
-        return api_client
-
-    return _sign_in
-
-
-@pytest.fixture
-def dispatcher_client(client_as, dispatcher):
-    return client_as(dispatcher)
-
-
-def make_job(org, customer, service, *, status=JobStatus.COMPLETE, price_cents=15000, days_ago=1):
-    start = timezone.now() - dt.timedelta(days=days_ago)
-    return JobFactory(
-        organization=org,
-        customer=customer,
-        service=service,
-        status=status,
-        price_cents=price_cents,
-        scheduled_start=start,
-        scheduled_end=start + dt.timedelta(hours=2),
-    )
-
-
-@pytest.fixture
 def draft(org, customer, service):
-    return services.draft_invoice(customer=customer, jobs=[make_job(org, customer, service)])
+    return services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)])
 
 
 @pytest.fixture
 def issued(org, customer, service):
     invoice = services.draft_invoice(
-        customer=customer, jobs=[make_job(org, customer, service, days_ago=4)]
+        customer=customer, jobs=[completed_job(org, customer, service, days_ago=4)]
     )
     return services.issue_invoice(invoice)
 
@@ -120,13 +63,13 @@ def issued(org, customer, service):
 def rival(db):
     """A whole second tenant: organization, dispatcher, customer and invoice."""
     organization = OrganizationFactory(name="Rival Cleaners")
-    user = UserFactory()
-    MembershipFactory(user=user, organization=organization, role=Role.DISPATCHER)
+    user = staff_in(organization, Role.DISPATCHER)
     their_customer = CustomerFactory(organization=organization, first_name="Sam")
     their_service = ServiceFactory(organization=organization)
     their_invoice = services.issue_invoice(
         services.draft_invoice(
-            customer=their_customer, jobs=[make_job(organization, their_customer, their_service)]
+            customer=their_customer,
+            jobs=[completed_job(organization, their_customer, their_service)],
         )
     )
     return {
@@ -146,7 +89,7 @@ class TestBillableJobs:
     def test_lists_finished_uninvoiced_visits_with_what_they_will_bill(
         self, dispatcher_client, org, customer, service
     ):
-        job = make_job(org, customer, service, price_cents=15000)
+        job = completed_job(org, customer, service, price_cents=15000)
 
         body = dispatcher_client.get(BILLABLE_URL).json()
 
@@ -156,9 +99,9 @@ class TestBillableJobs:
         assert body[0]["customer_name"] == "Dana Henderson"
 
     def test_can_be_narrowed_to_one_customer(self, dispatcher_client, org, customer, service):
-        make_job(org, customer, service)
+        completed_job(org, customer, service)
         other = CustomerFactory(organization=org, first_name="Alex")
-        make_job(org, other, service)
+        completed_job(org, other, service)
 
         body = dispatcher_client.get(f"{BILLABLE_URL}?customer={customer.pk}").json()
 
@@ -181,7 +124,7 @@ class TestBillableJobs:
 @pytest.mark.django_db
 class TestCreate:
     def test_builds_the_lines_from_the_visits(self, dispatcher_client, org, customer, service):
-        job = make_job(org, customer, service, price_cents=15000)
+        job = completed_job(org, customer, service, price_cents=15000)
 
         response = dispatcher_client.post(
             INVOICES_URL, {"customer": str(customer.pk), "jobs": [str(job.pk)]}, format="json"
@@ -195,7 +138,7 @@ class TestCreate:
     def test_the_organization_comes_from_the_tenant_not_the_payload(
         self, dispatcher_client, org, customer, service, rival
     ):
-        job = make_job(org, customer, service)
+        job = completed_job(org, customer, service)
 
         response = dispatcher_client.post(
             INVOICES_URL,
@@ -213,7 +156,7 @@ class TestCreate:
     def test_another_organizations_customer_is_a_404(
         self, dispatcher_client, org, customer, service, rival
     ):
-        job = make_job(org, customer, service)
+        job = completed_job(org, customer, service)
 
         response = dispatcher_client.post(
             INVOICES_URL,
@@ -224,7 +167,7 @@ class TestCreate:
         assert response.status_code == 404
 
     def test_another_organizations_visit_is_a_400(self, dispatcher_client, org, customer, rival):
-        their_job = make_job(rival["organization"], rival["customer"], rival["service"])
+        their_job = completed_job(rival["organization"], rival["customer"], rival["service"])
 
         response = dispatcher_client.post(
             INVOICES_URL,
@@ -236,7 +179,7 @@ class TestCreate:
         assert Invoice.objects.count() == 1  # only the rival's own
 
     def test_a_visit_already_invoiced_is_a_409(self, dispatcher_client, org, customer, service):
-        job = make_job(org, customer, service)
+        job = completed_job(org, customer, service)
         services.draft_invoice(customer=customer, jobs=[job])
 
         response = dispatcher_client.post(
@@ -247,7 +190,7 @@ class TestCreate:
         assert "already on an invoice" in response.data["detail"]
 
     def test_an_unfinished_visit_is_a_400(self, dispatcher_client, org, customer, service):
-        job = make_job(org, customer, service, status=JobStatus.SCHEDULED)
+        job = completed_job(org, customer, service, status=JobStatus.SCHEDULED)
 
         response = dispatcher_client.post(
             INVOICES_URL, {"customer": str(customer.pk), "jobs": [str(job.pk)]}, format="json"
@@ -291,23 +234,95 @@ class TestRead:
 
         assert [row["id"] for row in body["results"]] == [str(draft.pk)]
 
-    def test_filters_by_payment_state(self, dispatcher_client, issued, org):
+    def test_filters_by_payment_state(self, dispatcher_client, issued, org, customer, service):
+        """
+        Three invoices in three states, so a filter has something to exclude.
+        With one invoice, "count == 0" passes because nothing was there.
+        """
+        paid = issued
         services.record_payment(
-            issued,
+            paid,
             method=PaymentMethod.CHECK,
-            amount_cents=issued.total_cents,
+            amount_cents=paid.total_cents,
             received_on=org.today(),
         )
 
-        assert dispatcher_client.get(f"{INVOICES_URL}?payment_state=paid").json()["count"] == 1
-        assert dispatcher_client.get(f"{INVOICES_URL}?payment_state=unpaid").json()["count"] == 0
+        part = services.issue_invoice(
+            services.draft_invoice(
+                customer=customer, jobs=[completed_job(org, customer, service, days_ago=9)]
+            )
+        )
+        services.record_payment(
+            part, method=PaymentMethod.CASH, amount_cents=100, received_on=org.today()
+        )
+
+        unpaid = services.issue_invoice(
+            services.draft_invoice(
+                customer=customer, jobs=[completed_job(org, customer, service, days_ago=11)]
+            )
+        )
+
+        def ids(state):
+            body = dispatcher_client.get(f"{INVOICES_URL}?payment_state={state}").json()
+            return {row["id"] for row in body["results"]}
+
+        assert ids("paid") == {str(paid.pk)}
+        assert ids("partial") == {str(part.pk)}
+        assert ids("unpaid") == {str(unpaid.pk)}
 
     def test_filters_by_overdue(self, dispatcher_client, org, customer, service):
-        invoice = services.draft_invoice(customer=customer, jobs=[make_job(org, customer, service)])
-        services.issue_invoice(invoice, today=org.today() - dt.timedelta(days=90))
+        late = services.draft_invoice(
+            customer=customer, jobs=[completed_job(org, customer, service)]
+        )
+        services.issue_invoice(late, today=org.today() - dt.timedelta(days=90))
 
-        assert dispatcher_client.get(f"{INVOICES_URL}?overdue=true").json()["count"] == 1
-        assert dispatcher_client.get(f"{INVOICES_URL}?overdue=false").json()["count"] == 0
+        current = services.issue_invoice(
+            services.draft_invoice(
+                customer=customer, jobs=[completed_job(org, customer, service, days_ago=9)]
+            )
+        )
+
+        def ids(value):
+            body = dispatcher_client.get(f"{INVOICES_URL}?overdue={value}").json()
+            return {row["id"] for row in body["results"]}
+
+        assert ids("true") == {str(late.pk)}
+        assert str(current.pk) in ids("false")
+        assert str(late.pk) not in ids("false")
+
+    def test_filters_by_the_dates_it_was_issued(self, dispatcher_client, org, customer, service):
+        """
+        `issued_on` is already an organization-local date on the row, so these
+        need no timezone arithmetic -- unlike the job filters, which convert.
+        Both ends are inclusive.
+        """
+        day = dt.date(2027, 6, 14)
+        on_the_day = services.issue_invoice(
+            services.draft_invoice(customer=customer, jobs=[completed_job(org, customer, service)]),
+            today=day,
+        )
+        the_day_after = services.issue_invoice(
+            services.draft_invoice(
+                customer=customer, jobs=[completed_job(org, customer, service, days_ago=9)]
+            ),
+            today=day + dt.timedelta(days=1),
+        )
+
+        def ids(query):
+            body = dispatcher_client.get(f"{INVOICES_URL}?{query}").json()
+            return {row["id"] for row in body["results"]}
+
+        assert ids(f"issued_from={day}&issued_to={day}") == {str(on_the_day.pk)}
+        assert ids(f"issued_from={day + dt.timedelta(days=1)}") == {str(the_day_after.pk)}
+        assert ids(f"issued_to={day}") == {str(on_the_day.pk)}
+
+    def test_filters_by_customer(self, dispatcher_client, org, customer, service, issued):
+        other = CustomerFactory(organization=org, first_name="Alex")
+        theirs = services.draft_invoice(customer=other, jobs=[completed_job(org, other, service)])
+
+        body = dispatcher_client.get(f"{INVOICES_URL}?customer={other.pk}").json()
+
+        assert {row["id"] for row in body["results"]} == {str(theirs.pk)}
 
 
 # --- editing and deleting --------------------------------------------------
@@ -395,7 +410,11 @@ class TestIssueAction:
     def test_another_organizations_draft_cannot_be_issued(self, dispatcher_client, rival):
         their_draft = services.draft_invoice(
             customer=rival["customer"],
-            jobs=[make_job(rival["organization"], rival["customer"], rival["service"], days_ago=9)],
+            jobs=[
+                completed_job(
+                    rival["organization"], rival["customer"], rival["service"], days_ago=9
+                )
+            ],
         )
 
         assert dispatcher_client.post(invoice_url(their_draft, "issue/")).status_code == 404
@@ -448,13 +467,27 @@ class TestVoidAction:
 @pytest.mark.django_db
 class TestSendAction:
     def test_queues_the_email_and_answers_202(self, dispatcher_client, issued):
+        """
+        202, not 200: a worker does the sending.
+
+        `sent_at` is deliberately NOT asserted on the response. Celery runs
+        eagerly under test, so it happens to be set here, but the endpoint's
+        own contract says the worker stamps it afterwards -- asserting it
+        would pin the test harness rather than the behaviour.
+        """
         from django.core import mail
 
         response = dispatcher_client.post(invoice_url(issued, "send/"))
 
         assert response.status_code == 202
         assert len(mail.outbox) == 1
-        assert response.data["sent_at"] is not None
+        assert issued.number in mail.outbox[0].subject
+
+    def test_the_worker_is_what_stamps_sent_at(self, dispatcher_client, issued):
+        dispatcher_client.post(invoice_url(issued, "send/"))
+
+        issued.refresh_from_db()
+        assert issued.sent_at is not None
 
     def test_a_draft_cannot_be_sent(self, dispatcher_client, draft):
         assert dispatcher_client.post(invoice_url(draft, "send/")).status_code == 409
@@ -502,6 +535,12 @@ class TestLines:
         assert "kind" in response.data
 
     def test_nothing_can_be_added_to_an_issued_invoice(self, dispatcher_client, issued):
+        """
+        A 409, the same as editing or removing a line on one.
+
+        One rule, one status: the page reads a 409 as "re-read the record",
+        which is the right instruction whichever way the rule was reached.
+        """
         response = dispatcher_client.post(
             LINES_URL,
             {
@@ -513,16 +552,64 @@ class TestLines:
             format="json",
         )
 
-        assert response.status_code == 400
+        assert response.status_code == 409
+        assert not InvoiceLine.objects.filter(description="Sneaky").exists()
 
-    def test_a_drafts_line_can_be_edited(self, dispatcher_client, draft):
-        line = draft.lines.get()
+    def test_an_adjustment_on_a_draft_can_be_edited(self, dispatcher_client, draft):
+        added = dispatcher_client.post(
+            LINES_URL,
+            {
+                "invoice": str(draft.pk),
+                "kind": LineKind.ADJUSTMENT,
+                "description": "Goodwill discount",
+                "amount_cents": -2500,
+            },
+            format="json",
+        )
+        line = InvoiceLine.objects.get(pk=added.data["id"])
 
-        response = dispatcher_client.patch(line_url(line), {"amount_cents": 12000}, format="json")
+        response = dispatcher_client.patch(line_url(line), {"amount_cents": -1200}, format="json")
 
         assert response.status_code == 200
         line.refresh_from_db()
-        assert line.amount_cents == 12000
+        assert line.amount_cents == -1200
+
+    def test_a_visit_line_cannot_be_rewritten_in_place(self, dispatcher_client, draft):
+        """
+        It is a snapshot of that visit (ADR-026). Rewriting the amount and
+        clearing `is_taxable` used to be a silent 200: the invoice then read
+        as though the visit had always cost that, with nothing on it saying
+        otherwise. A correction is an adjustment line, which the customer sees.
+        """
+        line = draft.lines.get()
+
+        response = dispatcher_client.patch(
+            line_url(line), {"amount_cents": 1, "is_taxable": False}, format="json"
+        )
+
+        assert response.status_code == 400
+        line.refresh_from_db()
+        assert line.amount_cents == 15000
+
+    def test_a_line_cannot_be_moved_to_another_customers_invoice(
+        self, dispatcher_client, org, service, draft
+    ):
+        """
+        `TenantModel.save()` only compares organizations, so this went through
+        inside one tenant: another customer was billed for a visit they never
+        had, and its description printed on their invoice email.
+        """
+        other = CustomerFactory(organization=org, first_name="Victor")
+        theirs = services.draft_invoice(customer=other, jobs=[completed_job(org, other, service)])
+        line = draft.lines.get()
+
+        response = dispatcher_client.patch(
+            line_url(line), {"invoice": str(theirs.pk)}, format="json"
+        )
+
+        assert response.status_code == 400
+        line.refresh_from_db()
+        assert line.invoice_id == draft.pk
 
     def test_an_issued_invoices_line_cannot_be_edited(self, dispatcher_client, issued):
         line = issued.lines.get()
@@ -595,6 +682,11 @@ class TestLines:
 
         assert {row["id"] for row in body["results"]} == {str(draft.lines.get().pk)}
 
+    def test_another_organizations_line_cannot_be_read(self, dispatcher_client, rival):
+        their_line = rival["invoice"].lines.get()
+
+        assert dispatcher_client.get(line_url(their_line)).status_code == 404
+
     def test_another_organizations_line_cannot_be_edited(self, dispatcher_client, rival):
         their_line = rival["invoice"].lines.get()
 
@@ -607,6 +699,45 @@ class TestLines:
 
         assert dispatcher_client.delete(line_url(their_line)).status_code == 404
         assert InvoiceLine.objects.filter(pk=their_line.pk).exists()
+
+    def test_an_hourly_line_can_be_repriced_from_the_hours_worked(
+        self, dispatcher_client, org, customer
+    ):
+        from decimal import Decimal
+
+        from catalog.enums import PricingModel
+        from scheduling.tests.factories import TimeEntryFactory, UserFactory
+
+        hourly = ServiceFactory(
+            organization=org,
+            name="Hourly clean",
+            pricing_model=PricingModel.HOURLY,
+            hourly_rate_cents=Decimal("5000.00"),
+            base_price_cents=1000,
+        )
+        job = completed_job(org, customer, hourly, price_cents=10000)
+        clock_in = timezone.now() - dt.timedelta(minutes=90)
+        TimeEntryFactory(
+            organization=org,
+            job=job,
+            user=UserFactory(),
+            clock_in=clock_in,
+            clock_out=clock_in + dt.timedelta(minutes=90),
+        )
+        invoice = services.draft_invoice(customer=customer, jobs=[job])
+        line = invoice.lines.get()
+
+        response = dispatcher_client.post(line_url(line, "reprice/"))
+
+        assert response.status_code == 200
+        # 90 minutes at 5000 cents an hour.
+        assert response.data["amount_cents"] == 7500
+
+    def test_repricing_a_line_that_is_not_hourly_is_a_409(self, dispatcher_client, draft):
+        response = dispatcher_client.post(line_url(draft.lines.get(), "reprice/"))
+
+        assert response.status_code == 409
+        assert "not priced hourly" in response.data["detail"]
 
     def test_another_organizations_line_cannot_be_repriced(self, dispatcher_client, rival):
         their_line = rival["invoice"].lines.get()
@@ -747,6 +878,60 @@ class TestPaymentsApi:
         assert body["count"] == 1
         assert body["results"][0]["invoice"] == str(issued.pk)
 
+    def test_filters_by_method_and_date(self, dispatcher_client, issued, org):
+        check = services.record_payment(
+            issued,
+            method=PaymentMethod.CHECK,
+            amount_cents=100,
+            received_on=dt.date(2027, 6, 14),
+        )
+        cash = services.record_payment(
+            issued,
+            method=PaymentMethod.CASH,
+            amount_cents=100,
+            received_on=dt.date(2027, 6, 20),
+        )
+
+        def ids(query):
+            body = dispatcher_client.get(f"{PAYMENTS_URL}?{query}").json()
+            return {row["id"] for row in body["results"]}
+
+        assert ids("method=check") == {str(check.pk)}
+        assert ids("method=cash&method=check") == {str(check.pk), str(cash.pk)}
+        assert ids("received_from=2027-06-20") == {str(cash.pk)}
+        assert ids("received_to=2027-06-14") == {str(check.pk)}
+        assert ids(f"invoice={issued.pk}") == {str(check.pk), str(cash.pk)}
+
+    def test_filters_by_whether_it_was_voided(self, dispatcher_client, issued, org):
+        """
+        A double negative worth pinning: `voided=true` is implemented as
+        "exclude the rows whose voided_at is null", which reads backwards.
+        """
+        live = services.record_payment(
+            issued, method=PaymentMethod.CASH, amount_cents=100, received_on=org.today()
+        )
+        gone = services.record_payment(
+            issued, method=PaymentMethod.CASH, amount_cents=100, received_on=org.today()
+        )
+        services.void_payment(gone, reason="Mistake")
+
+        def ids(query):
+            body = dispatcher_client.get(f"{PAYMENTS_URL}?{query}").json()
+            return {row["id"] for row in body["results"]}
+
+        assert ids("voided=true") == {str(gone.pk)}
+        assert ids("voided=false") == {str(live.pk)}
+
+    def test_another_organizations_payment_cannot_be_read(self, dispatcher_client, rival):
+        theirs = services.record_payment(
+            rival["invoice"],
+            method=PaymentMethod.CASH,
+            amount_cents=100,
+            received_on=rival["organization"].today(),
+        )
+
+        assert dispatcher_client.get(payment_url(theirs)).status_code == 404
+
     def test_another_organizations_payment_cannot_be_voided(self, dispatcher_client, rival):
         theirs = services.record_payment(
             rival["invoice"],
@@ -773,24 +958,18 @@ class TestPermissions:
 
     @pytest.fixture
     def cleaner(self, org):
-        user = UserFactory()
-        MembershipFactory(user=user, organization=org, role=Role.CLEANER)
-        return user
+        return staff_in(org, Role.CLEANER)
 
     @pytest.fixture
     def portal_customer(self, org, customer):
-        user = UserFactory()
-        MembershipFactory(user=user, organization=org, role=Role.CUSTOMER)
+        user = staff_in(org, Role.CUSTOMER)
         customer.user = user
         customer.save()
         return user
 
     @pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN, Role.DISPATCHER])
     def test_dispatcher_and_above_may_read(self, client_as, org, issued, role):
-        user = UserFactory()
-        MembershipFactory(user=user, organization=org, role=role)
-
-        assert client_as(user).get(INVOICES_URL).status_code == 200
+        assert client_as(staff_in(org, role)).get(INVOICES_URL).status_code == 200
 
     def test_a_cleaner_may_not_read(self, client_as, cleaner, issued):
         assert client_as(cleaner).get(INVOICES_URL).status_code == 403
@@ -803,7 +982,7 @@ class TestPermissions:
         assert client_as(cleaner).get(BILLABLE_URL).status_code == 403
 
     def test_a_cleaner_may_not_create_an_invoice(self, client_as, cleaner, org, customer, service):
-        job = make_job(org, customer, service)
+        job = completed_job(org, customer, service)
 
         response = client_as(cleaner).post(
             INVOICES_URL, {"customer": str(customer.pk), "jobs": [str(job.pk)]}, format="json"
@@ -862,6 +1041,78 @@ class TestPermissions:
         assert (
             signed_in.post(
                 payment_url(payment, "void/"), {"reason": "no"}, format="json"
+            ).status_code
+            == 403
+        )
+
+    @pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN, Role.DISPATCHER])
+    def test_dispatcher_and_above_may_write(self, client_as, org, customer, service, role):
+        """
+        The allow side of the line, for every role on it -- not just the
+        dispatcher. An owner who cannot invoice is as broken as a cleaner who
+        can, and only one of those was tested.
+        """
+        signed_in = client_as(staff_in(org, role))
+        job = completed_job(org, customer, service)
+
+        created = signed_in.post(
+            INVOICES_URL, {"customer": str(customer.pk), "jobs": [str(job.pk)]}, format="json"
+        )
+        assert created.status_code == 201
+
+        invoice_id = created.data["id"]
+        assert signed_in.post(f"{INVOICES_URL}{invoice_id}/issue/").status_code == 200
+        assert (
+            signed_in.post(
+                PAYMENTS_URL,
+                {
+                    "invoice": invoice_id,
+                    "method": PaymentMethod.CASH,
+                    "amount_cents": 100,
+                    "received_on": str(org.today()),
+                },
+                format="json",
+            ).status_code
+            == 201
+        )
+        assert signed_in.post(f"{INVOICES_URL}{invoice_id}/send/").status_code == 202
+
+    @pytest.mark.parametrize(
+        ("method", "url_for"),
+        [
+            ("get", lambda ids: INVOICES_URL),
+            ("get", lambda ids: BILLABLE_URL),
+            ("get", lambda ids: LINES_URL),
+            ("get", lambda ids: PAYMENTS_URL),
+        ],
+    )
+    def test_a_customer_may_not_reach_any_of_it(
+        self, client_as, portal_customer, issued, method, url_for
+    ):
+        signed_in = client_as(portal_customer)
+
+        assert getattr(signed_in, method)(url_for(None)).status_code == 403
+
+    def test_a_customer_may_not_write_either(self, client_as, portal_customer, issued, org):
+        signed_in = client_as(portal_customer)
+
+        assert signed_in.post(invoice_url(issued, "issue/")).status_code == 403
+        assert (
+            signed_in.post(
+                invoice_url(issued, "void/"), {"reason": "no"}, format="json"
+            ).status_code
+            == 403
+        )
+        assert (
+            signed_in.post(
+                PAYMENTS_URL,
+                {
+                    "invoice": str(issued.pk),
+                    "method": PaymentMethod.CASH,
+                    "amount_cents": 100,
+                    "received_on": str(org.today()),
+                },
+                format="json",
             ).status_code
             == 403
         )

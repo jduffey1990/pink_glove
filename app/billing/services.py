@@ -92,6 +92,16 @@ def billable_jobs(organization, customer=None) -> models.QuerySet[Job]:
 
     jobs = (
         Job.objects.filter(organization=organization, status__in=statuses)
+        # The soft-delete manager covers `Job` and nothing it joins to, so a
+        # deleted customer's visits would sit on the dispatcher's queue for
+        # ever -- surfacing a name that was meant to be gone, and unbillable
+        # anyway because `InvoiceViewSet.create` looks the customer up through
+        # a manager that does filter. Same trap as `assigned_to()`.
+        .filter(
+            customer__deleted_at__isnull=True,
+            location__deleted_at__isnull=True,
+            service__deleted_at__isnull=True,
+        )
         .exclude(pk__in=claimed_job_ids())
         .select_related("customer", "location", "service")
         .order_by("scheduled_start")
@@ -155,7 +165,11 @@ def draft_invoice(*, customer, jobs, actor=None) -> Invoice:
     # Locked, and re-read inside the lock: what was billable when the page
     # rendered is not necessarily billable now.
     locked = list(
-        Job.objects.select_for_update()
+        # `of=("self",)` or Postgres locks a row in every joined table as
+        # well -- including the tenant's single Organization row, which would
+        # serialise all invoice drafting behind it and block an admin saving
+        # billing settings.
+        Job.objects.select_for_update(of=("self",))
         .filter(pk__in=job_ids, organization=organization)
         .select_related("service", "organization")
     )
@@ -180,7 +194,7 @@ def draft_invoice(*, customer, jobs, actor=None) -> Invoice:
             {"jobs": [str(job_id) for job_id in already]},
         )
 
-    invoice = Invoice.objects.create(organization=organization, customer=customer)
+    invoice = Invoice.objects.create(organization=organization, customer=customer, created_by=actor)
 
     lines = []
     for position, job in enumerate(sorted(locked, key=lambda j: j.scheduled_start)):
@@ -362,6 +376,23 @@ def is_overdue(invoice: Invoice, *, today: dt.date | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _locked_status(invoice: Invoice) -> str:
+    """
+    Take the row lock on `invoice` and return its status as the database has
+    it right now.
+
+    Every transition below checks a status before writing one. Read off an
+    instance nobody is holding, that check is time-of-check/time-of-use: the
+    status can change between the check and the write, and both callers
+    succeed. Locking here makes the second caller wait and then see the truth.
+
+    Returns the status rather than a fresh instance so the caller keeps
+    working on the object it was handed -- these functions mutate what they
+    are given, as `scheduling.services.transition_job` does.
+    """
+    return Invoice.objects.select_for_update().values_list("status", flat=True).get(pk=invoice.pk)
+
+
 def assert_draft(invoice: Invoice, verb: str) -> None:
     """Refuse anything that would edit a document already sent (ADR-026)."""
     if invoice.status != InvoiceStatus.DRAFT:
@@ -380,14 +411,23 @@ def issue_invoice(invoice: Invoice, *, actor=None, today: dt.date | None = None)
     The number comes off `InvoiceSequence` under `select_for_update`, so two
     dispatchers issuing at the same instant get consecutive numbers rather than
     the same one and a unique-constraint error.
+
+    The invoice row is locked too, and its status re-read inside the
+    transaction. Locking only the sequence left a time-of-check/time-of-use
+    hole: both dispatchers passed the draft check, both took a number, both
+    got a 200, and the first one's number ended up on no document at all -- a
+    permanent gap in a sequence ADR-026 says has none. The loser now gets the
+    409 it should.
     """
+    invoice.status = _locked_status(invoice)
     assert_draft(invoice, "issue")
 
-    amounts = totals(invoice)
     if not invoice.lines.exists():
         raise ConflictError(
             "An invoice with no lines cannot be issued.", {"status": invoice.status}
         )
+
+    amounts = totals(invoice)
     if amounts["total_cents"] <= 0:
         raise ConflictError(
             "An invoice has to come to more than nothing. Adjust the lines, or delete the draft.",
@@ -407,6 +447,7 @@ def issue_invoice(invoice: Invoice, *, actor=None, today: dt.date | None = None)
     issued_on = today or organization.today()
 
     invoice.status = InvoiceStatus.ISSUED
+    invoice.issued_by = actor
     invoice.issued_on = issued_on
     invoice.due_on = issued_on + dt.timedelta(days=organization.invoice_terms_days)
     invoice.tax_rate_percent = Decimal(organization.tax_rate_percent)
@@ -421,6 +462,7 @@ def issue_invoice(invoice: Invoice, *, actor=None, today: dt.date | None = None)
         update_fields=[
             "number",
             "status",
+            "issued_by",
             "issued_on",
             "due_on",
             "tax_rate_percent",
@@ -458,6 +500,14 @@ def void_invoice(invoice: Invoice, *, actor=None, reason: str) -> Invoice:
     reason = (reason or "").strip()
     if not reason:
         raise ValidationError({"reason": "Say why this invoice is being voided."})
+
+    # Locked before the payment check, for the reason the docstring gives:
+    # unlocked, a payment recorded in another transaction lands between the
+    # `exists()` below and the write, and the invoice goes void with live
+    # money against it -- money that then disappears from every screen,
+    # because `balance_cents` and `payment_state` both short-circuit on a
+    # non-issued invoice, while the visits are freed to be billed again.
+    invoice.status = _locked_status(invoice)
 
     if invoice.status == InvoiceStatus.DRAFT:
         raise ConflictError(
@@ -513,8 +563,15 @@ def record_payment(
     if tip_cents < 0:
         raise ValidationError({"tip_cents": "A tip cannot be negative."})
 
-    # Locked so two people recording the same check cannot both see a balance.
+    # Locked so two people recording the same check cannot both see the same
+    # balance -- and so a concurrent void cannot slip in beside this write.
     locked = Invoice.objects.select_for_update().get(pk=invoice.pk)
+    if locked.status != InvoiceStatus.ISSUED:
+        raise ConflictError(
+            f"A {locked.get_status_display().lower()} invoice cannot take a payment.",
+            {"status": locked.status},
+        )
+
     balance = balance_cents(locked)
 
     if amount_cents > balance:
@@ -568,26 +625,45 @@ def void_payment(payment: Payment, *, actor=None, reason: str) -> Payment:
 # What the caller may do next
 # ---------------------------------------------------------------------------
 
-#: Every action the invoice API offers, so the pages draw their buttons from
-#: the server's answer rather than a copy of these rules (ADR-023, the same
-#: shape as `Job.next_statuses`).
-INVOICE_ACTIONS = ("edit", "delete", "issue", "void", "send", "record_payment")
+# Every action the invoice API offers, so the pages draw their buttons from
+# the server's answer rather than a copy of these rules (ADR-023, the same
+# shape as `Job.next_statuses`).
+#
+# Named constants rather than bare strings in two places: `INVOICE_ACTIONS`
+# feeds the serializer's schema annotation, so the generated frontend type is
+# this tuple and a new action cannot be added here without the contract
+# following it.
+ACTION_EDIT = "edit"
+ACTION_DELETE = "delete"
+ACTION_ISSUE = "issue"
+ACTION_VOID = "void"
+ACTION_SEND = "send"
+ACTION_RECORD_PAYMENT = "record_payment"
+
+INVOICE_ACTIONS = (
+    ACTION_EDIT,
+    ACTION_DELETE,
+    ACTION_ISSUE,
+    ACTION_VOID,
+    ACTION_SEND,
+    ACTION_RECORD_PAYMENT,
+)
 
 
 def available_actions(invoice: Invoice) -> list[str]:
     """Which of `INVOICE_ACTIONS` this invoice will accept right now."""
     if invoice.status == InvoiceStatus.DRAFT:
-        actions = ["edit", "delete"]
+        actions = [ACTION_EDIT, ACTION_DELETE]
         if invoice.lines.exists() and totals(invoice)["total_cents"] > 0:
-            actions.append("issue")
+            actions.append(ACTION_ISSUE)
         return actions
 
     if invoice.status == InvoiceStatus.ISSUED:
-        actions = ["send"]
+        actions = [ACTION_SEND]
         if balance_cents(invoice) > 0:
-            actions.append("record_payment")
+            actions.append(ACTION_RECORD_PAYMENT)
         if not live_payments(invoice).exists():
-            actions.append("void")
+            actions.append(ACTION_VOID)
         return actions
 
     return []

@@ -6,76 +6,45 @@ recomputing it, that `sent_at` is stamped only on a delivery that happened, and
 that a task cannot be talked into emailing another tenant's invoice by id.
 """
 
-import datetime as dt
 from decimal import Decimal
 
 import pytest
 from django.core import mail
 from django.core.exceptions import ValidationError
-from django.utils import timezone
 
 from app.exceptions import ConflictError
 from billing import services
 from billing.enums import PaymentMethod
 from billing.tasks import send_invoice_email
+from billing.tests.conftest import completed_job
 from billing.tests.factories import InvoiceFactory
-from scheduling.enums import JobStatus
-from scheduling.tests.factories import (
-    CustomerFactory,
-    JobFactory,
-    OrganizationFactory,
-    ServiceFactory,
-)
+from scheduling.tests.factories import OrganizationFactory
 
 
 @pytest.fixture
-def org(db):
-    return OrganizationFactory(
-        name="Sparkle Clean", invoice_footer="Make checks payable to Sparkle Clean."
-    )
-
-
-@pytest.fixture
-def customer(org):
-    return CustomerFactory(
-        organization=org, first_name="Dana", last_name="Henderson", email="dana@example.com"
-    )
-
-
-@pytest.fixture
-def issued(org, customer):
-    service = ServiceFactory(organization=org, name="Standard clean")
-    start = timezone.now() - dt.timedelta(days=1)
-    job = JobFactory(
-        organization=org,
-        customer=customer,
-        service=service,
-        status=JobStatus.COMPLETE,
-        price_cents=15000,
-        scheduled_start=start,
-        scheduled_end=start + dt.timedelta(hours=2),
-    )
+def issued(org, customer, service):
+    job = completed_job(org, customer, service, price_cents=15000)
     return services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
 
 
 @pytest.mark.django_db
 class TestSendInvoice:
-    def test_sends_to_the_bill_to_address(self, issued):
+    def test_sends_to_the_bill_to_address(self, issued, org):
         services.send_invoice(issued)
 
         (sent,) = mail.outbox
         assert sent.to == ["dana@example.com"]
         assert issued.number in sent.subject
-        assert "Sparkle Clean" in sent.subject
+        assert org.name in sent.subject
 
-    def test_the_body_carries_the_lines_totals_and_terms(self, issued):
+    def test_the_body_carries_the_lines_totals_and_terms(self, issued, org):
         services.send_invoice(issued)
 
         body = mail.outbox[0].body
         assert "Standard clean" in body
         assert "$150.00" in body
         assert f"{issued.due_on:%-d %B %Y}" in body
-        assert "Make checks payable to Sparkle Clean." in body
+        assert org.invoice_footer in body
 
     def test_stamps_sent_at_only_once_the_mail_is_away(self, issued):
         assert issued.sent_at is None
@@ -166,6 +135,31 @@ class TestTheTaskItself:
         import uuid
 
         assert send_invoice_email(str(org.pk), str(uuid.uuid4())) is False
+
+    def test_a_send_that_fails_returns_false_and_stamps_nothing(self, issued, monkeypatch):
+        """
+        `sent_at` must never claim a delivery that did not happen. A failure
+        is logged; the dispatcher presses Send again and nothing about the
+        invoice has changed.
+        """
+
+        def explode(*args, **kwargs):
+            raise OSError("no route to host")
+
+        monkeypatch.setattr("billing.tasks.EmailMessage.send", explode)
+
+        assert send_invoice_email(str(issued.organization_id), str(issued.pk)) is False
+
+        issued.refresh_from_db()
+        assert issued.sent_at is None
+
+    def test_the_task_refuses_an_invoice_with_no_address_of_its_own(self, issued):
+        """The service guards this too; the task cannot assume it was called."""
+        issued.bill_to_email = ""
+        issued.save(update_fields=["bill_to_email"])
+
+        assert send_invoice_email(str(issued.organization_id), str(issued.pk)) is False
+        assert mail.outbox == []
 
 
 @pytest.mark.django_db

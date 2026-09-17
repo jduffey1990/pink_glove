@@ -33,18 +33,23 @@ class InvoiceAdmin(admin.ModelAdmin):
     inlines = [InvoiceLineInline]
     # The snapshot is written once, at issue (ADR-026). Editing it here would
     # change a document the customer has already read.
+    # `status` is read-only too, for the reason `PaymentAdmin` is read-only
+    # whole: flipping void -> issued here would revive a voided document at
+    # its old number, with visits whose claims had already been released.
+    # Status moves through `billing.services`, which records why.
     readonly_fields = (
         "id",
         "created_at",
         "updated_at",
         "deleted_at",
+        "status",
         "voided_at",
         "voided_by",
         *SNAPSHOT_FIELDS,
     )
 
     fieldsets = (
-        (None, {"fields": ("organization", "customer", "status", "notes")}),
+        (None, {"fields": ("organization", "customer", "status", "notes")}),  # status read-only
         (
             "Snapshot",
             {
