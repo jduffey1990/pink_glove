@@ -82,8 +82,8 @@ LOCAL_APPS = [
     "catalog",
     "audit",
     "scheduling",
+    "billing",
     "health",
-    # Phase 4 adds: billing
     # Phase 5 adds: notifications
 ]
 
@@ -220,6 +220,7 @@ SPECTACULAR_SETTINGS = {
         # "StatusAccEnum", which the frontend then has to guess at.
         "JobStatusEnum": "scheduling.enums.JobStatus.choices",
         "CustomerStatusEnum": "customers.enums.CustomerStatus.choices",
+        "InvoiceStatusEnum": "billing.enums.InvoiceStatus.choices",
     },
 }
 
