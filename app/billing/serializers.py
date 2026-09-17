@@ -43,6 +43,30 @@ class InvoiceLineSerializer(TenantModelSerializer):
         )
         read_only_fields = ("id", "organization", "job", "created_at", "updated_at")
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Scope the invoice field to the caller's own organization.
+        #
+        # `TenantModel.save()` would refuse a cross-tenant write anyway, but
+        # only after `validate_invoice` below has already answered "that
+        # invoice is issued" -- which confirms both that another tenant's
+        # invoice exists and what state it is in. Narrowing the queryset makes
+        # the answer "does not exist" for an id from anywhere else, which is
+        # the same answer this codebase gives a cross-tenant read everywhere
+        # else (a 403 would confirm the record exists; so does a 400 that
+        # describes it).
+        request = self.context.get("request")
+        organization = getattr(request, "organization", None)
+        field = self.fields.get("invoice")
+
+        if field is not None and hasattr(field, "queryset"):
+            field.queryset = (
+                Invoice.objects.filter(organization=organization)
+                if organization is not None
+                else Invoice.objects.none()
+            )
+
     def validate_kind(self, value):
         if value != LineKind.ADJUSTMENT:
             raise serializers.ValidationError(

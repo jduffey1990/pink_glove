@@ -7,14 +7,14 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 ## Start here
 
-Everything through Phase 3 is on `main`, tests green — backend and the first
-frontend slice both. Next work is **Phase 4a** (invoices and recorded payments,
-no Stripe), specified below under "Phase 4 — Billing". Work on a branch
-(`phase-4-billing`), never on `main`; run the phase gate in `CLAUDE.md` at the
-end of each of 4a, 4b and 4c. Read "Phase 3b as built"
-before touching `ui/`, and "Phase gate — baseline" at the end of this file: it
-records what was fixed and decided before Phase 4, the coverage gaps still
-open, and a backlog to fold in as files are touched.
+Everything through Phase 3 is on `main`, tests green. **Phase 4a is built** on
+the branch `phase-4-billing` and waiting to be merged — see "Phase 4a as
+built" at the end of this file for what landed and what the gate found. Next
+work is **Phase D** (deploy target, staging, CI), which 4b needs for its
+webhook URL. Work on a branch, never on `main`; run the phase gate in
+`CLAUDE.md` at the end of each phase. Read "Phase 3b as built" before touching
+`ui/`, and "Phase gate — baseline": it records what was fixed and decided
+before Phase 4, and a backlog to fold in as files are touched.
 
 ```bash
 cd app
@@ -28,7 +28,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **552 passing** in `app/`, and **77** in `ui/` (`cd ui && npm test`).
+Expect **780 passing** in `app/`, and **97** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -48,8 +48,8 @@ testing gotchas that will otherwise cost you an hour each.
 | 2.5 | Access audit trail | **Done** (flagging pass landed in 3a) |
 | 3a | Scheduling backend, audit evaluator, OpenAPI | **Done** |
 | 3b | Frontend slice (`ui/`), built against 3a | **Done** |
-| 4a | Invoices, recorded payments, invoice email — no Stripe | **Next** |
-| D | Deploy target, staging, CI (ADR-006) — before 4b | Not started |
+| 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
+| D | Deploy target, staging, CI (ADR-006) — before 4b | **Next** |
 | 4b | Stripe Connect: tenants take card payments | Not started |
 | 4c | Platform subscription: tenants pay for pink_glove | Not started |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |

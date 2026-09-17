@@ -545,6 +545,51 @@ class TestLines:
         assert dispatcher_client.delete(line_url(line)).status_code == 409
         assert InvoiceLine.objects.filter(pk=line.pk).exists()
 
+    def test_a_line_cannot_be_added_to_another_organizations_invoice(
+        self, dispatcher_client, rival
+    ):
+        """
+        And the refusal says only "does not exist".
+
+        `TenantModel.save()` would refuse the write regardless, but only after
+        the serializer had already answered "that invoice is issued" -- which
+        confirms both that the invoice exists and what state it is in. The
+        invoice field is scoped to the caller's organization so that an id
+        from anywhere else gets the same answer as an id from nowhere.
+        """
+        response = dispatcher_client.post(
+            LINES_URL,
+            {
+                "invoice": str(rival["invoice"].pk),
+                "kind": LineKind.ADJUSTMENT,
+                "description": "Mine now",
+                "amount_cents": -100,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "does not exist" in str(response.data["invoice"])
+        assert "organization" not in str(response.data["invoice"]).lower()
+        assert not InvoiceLine.objects.filter(description="Mine now").exists()
+
+    def test_an_unknown_invoice_id_says_the_same_thing(self, dispatcher_client):
+        import uuid
+
+        response = dispatcher_client.post(
+            LINES_URL,
+            {
+                "invoice": str(uuid.uuid4()),
+                "kind": LineKind.ADJUSTMENT,
+                "description": "Nowhere",
+                "amount_cents": -100,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert "does not exist" in str(response.data["invoice"])
+
     def test_lists_only_this_organizations(self, dispatcher_client, draft, rival):
         body = dispatcher_client.get(LINES_URL).json()
 

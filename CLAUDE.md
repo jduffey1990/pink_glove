@@ -27,9 +27,9 @@ pink_glove/
 │   ├── catalog/            # Service + pricing models
 │   ├── audit/              # AccessReveal, the end-of-day evaluator
 │   ├── scheduling/         # RecurringPlan, Job, assignments, time, notes, photos
+│   ├── billing/            # Invoice, InvoiceLine, Payment, InvoiceSequence
 │   ├── health/             # liveness + readiness
-│   └── ...                 # organizations, two_factor; billing and
-│                           #   notifications by phase
+│   └── ...                 # organizations, two_factor; notifications by phase
 ├── ui/                     # Vue 3 + Vuetify 4 + TypeScript SPA (ADR-018)
 │   ├── src/api/            # client.ts (CSRF + org header), generated schema.d.ts
 │   ├── src/stores/         # session store: boot, login, organization choice
@@ -65,7 +65,11 @@ quiet edit.
 8. **Timestamps stored UTC.** Display and recurrence expansion happen in
    `Organization.timezone`. Recurrence expands *naive local* and converts to
    UTC last — expanding in UTC shifts every job by an hour for half the year.
-9. **The generated schema has zero warnings.** A test asserts it. An action
+9. **Nothing issued is edited.** An issued invoice and every payment are
+   voided with a reason, never amended or deleted; corrections are a void and
+   a new document, so a number is never reused (ADR-025, ADR-026). "Paid" is
+   derived from the ledger every time and never stored.
+10. **The generated schema has zero warnings.** A test asserts it. An action
    drf-spectacular cannot describe is one the frontend cannot call, so new
    `@action`s carry `@extend_schema` (ADR-019).
 
@@ -107,9 +111,12 @@ docker compose run --rm web python manage.py makemigrations
 docker compose run --rm web python manage.py migrate
 
 # Two demo organizations, each with users in every role, three customers,
-# three services, two recurring plans and a materialized board of jobs
-# (password printed at the end). Two, not one -- tenant isolation bugs are
-# invisible with a single tenant.
+# three services, two recurring plans, a materialized board of jobs with its
+# past already worked, and four invoices (paid / part-paid with a tip /
+# overdue / draft). The two bill differently on purpose -- one charges tax and
+# a flat no-access fee, the other neither -- so a rule read from the wrong
+# tenant shows up as a wrong number. Password printed at the end. Two, not
+# one: tenant isolation bugs are invisible with a single tenant.
 docker compose run --rm web python manage.py seed_demo
 
 # OpenAPI schema (ADR-019). Both are authenticated; sign in first.
@@ -188,12 +195,19 @@ trusted-device session is refused on purpose.
   They differ where it matters: a location's access codes are write-only, so
   they exist on `ServiceLocationRequest` and not on `ServiceLocation`. The
   types are what keep a code off a read payload.
+- **Money goes through `src/lib/money.ts`**, never converted inline.
+  `dollarsToCents` exists because `0.07 * 100` is `7.000000000000001`, which
+  the API refuses; `formatCents` lives there too, not in `datetime.ts`.
 - **Dates are reckoned in `session.organization.timezone`, never the
   browser's.** Use `src/lib/datetime.ts`; the API's `date_from`/`date_to` are
   organization-local dates and the backend does the conversion.
 - **The server owns the job state machine.** Render the next-status buttons
   from the job's `next_statuses` (and a 409 body's `allowed` list when one
   arrives), never from a client-side copy. `is_terminal` likewise.
+- **The server owns what an invoice will accept.** Render its buttons from
+  `available_actions`, never from `status` -- whether an issued invoice may be
+  voided depends on whether money points at it, which only the server knows.
+  `payment_state`, `balance_cents` and `is_overdue` come the same way.
 - A dialog rendered behind a `v-if` that flips in the same tick as its
   `v-model` mounts with the model already true, so a `watch` on it needs
   `{ immediate: true }` or it never fires.
@@ -264,7 +278,9 @@ fresh session can read what was checked and what was left.
    - `ui/src/api/schema.d.ts` mirrors the serializers and views (ADR-019) —
      mechanical, and enforced by the pre-commit schema check;
    - `ENUM_NAME_OVERRIDES` in settings needs an entry per choice set whose
-     field name collides (`Role`, `JobStatus`/`CustomerStatus`);
+     field name is too generic to identify it, or collides: `Role`,
+     `JobStatus`/`CustomerStatus`, `InvoiceStatus`, and `PaymentMethod` /
+     `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`;
    - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`;
    - the job state machine lives on the server: `Job.next_statuses` and
      `is_terminal` say what the caller may do, and a 409's `allowed` list
@@ -278,7 +294,10 @@ fresh session can read what was checked and what was left.
    - `scheduling/serializers.py` picks the field for a pricing 400 by reading
      the text of the `ValueError` from `catalog.models.Service.quote_cents`;
    - `customers/views.py` lazy-imports `scheduling.permissions`, because
-     `scheduling` already imports `customers.models`.
+     `scheduling` already imports `customers.models`;
+   - `billing` imports `scheduling.models` and `catalog.enums` and nothing
+     imports `billing`, so the dependency runs one way only. Keep it that way:
+     a scheduling import of `billing` would close the cycle.
 5. **Security (authentication and authorization).**
    - Every new model holding tenant data inherits `TenantModel`, and every
      view over it inherits `TenantViewSetMixin` (invariant 1).
@@ -292,7 +311,9 @@ fresh session can read what was checked and what was left.
      a permission.
    - A full `ModelViewSet` guards update as well as create and delete, and any
      join across a soft-deletable relation filters `deleted_at` itself (the
-     manager only covers the model being queried; see `assigned_to()`).
+     manager only covers the model being queried; see `assigned_to()` and
+     `billing.services.live_lines()`). A `NOT IN` subquery over a nullable
+     column needs `isnull=False` too, or one NULL empties the whole result.
    - Access codes stay write-only and encrypted, and are read only through the
      audited reveal (ADR-014, ADR-016); nothing sensitive is logged.
    - No secrets in git or in the `ui/` bundle (invariant 7).
