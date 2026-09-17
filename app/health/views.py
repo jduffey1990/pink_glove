@@ -54,8 +54,10 @@ class ReadinessView(APIView):
                 cursor.execute("SELECT 1")
             return "ok"
         except Exception as exc:
+            # The detail goes to the log only: this endpoint is public, and a
+            # driver error names the host, port, database and user.
             logger.warning("Readiness: database check failed: %s", exc)
-            return f"error: {exc}"
+            return "error"
 
     @staticmethod
     def _check_redis() -> str:
@@ -68,4 +70,4 @@ class ReadinessView(APIView):
             return "ok"
         except Exception as exc:
             logger.warning("Readiness: redis check failed: %s", exc)
-            return f"error: {exc}"
+            return "error"

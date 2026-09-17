@@ -80,14 +80,28 @@ class TwoFactorCode(Base):
         if not self.is_usable:
             return False
 
-        self.attempts += 1
-        self.save(update_fields=["attempts", "updated_at"])
+        # Counted in the database, not on this instance: parallel requests each
+        # load `attempts` before any of them saves, and a read-modify-write
+        # would let all of them through on the same count.
+        now = timezone.now()
+        live = type(self).objects.filter(
+            pk=self.pk, consumed_at__isnull=True, attempts__lt=self.MAX_ATTEMPTS
+        )
+        if not live.update(attempts=models.F("attempts") + 1, updated_at=now):
+            return False
+        self.refresh_from_db(fields=["attempts"])
 
         if not check_password(submitted_code, self.code_hash):
             return False
 
-        self.consumed_at = timezone.now()
-        self.save(update_fields=["consumed_at", "updated_at"])
+        # Conditional for the same reason: only one request gets to consume it.
+        if (
+            not type(self)
+            .objects.filter(pk=self.pk, consumed_at__isnull=True)
+            .update(consumed_at=now, updated_at=now)
+        ):
+            return False
+        self.consumed_at = now
         return True
 
 

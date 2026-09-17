@@ -213,3 +213,31 @@ class TestCodeStorage:
 
         assert code not in challenge.code_hash
         assert challenge.code_hash != code
+
+
+@pytest.mark.django_db
+class TestTheAttemptCapUnderConcurrency:
+    """
+    Two requests that both loaded the challenge before either saved. Counting
+    on the instance let each see the same stale `attempts`, so N parallel
+    guesses cost one.
+    """
+
+    def test_a_stale_copy_cannot_guess_past_the_cap(self, owner):
+        challenge, _ = TwoFactorCode.issue(owner)
+        stale = TwoFactorCode.objects.get(pk=challenge.pk)
+
+        for _ in range(TwoFactorCode.MAX_ATTEMPTS):
+            TwoFactorCode.objects.get(pk=challenge.pk).verify("000000")
+
+        assert stale.attempts == 0  # it still believes it has guesses left
+        assert stale.verify("000000") is False
+        assert TwoFactorCode.objects.get(pk=challenge.pk).attempts == TwoFactorCode.MAX_ATTEMPTS
+
+    def test_a_code_is_consumed_by_one_request_only(self, owner):
+        challenge, raw_code = TwoFactorCode.issue(owner)
+        first = TwoFactorCode.objects.get(pk=challenge.pk)
+        second = TwoFactorCode.objects.get(pk=challenge.pk)
+
+        assert first.verify(raw_code) is True
+        assert second.verify(raw_code) is False

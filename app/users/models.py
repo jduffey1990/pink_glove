@@ -178,8 +178,13 @@ class MagicLinkToken(Base):
         if token is None or not token.is_valid:
             return None
 
-        token.consumed_at = timezone.now()
-        token.save(update_fields=["consumed_at", "updated_at"])
+        # A conditional update, so two requests racing on one link cannot both
+        # pass the `is_valid` check above and both be signed in.
+        now = timezone.now()
+        if not cls.objects.filter(pk=token.pk, consumed_at__isnull=True).update(
+            consumed_at=now, updated_at=now
+        ):
+            return None
         return token.user
 
     @property
