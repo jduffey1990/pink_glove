@@ -507,7 +507,7 @@ class JobRelatedViewSet(TenantViewSetMixin, ModelViewSet):
         if job is not None and job.pk != serializer.instance.job_id:
             raise ValidationError({"job": "This cannot be moved to another job."})
 
-        serializer.save()
+        super().perform_update(serializer)
 
     def perform_destroy(self, instance):
         self._assert_author_or_dispatcher(instance, "delete")

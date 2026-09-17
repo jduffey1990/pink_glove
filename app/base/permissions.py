@@ -10,9 +10,14 @@ possible without letting it bypass tenant scoping: the queryset filter in
 `TenantViewSetMixin` still applies.
 """
 
-from rest_framework.permissions import BasePermission
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import SAFE_METHODS, BasePermission
 
 from users.enums import ADMIN_ROLES, DISPATCHER_ROLES, OWNER_ROLES, STAFF_ROLES, Role
+
+ORGANIZATION_INACTIVE = (
+    "This organization has been deactivated. Its records can be read but not changed."
+)
 
 
 class IsOrgMember(BasePermission):
@@ -24,9 +29,26 @@ class IsOrgMember(BasePermission):
         user = request.user
         if not (user and user.is_authenticated):
             return False
-        if getattr(request, "organization", None) is None:
+        organization = getattr(request, "organization", None)
+        if organization is None:
             return False
-        return user.is_superuser or getattr(request, "membership", None) is not None
+        if not (user.is_superuser or getattr(request, "membership", None) is not None):
+            return False
+
+        # A deactivated organization is read-only, not locked out: its people
+        # can still see and export what they have (and, from Phase 4, what they
+        # owe), but nothing new is scheduled, edited or revealed. Every role
+        # permission inherits from this class, so it is the one place to say
+        # so. Raised rather than returned so the reason survives `A | B`
+        # composition, which would otherwise swap in a generic message.
+        # Superusers are exempt: someone has to be able to put things right.
+        if (
+            request.method not in SAFE_METHODS
+            and not organization.is_active
+            and not user.is_superuser
+        ):
+            raise PermissionDenied(ORGANIZATION_INACTIVE)
+        return True
 
 
 class _RoleRequired(IsOrgMember):
