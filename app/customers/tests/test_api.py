@@ -193,6 +193,56 @@ class TestServiceLocationApi:
         assert body["has_access_codes"] is True
 
 
+class TestLinkingAPortalUser:
+    """`user` decides whose jobs the portal shows, so it cannot be just anyone."""
+
+    def _create(self, client, user):
+        return client.post(
+            reverse("customers:customer-list"),
+            {"first_name": "Dana", "user": str(user.id)},
+            format="json",
+        )
+
+    def test_a_customer_member_of_this_organization_can_be_linked(
+        self, authed_client, organization, make_member
+    ):
+        portal_user = make_member(organization, role=Role.CUSTOMER)
+
+        response = self._create(authed_client, portal_user)
+
+        assert response.status_code == 201
+        assert response.json()["user"] == str(portal_user.id)
+
+    def test_another_organizations_user_cannot_be_linked(
+        self, authed_client, other_organization, make_member
+    ):
+        outsider = make_member(other_organization, role=Role.CUSTOMER)
+
+        response = self._create(authed_client, outsider)
+
+        assert response.status_code == 400
+        assert "user" in response.json()
+
+    def test_a_staff_member_cannot_be_linked(self, authed_client, organization, make_member):
+        dispatcher = make_member(organization, role=Role.DISPATCHER)
+
+        assert self._create(authed_client, dispatcher).status_code == 400
+
+    def test_a_superuser_cannot_be_linked(self, authed_client, superuser):
+        assert self._create(authed_client, superuser).status_code == 400
+
+    def test_a_foreign_user_and_a_made_up_one_look_the_same(self, authed_client, rival_owner):
+        import uuid
+
+        class Ghost:
+            id = uuid.uuid4()
+
+        real = self._create(authed_client, rival_owner).json()["user"][0]
+        fake = self._create(authed_client, Ghost).json()["user"][0]
+
+        assert real.replace(str(rival_owner.id), "") == fake.replace(str(Ghost.id), "")
+
+
 @pytest.mark.django_db
 class TestCustomerPermissions:
     def test_a_cleaner_cannot_list_customers(self, api_client, organization, make_member):

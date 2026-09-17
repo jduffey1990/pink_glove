@@ -2,6 +2,8 @@ from rest_framework import serializers
 
 from base.viewsets import TenantModelSerializer
 from customers.models import Customer, ServiceLocation
+from users.enums import Role
+from users.models import CustomUser
 
 
 class ServiceLocationSerializer(TenantModelSerializer):
@@ -104,6 +106,31 @@ class CustomerSerializer(TenantModelSerializer):
             "created_at",
             "updated_at",
         )
+
+    def get_fields(self):
+        """
+        `user` may only be a customer-role member of the caller's organization.
+
+        `CustomUser` is not a `TenantModel`, so the cross-tenant foreign key
+        check in `TenantModel.save()` never looks at this field, and the default
+        queryset is every account there is. Left open, a dispatcher could bind
+        another organization's user -- or a superuser -- to their customer:
+        the link is one-to-one, so that blocks the rightful organization from
+        ever making it, and it is what decides whose jobs the portal shows.
+        Narrowing the queryset rather than validating afterwards means a
+        foreign id and a made-up one get the same "does not exist".
+        """
+        fields = super().get_fields()
+        request = self.context.get("request")
+        organization = getattr(request, "organization", None)
+
+        fields["user"].queryset = CustomUser.objects.filter(
+            memberships__organization=organization,
+            memberships__role=Role.CUSTOMER,
+            memberships__is_active=True,
+            memberships__deleted_at__isnull=True,
+        ).distinct()
+        return fields
 
     def validate(self, attrs):
         # Mirrors the customer_has_a_name check constraint, so the API returns
