@@ -241,3 +241,32 @@ class TestTheAttemptCapUnderConcurrency:
 
         assert first.verify(raw_code) is True
         assert second.verify(raw_code) is False
+
+
+@pytest.mark.django_db
+class TestTheChallengeEmail:
+    def test_the_code_is_in_the_body_and_never_the_subject(self, owner, mailoutbox):
+        from two_factor.services import send_challenge
+
+        _, raw_code = send_challenge(owner)
+
+        (message,) = mailoutbox
+        assert message.to == [owner.email]
+        assert raw_code in message.body
+        assert raw_code not in message.subject
+        assert not any(character.isdigit() for character in message.subject)
+
+    def test_a_mail_failure_does_not_fail_the_sign_in(self, owner, monkeypatch):
+        """The challenge exists and can be resent; an error would reveal the account."""
+        from django.core.mail import EmailMessage
+
+        from two_factor.services import send_challenge
+
+        def boom(*args, **kwargs):
+            raise OSError("smtp is down")
+
+        monkeypatch.setattr(EmailMessage, "send", boom)
+
+        challenge, _ = send_challenge(owner)
+
+        assert challenge.pk is not None

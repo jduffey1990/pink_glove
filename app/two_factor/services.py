@@ -45,7 +45,9 @@ def send_challenge(user: CustomUser, resent: bool = False) -> tuple[TwoFactorCod
     challenge, raw_code = TwoFactorCode.issue(user)
 
     site_name = getattr(settings, "SITE_NAME", "Pink Glove")
-    subject = f"Your {site_name} sign-in code is {raw_code}"
+    # The code is in the body only. A subject is what a lock screen previews
+    # and what mail servers log, and neither should be holding a live code.
+    subject = f"Your {site_name} sign-in code"
     if resent:
         subject += " (resent)"
 
