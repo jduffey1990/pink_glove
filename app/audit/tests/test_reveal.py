@@ -224,6 +224,66 @@ class TestAuditTrailAccess:
         assert reveal.reviewed_at is not None
         assert "ran late" in reveal.review_note
 
+    def _review(self, client, reveal, note="Asked; fine."):
+        return client.post(
+            reverse("audit:access-reveal-review", args=[reveal.id]),
+            {"review_note": note},
+            format="json",
+        )
+
+    def test_an_admin_cannot_review_their_own_reveal(
+        self, api_client, organization, location, make_member
+    ):
+        admin = make_member(organization, role=Role.ADMIN)
+        api_client.force_login(admin)
+        api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+        reveal = AccessReveal.objects.get()
+
+        response = self._review(api_client, reveal)
+
+        reveal.refresh_from_db()
+        assert response.status_code == 403
+        assert reveal.reviewed_at is None
+
+    def test_an_admin_can_review_someone_elses(
+        self, api_client, authed_client, organization, location, make_member
+    ):
+        authed_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+        reveal = AccessReveal.objects.get()
+        admin = make_member(organization, role=Role.ADMIN)
+        api_client.force_login(admin)
+
+        assert self._review(api_client, reveal).status_code == 200
+        reveal.refresh_from_db()
+        assert reveal.reviewed_by == admin
+
+    def test_a_review_is_final(self, api_client, authed_client, organization, location, owner):
+        authed_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+        reveal = AccessReveal.objects.get()
+        self._review(authed_client, reveal, note="First word.")
+
+        response = self._review(authed_client, reveal, note="Rewritten.")
+
+        reveal.refresh_from_db()
+        assert response.status_code == 409
+        assert reveal.review_note == "First word."
+
+    def test_a_dispatcher_cannot_review(
+        self, api_client, authed_client, organization, location, make_member
+    ):
+        authed_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+        api_client.force_login(make_member(organization, role=Role.DISPATCHER))
+
+        assert self._review(api_client, AccessReveal.objects.get()).status_code == 403
+
+    def test_another_organizations_reveal_cannot_be_reviewed(
+        self, api_client, authed_client, location, rival_owner
+    ):
+        authed_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+        api_client.force_login(rival_owner)
+
+        assert self._review(api_client, AccessReveal.objects.get()).status_code == 404
+
 
 @pytest.mark.django_db
 class TestRevealsBindToAJob:

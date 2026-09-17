@@ -3,10 +3,13 @@
 import ipaddress
 
 from django.core.exceptions import ValidationError
+from django.utils import timezone
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.settings import api_settings
 
+from app.exceptions import ConflictJSON
 from audit.models import AccessReveal
-from users.enums import DISPATCHER_ROLES
+from users.enums import DISPATCHER_ROLES, Role
 
 
 def client_ip(request) -> str | None:
@@ -92,3 +95,28 @@ def record_reveal(*, request, location, fields_revealed, acknowledged: bool, job
         ip_address=client_ip(request),
         user_agent=request.headers.get("User-Agent", "")[:512],
     )
+
+
+def mark_reviewed(*, reveal: AccessReveal, reviewer, role, note: str) -> AccessReveal:
+    """
+    Close out a reveal: record who looked at it and what they were told.
+
+    Two rules keep the trail worth having. Nobody closes a flag on their own
+    reveal -- except the owner, because a one-person office has no one else to
+    ask and flags that can never be cleared stop being read. And a review is
+    final: a second one would silently replace the first reviewer's name and
+    note, on the one record that exists to not be rewritten.
+    """
+    if reveal.user_id == reviewer.pk and role != Role.OWNER and not reviewer.is_superuser:
+        raise PermissionDenied("Someone else has to review your own reveal.")
+
+    # Conditional, so two admins reviewing at once cannot both "win".
+    now = timezone.now()
+    closed = AccessReveal.objects.filter(pk=reveal.pk, reviewed_at__isnull=True).update(
+        reviewed_at=now, reviewed_by=reviewer, review_note=note, updated_at=now
+    )
+    if not closed:
+        raise ConflictJSON("This reveal has already been reviewed.")
+
+    reveal.refresh_from_db()
+    return reveal

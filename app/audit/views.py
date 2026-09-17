@@ -1,4 +1,3 @@
-from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
@@ -8,7 +7,9 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 
 from audit.models import AccessReveal
 from audit.serializers import AccessRevealSerializer, ReviewSerializer
+from audit.services import mark_reviewed
 from base.permissions import IsAdminOrHigher
+from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 
 
@@ -34,7 +35,7 @@ class AccessRevealViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
 
     @extend_schema(
         request=ReviewSerializer,
-        responses={200: AccessRevealSerializer},
+        responses={200: AccessRevealSerializer, 403: DetailSerializer, 409: DetailSerializer},
         summary="Mark a flagged reveal as looked at",
     )
     @action(detail=True, methods=["post"])
@@ -49,9 +50,12 @@ class AccessRevealViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
         serializer = ReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        reveal.reviewed_at = timezone.now()
-        reveal.reviewed_by = request.user
-        reveal.review_note = serializer.validated_data["review_note"]
-        reveal.save(update_fields=["reviewed_at", "reviewed_by", "review_note", "updated_at"])
+        membership = getattr(request, "membership", None)
+        reveal = mark_reviewed(
+            reveal=reveal,
+            reviewer=request.user,
+            role=membership.role if membership else None,
+            note=serializer.validated_data["review_note"],
+        )
 
         return Response(AccessRevealSerializer(reveal, context={"request": request}).data)
