@@ -129,6 +129,319 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/billing/invoice-lines/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Adjustments on a draft.
+         *
+         *     Visit and no-access lines are built by `draft_invoice` from the visit
+         *     itself and are not writable here; a hand-typed visit line would be a number
+         *     with no job behind it. Every write is refused once the invoice is issued.
+         */
+        get: operations["billing_invoice_lines_list"];
+        put?: never;
+        /**
+         * @description Adjustments on a draft.
+         *
+         *     Visit and no-access lines are built by `draft_invoice` from the visit
+         *     itself and are not writable here; a hand-typed visit line would be a number
+         *     with no job behind it. Every write is refused once the invoice is issued.
+         */
+        post: operations["billing_invoice_lines_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/invoice-lines/{id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Adjustments on a draft.
+         *
+         *     Visit and no-access lines are built by `draft_invoice` from the visit
+         *     itself and are not writable here; a hand-typed visit line would be a number
+         *     with no job behind it. Every write is refused once the invoice is issued.
+         */
+        get: operations["billing_invoice_lines_retrieve"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Adjustments on a draft.
+         *
+         *     Visit and no-access lines are built by `draft_invoice` from the visit
+         *     itself and are not writable here; a hand-typed visit line would be a number
+         *     with no job behind it. Every write is refused once the invoice is issued.
+         */
+        delete: operations["billing_invoice_lines_destroy"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Adjustments on a draft.
+         *
+         *     Visit and no-access lines are built by `draft_invoice` from the visit
+         *     itself and are not writable here; a hand-typed visit line would be a number
+         *     with no job behind it. Every write is refused once the invoice is issued.
+         */
+        patch: operations["billing_invoice_lines_partial_update"];
+        trace?: never;
+    };
+    "/api/billing/invoice-lines/{id}/reprice/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-price an hourly visit from the hours actually worked
+         * @description Never automatic: a crew running long is not self-evidently the customer's bill, so a person decides (ADR-026). Open time entries are ignored, and the line floors at the service's minimum charge.
+         */
+        post: operations["billing_invoice_lines_reprice_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/invoices/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        get: operations["billing_invoices_list"];
+        put?: never;
+        /**
+         * Open a draft invoice over a customer's uninvoiced visits
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        post: operations["billing_invoices_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/invoices/{id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        get: operations["billing_invoices_retrieve"];
+        put?: never;
+        post?: never;
+        /**
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        delete: operations["billing_invoices_destroy"];
+        options?: never;
+        head?: never;
+        /**
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        patch: operations["billing_invoices_partial_update"];
+        trace?: never;
+    };
+    "/api/billing/invoices/{id}/issue/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Number the invoice and freeze what it says
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        post: operations["billing_invoices_issue_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/invoices/{id}/send/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Email the invoice to its bill-to address
+         * @description Queued, not sent inline. `sent_at` is stamped by the worker once the mail is away, so re-read the invoice to see it.
+         */
+        post: operations["billing_invoices_send_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/invoices/{id}/void/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Void an issued invoice, freeing its visits
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        post: operations["billing_invoices_void_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/invoices/billable-jobs/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Visits that are finished and on no live invoice
+         * @description Invoices. Dispatcher and above.
+         *
+         *     Creation does not take a body of lines: it takes a customer and a list of
+         *     visits, and `services.draft_invoice` builds the lines from them. That is
+         *     the only way a line can carry a price nobody typed.
+         */
+        get: operations["billing_invoices_billable_jobs_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/payments/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+         *     (ADR-025).
+         */
+        get: operations["billing_payments_list"];
+        put?: never;
+        /**
+         * Record money received against an invoice
+         * @description The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+         *     (ADR-025).
+         */
+        post: operations["billing_payments_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/payments/{id}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * @description The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+         *     (ADR-025).
+         */
+        get: operations["billing_payments_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/payments/{id}/void/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Void a payment, giving the reason
+         * @description The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+         *     (ADR-025).
+         */
+        post: operations["billing_payments_void_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/catalog/services/": {
         parameters: {
             query?: never;
@@ -1102,6 +1415,20 @@ export interface components {
             /** Format: uuid */
             user: string;
         };
+        /** @description One row of the ready-to-invoice list, priced as it will bill. */
+        BillableJob: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            customer: string;
+            customer_name: string;
+            service_name: string;
+            description: string;
+            /** Format: date-time */
+            scheduled_start: string;
+            status: string;
+            amount_cents: number;
+        };
         /** @description 202 body: a code went out and the client should collect it. */
         ChallengeIssued: {
             detail: string;
@@ -1199,6 +1526,105 @@ export interface components {
         Detail: {
             detail: string;
         };
+        /** @description `POST /api/billing/invoices/` -- a customer and the visits to bill. */
+        DraftInvoiceRequest: {
+            /** Format: uuid */
+            customer: string;
+            jobs: string[];
+        };
+        /**
+         * @description The dispatcher's view of an invoice.
+         *
+         *     `subtotal_cents`, `tax_cents` and `total_cents` are the *stored* snapshot
+         *     on an issued invoice and a live calculation on a draft, which is what
+         *     `services.totals` decides -- so a draft shows what issuing it would come
+         *     to, and an issued invoice shows what the customer was sent.
+         */
+        Invoice: {
+            /** Format: uuid */
+            readonly id: string;
+            /** Format: uuid */
+            readonly organization: string;
+            /** Format: uuid */
+            readonly customer: string;
+            readonly customer_detail: components["schemas"]["CustomerSummary"];
+            readonly number: string;
+            readonly status: components["schemas"]["InvoiceStatusEnum"];
+            /** Format: date */
+            readonly issued_on: string | null;
+            /** Format: date */
+            readonly due_on: string | null;
+            readonly bill_to_name: string;
+            /** Format: email */
+            readonly bill_to_email: string;
+            readonly bill_to_address: string;
+            /** Format: decimal */
+            readonly tax_rate_percent: string;
+            readonly subtotal_cents: number;
+            readonly tax_cents: number;
+            readonly total_cents: number;
+            notes?: string;
+            readonly lines: components["schemas"]["InvoiceLine"][];
+            readonly payments: components["schemas"]["Payment"][];
+            readonly payment_state: components["schemas"]["PaymentStateEnum"];
+            readonly balance_cents: number;
+            readonly is_overdue: boolean;
+            readonly available_actions: string[];
+            /** Format: date-time */
+            readonly sent_at: string | null;
+            /** Format: date-time */
+            readonly voided_at: string | null;
+            readonly void_reason: string;
+            /** Format: date-time */
+            readonly created_at: string;
+            /** Format: date-time */
+            readonly updated_at: string;
+        };
+        /**
+         * @description A line. Only an adjustment is writable from scratch: visit and fee lines
+         *     are built by `draft_invoice` from the visit itself, and a hand-typed
+         *     "visit" line would be a number with no job behind it.
+         */
+        InvoiceLine: {
+            /** Format: uuid */
+            readonly id: string;
+            /** Format: uuid */
+            readonly organization: string;
+            /** Format: uuid */
+            invoice: string;
+            kind: components["schemas"]["KindEnum"];
+            /** Format: uuid */
+            readonly job: string | null;
+            description: string;
+            amount_cents: number;
+            is_taxable?: boolean;
+            position?: number;
+            /** Format: date-time */
+            readonly created_at: string;
+            /** Format: date-time */
+            readonly updated_at: string;
+        };
+        /**
+         * @description A line. Only an adjustment is writable from scratch: visit and fee lines
+         *     are built by `draft_invoice` from the visit itself, and a hand-typed
+         *     "visit" line would be a number with no job behind it.
+         */
+        InvoiceLineRequest: {
+            /** Format: uuid */
+            invoice: string;
+            kind: components["schemas"]["KindEnum"];
+            description: string;
+            amount_cents: number;
+            is_taxable?: boolean;
+            position?: number;
+        };
+        /**
+         * @description * `draft` - Draft
+         *     * `issued` - Issued
+         *     * `void` - Void
+         * @enum {string}
+         */
+        InvoiceStatusEnum: "draft" | "issued" | "void";
         /**
          * @description The dispatcher's and cleaner's view of a visit.
          *
@@ -1359,6 +1785,13 @@ export interface components {
          * @enum {string}
          */
         JobStatusEnum: "scheduled" | "en_route" | "in_progress" | "complete" | "cancelled" | "no_access";
+        /**
+         * @description * `visit` - Visit
+         *     * `no_access_fee` - No-access fee
+         *     * `adjustment` - Adjustment
+         * @enum {string}
+         */
+        KindEnum: "visit" | "no_access_fee" | "adjustment";
         Liveness: {
             status: string;
         };
@@ -1426,6 +1859,16 @@ export interface components {
             readonly role: components["schemas"]["RoleEnum"];
             readonly is_active: boolean;
         };
+        /**
+         * @description * `cash` - Cash
+         *     * `check` - Check
+         *     * `money_order` - Money order
+         *     * `zelle` - Zelle
+         *     * `card` - Card
+         *     * `other` - Other
+         * @enum {string}
+         */
+        MethodEnum: "cash" | "check" | "money_order" | "zelle" | "card" | "other";
         NextStatus: {
             status: components["schemas"]["JobStatusEnum"];
             reason_required: boolean;
@@ -1570,6 +2013,21 @@ export interface components {
             previous?: string | null;
             results: components["schemas"]["AccessReveal"][];
         };
+        PaginatedBillableJobList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=400&limit=100
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=200&limit=100
+             */
+            previous?: string | null;
+            results: components["schemas"]["BillableJob"][];
+        };
         PaginatedCustomerList: {
             /** @example 123 */
             count: number;
@@ -1584,6 +2042,36 @@ export interface components {
              */
             previous?: string | null;
             results: components["schemas"]["Customer"][];
+        };
+        PaginatedInvoiceLineList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=400&limit=100
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=200&limit=100
+             */
+            previous?: string | null;
+            results: components["schemas"]["InvoiceLine"][];
+        };
+        PaginatedInvoiceList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=400&limit=100
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=200&limit=100
+             */
+            previous?: string | null;
+            results: components["schemas"]["Invoice"][];
         };
         PaginatedJobList: {
             /** @example 123 */
@@ -1644,6 +2132,21 @@ export interface components {
              */
             previous?: string | null;
             results: components["schemas"]["Membership"][];
+        };
+        PaginatedPaymentList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=400&limit=100
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=200&limit=100
+             */
+            previous?: string | null;
+            results: components["schemas"]["Payment"][];
         };
         PaginatedRecurringPlanList: {
             /** @example 123 */
@@ -1733,6 +2236,31 @@ export interface components {
             status?: components["schemas"]["CustomerStatusEnum"];
             /** @description How they found you. */
             source?: string;
+            notes?: string;
+        };
+        /**
+         * @description A line. Only an adjustment is writable from scratch: visit and fee lines
+         *     are built by `draft_invoice` from the visit itself, and a hand-typed
+         *     "visit" line would be a number with no job behind it.
+         */
+        PatchedInvoiceLineRequest: {
+            /** Format: uuid */
+            invoice?: string;
+            kind?: components["schemas"]["KindEnum"];
+            description?: string;
+            amount_cents?: number;
+            is_taxable?: boolean;
+            position?: number;
+        };
+        /**
+         * @description The dispatcher's view of an invoice.
+         *
+         *     `subtotal_cents`, `tax_cents` and `total_cents` are the *stored* snapshot
+         *     on an issued invoice and a live calculation on a draft, which is what
+         *     `services.totals` decides -- so a draft shows what issuing it would come
+         *     to, and an issued invoice shows what the customer was sent.
+         */
+        PatchedInvoiceRequest: {
             notes?: string;
         };
         /**
@@ -1937,6 +2465,45 @@ export interface components {
             clock_out?: string | null;
         };
         /**
+         * @description A payment. Written once and thereafter only voided (ADR-025), so every
+         *     field but the ones `record_payment` takes is read-only.
+         */
+        Payment: {
+            /** Format: uuid */
+            readonly id: string;
+            /** Format: uuid */
+            readonly organization: string;
+            /** Format: uuid */
+            invoice: string;
+            method: components["schemas"]["MethodEnum"];
+            amount_cents: number;
+            tip_cents?: number;
+            /** Format: date */
+            received_on: string;
+            /** @description Check number, Zelle confirmation, ... */
+            reference?: string;
+            /** Format: uuid */
+            readonly recorded_by: string | null;
+            readonly recorded_by_name: string;
+            /** @default  */
+            readonly provider: string;
+            /** @default  */
+            readonly provider_reference: string;
+            readonly is_void: boolean;
+            /** Format: date-time */
+            readonly voided_at: string | null;
+            readonly void_reason: string;
+            /** Format: date-time */
+            readonly created_at: string;
+        };
+        /**
+         * @description * `unpaid` - Unpaid
+         *     * `partial` - Partly paid
+         *     * `paid` - Paid
+         * @enum {string}
+         */
+        PaymentStateEnum: "unpaid" | "partial" | "paid";
+        /**
          * @description * `email` - Email
          *     * `sms` - Text message
          *     * `phone` - Phone call
@@ -1979,6 +2546,22 @@ export interface components {
          * @enum {string}
          */
         ReadinessStatusEnum: "ok" | "degraded";
+        ReasonRequest: {
+            reason: string;
+        };
+        /** @description `POST /api/billing/payments/` -- everything a person types on a receipt. */
+        RecordPaymentRequest: {
+            /** Format: uuid */
+            invoice: string;
+            method: components["schemas"]["MethodEnum"];
+            amount_cents: number;
+            /** @default 0 */
+            tip_cents: number;
+            /** Format: date */
+            received_on: string;
+            /** @default  */
+            reference: string;
+        };
         /**
          * @description Base serializer for tenant-owned models.
          *
@@ -2539,6 +3122,619 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_invoice_lines_list: {
+        parameters: {
+            query?: {
+                invoice?: string;
+                /**
+                 * @description * `visit` - Visit
+                 *     * `no_access_fee` - No-access fee
+                 *     * `adjustment` - Adjustment
+                 */
+                kind?: "adjustment" | "no_access_fee" | "visit";
+                /** @description Number of results to return per page. */
+                limit?: number;
+                /** @description The initial index from which to return the results. */
+                offset?: number;
+                /** @description Which field to use when ordering the results. */
+                ordering?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedInvoiceLineList"];
+                };
+            };
+        };
+    };
+    billing_invoice_lines_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvoiceLineRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["InvoiceLineRequest"];
+                "multipart/form-data": components["schemas"]["InvoiceLineRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceLine"];
+                };
+            };
+        };
+    };
+    billing_invoice_lines_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice line. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceLine"];
+                };
+            };
+        };
+    };
+    billing_invoice_lines_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice line. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    billing_invoice_lines_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice line. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedInvoiceLineRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedInvoiceLineRequest"];
+                "multipart/form-data": components["schemas"]["PatchedInvoiceLineRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceLine"];
+                };
+            };
+        };
+    };
+    billing_invoice_lines_reprice_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice line. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceLine"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_invoices_list: {
+        parameters: {
+            query?: {
+                customer?: string;
+                issued_from?: string;
+                issued_to?: string;
+                /** @description Number of results to return per page. */
+                limit?: number;
+                /** @description The initial index from which to return the results. */
+                offset?: number;
+                /** @description Which field to use when ordering the results. */
+                ordering?: string;
+                overdue?: boolean;
+                /**
+                 * @description * `unpaid` - Unpaid
+                 *     * `partial` - Partly paid
+                 *     * `paid` - Paid
+                 */
+                payment_state?: "paid" | "partial" | "unpaid";
+                /**
+                 * @description * `draft` - Draft
+                 *     * `issued` - Issued
+                 *     * `void` - Void
+                 */
+                status?: ("draft" | "issued" | "void")[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedInvoiceList"];
+                };
+            };
+        };
+    };
+    billing_invoices_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftInvoiceRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["DraftInvoiceRequest"];
+                "multipart/form-data": components["schemas"]["DraftInvoiceRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_invoices_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice"];
+                };
+            };
+        };
+    };
+    billing_invoices_destroy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No response body */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    billing_invoices_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedInvoiceRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedInvoiceRequest"];
+                "multipart/form-data": components["schemas"]["PatchedInvoiceRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice"];
+                };
+            };
+        };
+    };
+    billing_invoices_issue_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_invoices_send_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_invoices_void_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Invoice. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ReasonRequest"];
+                "multipart/form-data": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invoice"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_invoices_billable_jobs_list: {
+        parameters: {
+            query?: {
+                customer?: string;
+                issued_from?: string;
+                issued_to?: string;
+                /** @description Number of results to return per page. */
+                limit?: number;
+                /** @description The initial index from which to return the results. */
+                offset?: number;
+                /** @description Which field to use when ordering the results. */
+                ordering?: string;
+                overdue?: boolean;
+                /**
+                 * @description * `unpaid` - Unpaid
+                 *     * `partial` - Partly paid
+                 *     * `paid` - Paid
+                 */
+                payment_state?: "paid" | "partial" | "unpaid";
+                /**
+                 * @description * `draft` - Draft
+                 *     * `issued` - Issued
+                 *     * `void` - Void
+                 */
+                status?: ("draft" | "issued" | "void")[];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedBillableJobList"];
+                };
+            };
+        };
+    };
+    billing_payments_list: {
+        parameters: {
+            query?: {
+                invoice?: string;
+                /** @description Number of results to return per page. */
+                limit?: number;
+                /**
+                 * @description * `cash` - Cash
+                 *     * `check` - Check
+                 *     * `money_order` - Money order
+                 *     * `zelle` - Zelle
+                 *     * `card` - Card
+                 *     * `other` - Other
+                 */
+                method?: ("card" | "cash" | "check" | "money_order" | "other" | "zelle")[];
+                /** @description The initial index from which to return the results. */
+                offset?: number;
+                /** @description Which field to use when ordering the results. */
+                ordering?: string;
+                received_from?: string;
+                received_to?: string;
+                voided?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedPaymentList"];
+                };
+            };
+        };
+    };
+    billing_payments_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordPaymentRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["RecordPaymentRequest"];
+                "multipart/form-data": components["schemas"]["RecordPaymentRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_payments_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Payment. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+        };
+    };
+    billing_payments_void_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Payment. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ReasonRequest"];
+                "multipart/form-data": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Payment"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

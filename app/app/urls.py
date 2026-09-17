@@ -16,11 +16,11 @@ urlpatterns = [
     path("api/catalog/", include("catalog.urls", namespace="catalog")),
     path("api/audit/", include("audit.urls", namespace="audit")),
     path("api/scheduling/", include("scheduling.urls", namespace="scheduling")),
+    path("api/billing/", include("billing.urls", namespace="billing")),
     # The schema and its browser both sit behind the global IsAuthenticated
     # default -- no AllowAny. See docs/DECISIONS.md ADR-019.
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="docs"),
-    # Phase 4: api/billing/
 ]
 
 # Static and media are served by whitenoise / the storage backend in every

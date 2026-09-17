@@ -119,6 +119,22 @@ def line_description(job: Job) -> str:
     return f"{job.service.name} -- {local_day:%a %-d %b %Y}"
 
 
+def billable_amount_cents(job: Job) -> int:
+    """
+    What this visit will put on an invoice.
+
+    A completed visit bills the price agreed when it was scheduled -- never a
+    re-quote at today's prices (ADR-026). A no-access visit bills the
+    organization's fee, which may be nothing.
+
+    The ready-to-invoice list and `draft_invoice` both read this, so what a
+    dispatcher is shown before pressing the button is what lands on the line.
+    """
+    if job.status == JobStatus.NO_ACCESS:
+        return job.organization.no_access_fee_cents(job.price_cents)
+    return job.price_cents
+
+
 @transaction.atomic
 def draft_invoice(*, customer, jobs, actor=None) -> Invoice:
     """
@@ -183,7 +199,7 @@ def draft_invoice(*, customer, jobs, actor=None) -> Invoice:
             )
             continue
 
-        fee = organization.no_access_fee_cents(job.price_cents)
+        fee = billable_amount_cents(job)
         if fee <= 0:
             # No line at all rather than a $0.00 row explaining that this
             # organization does not charge for a locked door.
@@ -224,7 +240,7 @@ def reprice_line_from_time_worked(line: InvoiceLine) -> InvoiceLine:
     Floors at the service's minimum charge, exactly as `quote_cents` does, so
     a five-minute visit still bills the callout.
     """
-    _assert_draft(line.invoice, "re-price a line on")
+    assert_draft(line.invoice, "re-price a line on")
 
     if line.kind != LineKind.VISIT or line.job_id is None:
         raise ConflictError("Only a visit line can be re-priced from time worked.")
@@ -346,7 +362,8 @@ def is_overdue(invoice: Invoice, *, today: dt.date | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _assert_draft(invoice: Invoice, verb: str) -> None:
+def assert_draft(invoice: Invoice, verb: str) -> None:
+    """Refuse anything that would edit a document already sent (ADR-026)."""
     if invoice.status != InvoiceStatus.DRAFT:
         raise ConflictError(
             f"This invoice is {invoice.get_status_display().lower()}, so you cannot {verb} it. "
@@ -364,7 +381,7 @@ def issue_invoice(invoice: Invoice, *, actor=None, today: dt.date | None = None)
     dispatchers issuing at the same instant get consecutive numbers rather than
     the same one and a unique-constraint error.
     """
-    _assert_draft(invoice, "issue")
+    assert_draft(invoice, "issue")
 
     amounts = totals(invoice)
     if not invoice.lines.exists():

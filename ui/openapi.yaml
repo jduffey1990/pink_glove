@@ -252,6 +252,838 @@ paths:
               schema:
                 $ref: '#/components/schemas/Detail'
           description: ''
+  /api/billing/invoice-lines/:
+    get:
+      operationId: billing_invoice_lines_list
+      description: |-
+        Adjustments on a draft.
+
+        Visit and no-access lines are built by `draft_invoice` from the visit
+        itself and are not writable here; a hand-typed visit line would be a number
+        with no job behind it. Every write is refused once the invoice is issued.
+      parameters:
+      - in: query
+        name: invoice
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: kind
+        schema:
+          type: string
+          enum:
+          - adjustment
+          - no_access_fee
+          - visit
+        description: |-
+          * `visit` - Visit
+          * `no_access_fee` - No-access fee
+          * `adjustment` - Adjustment
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInvoiceLineList'
+          description: ''
+    post:
+      operationId: billing_invoice_lines_create
+      description: |-
+        Adjustments on a draft.
+
+        Visit and no-access lines are built by `draft_invoice` from the visit
+        itself and are not writable here; a hand-typed visit line would be a number
+        with no job behind it. Every write is refused once the invoice is issued.
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvoiceLineRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InvoiceLineRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InvoiceLineRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceLine'
+          description: ''
+  /api/billing/invoice-lines/{id}/:
+    get:
+      operationId: billing_invoice_lines_retrieve
+      description: |-
+        Adjustments on a draft.
+
+        Visit and no-access lines are built by `draft_invoice` from the visit
+        itself and are not writable here; a hand-typed visit line would be a number
+        with no job behind it. Every write is refused once the invoice is issued.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice line.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceLine'
+          description: ''
+    patch:
+      operationId: billing_invoice_lines_partial_update
+      description: |-
+        Adjustments on a draft.
+
+        Visit and no-access lines are built by `draft_invoice` from the visit
+        itself and are not writable here; a hand-typed visit line would be a number
+        with no job behind it. Every write is refused once the invoice is issued.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice line.
+        required: true
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedInvoiceLineRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedInvoiceLineRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedInvoiceLineRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceLine'
+          description: ''
+    delete:
+      operationId: billing_invoice_lines_destroy
+      description: |-
+        Adjustments on a draft.
+
+        Visit and no-access lines are built by `draft_invoice` from the visit
+        itself and are not writable here; a hand-typed visit line would be a number
+        with no job behind it. Every write is refused once the invoice is issued.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice line.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/billing/invoice-lines/{id}/reprice/:
+    post:
+      operationId: billing_invoice_lines_reprice_create
+      description: 'Never automatic: a crew running long is not self-evidently the
+        customer''s bill, so a person decides (ADR-026). Open time entries are ignored,
+        and the line floors at the service''s minimum charge.'
+      summary: Re-price an hourly visit from the hours actually worked
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice line.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceLine'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/invoices/:
+    get:
+      operationId: billing_invoices_list
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      parameters:
+      - in: query
+        name: customer
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: issued_from
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: issued_to
+        schema:
+          type: string
+          format: date
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: overdue
+        schema:
+          type: boolean
+      - in: query
+        name: payment_state
+        schema:
+          type: string
+          enum:
+          - paid
+          - partial
+          - unpaid
+        description: |-
+          * `unpaid` - Unpaid
+          * `partial` - Partly paid
+          * `paid` - Paid
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - draft
+            - issued
+            - void
+        description: |-
+          * `draft` - Draft
+          * `issued` - Issued
+          * `void` - Void
+        explode: true
+        style: form
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInvoiceList'
+          description: ''
+    post:
+      operationId: billing_invoices_create
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      summary: Open a draft invoice over a customer's uninvoiced visits
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DraftInvoiceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/DraftInvoiceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DraftInvoiceRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/invoices/{id}/:
+    get:
+      operationId: billing_invoices_retrieve
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+          description: ''
+    patch:
+      operationId: billing_invoices_partial_update
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice.
+        required: true
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedInvoiceRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedInvoiceRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedInvoiceRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+          description: ''
+    delete:
+      operationId: billing_invoices_destroy
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/billing/invoices/{id}/issue/:
+    post:
+      operationId: billing_invoices_issue_create
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      summary: Number the invoice and freeze what it says
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/invoices/{id}/send/:
+    post:
+      operationId: billing_invoices_send_create
+      description: Queued, not sent inline. `sent_at` is stamped by the worker once
+        the mail is away, so re-read the invoice to see it.
+      summary: Email the invoice to its bill-to address
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/invoices/{id}/void/:
+    post:
+      operationId: billing_invoices_void_create
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      summary: Void an issued invoice, freeing its visits
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Invoice.
+        required: true
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/invoices/billable-jobs/:
+    get:
+      operationId: billing_invoices_billable_jobs_list
+      description: |-
+        Invoices. Dispatcher and above.
+
+        Creation does not take a body of lines: it takes a customer and a list of
+        visits, and `services.draft_invoice` builds the lines from them. That is
+        the only way a line can carry a price nobody typed.
+      summary: Visits that are finished and on no live invoice
+      parameters:
+      - in: query
+        name: customer
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: issued_from
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: issued_to
+        schema:
+          type: string
+          format: date
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: overdue
+        schema:
+          type: boolean
+      - in: query
+        name: payment_state
+        schema:
+          type: string
+          enum:
+          - paid
+          - partial
+          - unpaid
+        description: |-
+          * `unpaid` - Unpaid
+          * `partial` - Partly paid
+          * `paid` - Paid
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - draft
+            - issued
+            - void
+        description: |-
+          * `draft` - Draft
+          * `issued` - Issued
+          * `void` - Void
+        explode: true
+        style: form
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedBillableJobList'
+          description: ''
+  /api/billing/payments/:
+    get:
+      operationId: billing_payments_list
+      description: |-
+        The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+        (ADR-025).
+      parameters:
+      - in: query
+        name: invoice
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: method
+        schema:
+          type: array
+          items:
+            type: string
+            enum:
+            - card
+            - cash
+            - check
+            - money_order
+            - other
+            - zelle
+        description: |-
+          * `cash` - Cash
+          * `check` - Check
+          * `money_order` - Money order
+          * `zelle` - Zelle
+          * `card` - Card
+          * `other` - Other
+        explode: true
+        style: form
+      - name: offset
+        required: false
+        in: query
+        description: The initial index from which to return the results.
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - in: query
+        name: received_from
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: received_to
+        schema:
+          type: string
+          format: date
+      - in: query
+        name: voided
+        schema:
+          type: boolean
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPaymentList'
+          description: ''
+    post:
+      operationId: billing_payments_create
+      description: |-
+        The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+        (ADR-025).
+      summary: Record money received against an invoice
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordPaymentRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RecordPaymentRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RecordPaymentRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/payments/{id}/:
+    get:
+      operationId: billing_payments_retrieve
+      description: |-
+        The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+        (ADR-025).
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Payment.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+          description: ''
+  /api/billing/payments/{id}/void/:
+    post:
+      operationId: billing_payments_void_create
+      description: |-
+        The ledger. Write once, then void with a reason -- no PATCH, no DELETE
+        (ADR-025).
+      summary: Void a payment, giving the reason
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Payment.
+        required: true
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ReasonRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
   /api/catalog/services/:
     get:
       operationId: catalog_services_list
@@ -2668,6 +3500,38 @@ components:
           format: uuid
       required:
       - user
+    BillableJob:
+      type: object
+      description: One row of the ready-to-invoice list, priced as it will bill.
+      properties:
+        id:
+          type: string
+          format: uuid
+        customer:
+          type: string
+          format: uuid
+        customer_name:
+          type: string
+        service_name:
+          type: string
+        description:
+          type: string
+        scheduled_start:
+          type: string
+          format: date-time
+        status:
+          type: string
+        amount_cents:
+          type: integer
+      required:
+      - amount_cents
+      - customer
+      - customer_name
+      - description
+      - id
+      - scheduled_start
+      - service_name
+      - status
     ChallengeIssued:
       type: object
       description: '202 body: a code went out and the client should collect it.'
@@ -2877,6 +3741,261 @@ components:
           type: string
       required:
       - detail
+    DraftInvoiceRequest:
+      type: object
+      description: '`POST /api/billing/invoices/` -- a customer and the visits to
+        bill.'
+      properties:
+        customer:
+          type: string
+          format: uuid
+        jobs:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required:
+      - customer
+      - jobs
+    Invoice:
+      type: object
+      description: |-
+        The dispatcher's view of an invoice.
+
+        `subtotal_cents`, `tax_cents` and `total_cents` are the *stored* snapshot
+        on an issued invoice and a live calculation on a draft, which is what
+        `services.totals` decides -- so a draft shows what issuing it would come
+        to, and an issued invoice shows what the customer was sent.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        customer:
+          type: string
+          format: uuid
+          readOnly: true
+        customer_detail:
+          allOf:
+          - $ref: '#/components/schemas/CustomerSummary'
+          readOnly: true
+        number:
+          type: string
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/InvoiceStatusEnum'
+          readOnly: true
+        issued_on:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+        due_on:
+          type: string
+          format: date
+          readOnly: true
+          nullable: true
+        bill_to_name:
+          type: string
+          readOnly: true
+        bill_to_email:
+          type: string
+          format: email
+          readOnly: true
+        bill_to_address:
+          type: string
+          readOnly: true
+        tax_rate_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,3})?$
+          readOnly: true
+        subtotal_cents:
+          type: integer
+          readOnly: true
+        tax_cents:
+          type: integer
+          readOnly: true
+        total_cents:
+          type: integer
+          readOnly: true
+        notes:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceLine'
+          readOnly: true
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+          readOnly: true
+        payment_state:
+          allOf:
+          - $ref: '#/components/schemas/PaymentStateEnum'
+          readOnly: true
+        balance_cents:
+          type: integer
+          readOnly: true
+        is_overdue:
+          type: boolean
+          readOnly: true
+        available_actions:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        sent_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        voided_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        void_reason:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - available_actions
+      - balance_cents
+      - bill_to_address
+      - bill_to_email
+      - bill_to_name
+      - created_at
+      - customer
+      - customer_detail
+      - due_on
+      - id
+      - is_overdue
+      - issued_on
+      - lines
+      - number
+      - organization
+      - payment_state
+      - payments
+      - sent_at
+      - status
+      - subtotal_cents
+      - tax_cents
+      - tax_rate_percent
+      - total_cents
+      - updated_at
+      - void_reason
+      - voided_at
+    InvoiceLine:
+      type: object
+      description: |-
+        A line. Only an adjustment is writable from scratch: visit and fee lines
+        are built by `draft_invoice` from the visit itself, and a hand-typed
+        "visit" line would be a number with no job behind it.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        invoice:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/KindEnum'
+        job:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        description:
+          type: string
+          maxLength: 255
+        amount_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        is_taxable:
+          type: boolean
+        position:
+          type: integer
+          maximum: 32767
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - amount_cents
+      - created_at
+      - description
+      - id
+      - invoice
+      - job
+      - kind
+      - organization
+      - updated_at
+    InvoiceLineRequest:
+      type: object
+      description: |-
+        A line. Only an adjustment is writable from scratch: visit and fee lines
+        are built by `draft_invoice` from the visit itself, and a hand-typed
+        "visit" line would be a number with no job behind it.
+      properties:
+        invoice:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/KindEnum'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 255
+        amount_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        is_taxable:
+          type: boolean
+        position:
+          type: integer
+          maximum: 32767
+          minimum: 0
+      required:
+      - amount_cents
+      - description
+      - invoice
+      - kind
+    InvoiceStatusEnum:
+      enum:
+      - draft
+      - issued
+      - void
+      type: string
+      description: |-
+        * `draft` - Draft
+        * `issued` - Issued
+        * `void` - Void
     Job:
       type: object
       description: |-
@@ -3206,6 +4325,16 @@ components:
         * `complete` - Complete
         * `cancelled` - Cancelled
         * `no_access` - No access
+    KindEnum:
+      enum:
+      - visit
+      - no_access_fee
+      - adjustment
+      type: string
+      description: |-
+        * `visit` - Visit
+        * `no_access_fee` - No-access fee
+        * `adjustment` - Adjustment
     Liveness:
       type: object
       properties:
@@ -3353,6 +4482,22 @@ components:
       - user
       - user_email
       - user_name
+    MethodEnum:
+      enum:
+      - cash
+      - check
+      - money_order
+      - zelle
+      - card
+      - other
+      type: string
+      description: |-
+        * `cash` - Cash
+        * `check` - Check
+        * `money_order` - Money order
+        * `zelle` - Zelle
+        * `card` - Card
+        * `other` - Other
     NextStatus:
       type: object
       properties:
@@ -3661,6 +4806,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccessReveal'
+    PaginatedBillableJobList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/BillableJob'
     PaginatedCustomerList:
       type: object
       required:
@@ -3684,6 +4852,52 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Customer'
+    PaginatedInvoiceLineList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceLine'
+    PaginatedInvoiceList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Invoice'
     PaginatedJobList:
       type: object
       required:
@@ -3776,6 +4990,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Membership'
+    PaginatedPaymentList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
     PaginatedRecurringPlanList:
       type: object
       required:
@@ -3927,6 +5164,44 @@ components:
           type: string
           description: How they found you.
           maxLength: 255
+        notes:
+          type: string
+    PatchedInvoiceLineRequest:
+      type: object
+      description: |-
+        A line. Only an adjustment is writable from scratch: visit and fee lines
+        are built by `draft_invoice` from the visit itself, and a hand-typed
+        "visit" line would be a number with no job behind it.
+      properties:
+        invoice:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/KindEnum'
+        description:
+          type: string
+          minLength: 1
+          maxLength: 255
+        amount_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: -2147483648
+        is_taxable:
+          type: boolean
+        position:
+          type: integer
+          maximum: 32767
+          minimum: 0
+    PatchedInvoiceRequest:
+      type: object
+      description: |-
+        The dispatcher's view of an invoice.
+
+        `subtotal_cents`, `tax_cents` and `total_cents` are the *stored* snapshot
+        on an issued invoice and a live calculation on a draft, which is what
+        `services.totals` decides -- so a draft shows what issuing it would come
+        to, and an issued invoice shows what the customer was sent.
+      properties:
         notes:
           type: string
     PatchedJobNoteRequest:
@@ -4270,6 +5545,96 @@ components:
           type: string
           format: date-time
           nullable: true
+    Payment:
+      type: object
+      description: |-
+        A payment. Written once and thereafter only voided (ADR-025), so every
+        field but the ones `record_payment` takes is read-only.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          type: string
+          format: uuid
+          readOnly: true
+        invoice:
+          type: string
+          format: uuid
+        method:
+          $ref: '#/components/schemas/MethodEnum'
+        amount_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        tip_cents:
+          type: integer
+          maximum: 2147483647
+          minimum: 0
+        received_on:
+          type: string
+          format: date
+        reference:
+          type: string
+          description: Check number, Zelle confirmation, ...
+          maxLength: 255
+        recorded_by:
+          type: string
+          format: uuid
+          readOnly: true
+          nullable: true
+        recorded_by_name:
+          type: string
+          readOnly: true
+        provider:
+          type: string
+          readOnly: true
+          default: ''
+        provider_reference:
+          type: string
+          readOnly: true
+          default: ''
+        is_void:
+          type: boolean
+          readOnly: true
+        voided_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        void_reason:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - amount_cents
+      - created_at
+      - id
+      - invoice
+      - is_void
+      - method
+      - organization
+      - provider
+      - provider_reference
+      - received_on
+      - recorded_by
+      - recorded_by_name
+      - void_reason
+      - voided_at
+    PaymentStateEnum:
+      enum:
+      - unpaid
+      - partial
+      - paid
+      type: string
+      description: |-
+        * `unpaid` - Unpaid
+        * `partial` - Partly paid
+        * `paid` - Paid
     PreferredContactMethodEnum:
       enum:
       - email
@@ -4348,6 +5713,44 @@ components:
       description: |-
         * `ok` - ok
         * `degraded` - degraded
+    ReasonRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 255
+      required:
+      - reason
+    RecordPaymentRequest:
+      type: object
+      description: '`POST /api/billing/payments/` -- everything a person types on
+        a receipt.'
+      properties:
+        invoice:
+          type: string
+          format: uuid
+        method:
+          $ref: '#/components/schemas/MethodEnum'
+        amount_cents:
+          type: integer
+          minimum: 1
+        tip_cents:
+          type: integer
+          minimum: 0
+          default: 0
+        received_on:
+          type: string
+          format: date
+        reference:
+          type: string
+          default: ''
+          maxLength: 255
+      required:
+      - amount_cents
+      - invoice
+      - method
+      - received_on
     RecurringPlan:
       type: object
       description: |-
