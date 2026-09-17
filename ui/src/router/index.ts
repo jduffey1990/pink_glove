@@ -86,6 +86,24 @@ const routes: RouteRecordRaw[] = [
     meta: { access: 'staff', title: 'Services' },
   },
   {
+    path: '/billing',
+    name: 'billing',
+    component: () => import('@/pages/BillingPage.vue'),
+    meta: { access: 'dispatcher', title: 'Billing' },
+  },
+  {
+    path: '/billing/settings',
+    name: 'billing-settings',
+    component: () => import('@/pages/BillingSettingsPage.vue'),
+    meta: { access: 'dispatcher', title: 'Billing settings' },
+  },
+  {
+    path: '/invoices/:id',
+    name: 'invoice',
+    component: () => import('@/pages/InvoiceDetailPage.vue'),
+    meta: { access: 'dispatcher', title: 'Invoice' },
+  },
+  {
     path: '/plans',
     name: 'plans',
     component: () => import('@/pages/PlansPage.vue'),

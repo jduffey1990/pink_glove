@@ -221,6 +221,10 @@ SPECTACULAR_SETTINGS = {
         "JobStatusEnum": "scheduling.enums.JobStatus.choices",
         "CustomerStatusEnum": "customers.enums.CustomerStatus.choices",
         "InvoiceStatusEnum": "billing.enums.InvoiceStatus.choices",
+        # Left alone these generate as "MethodEnum" and "KindEnum" -- generic
+        # enough that the frontend would have to guess what they belong to.
+        "PaymentMethodEnum": "billing.enums.PaymentMethod.choices",
+        "LineKindEnum": "billing.enums.LineKind.choices",
     },
 }
 

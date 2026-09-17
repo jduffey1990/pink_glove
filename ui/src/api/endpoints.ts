@@ -8,8 +8,14 @@
 
 import type {
   AccessWarning,
+  BillableJob,
   Customer,
   CustomerRequest,
+  Invoice,
+  InvoiceLine,
+  InvoiceLineRequest,
+  InvoiceRequest,
+  InvoiceStatus,
   Job,
   JobNote,
   JobPhoto,
@@ -18,8 +24,13 @@ import type {
   MaterializeResult,
   Membership,
   Organization,
+  OrganizationRequest,
   Paginated,
+  PatchedInvoiceLineRequest,
+  Payment,
+  PaymentState,
   PlanPreview,
+  RecordPaymentRequest,
   RecurringPlan,
   RecurringPlanRequest,
   RegenerateResult,
@@ -358,4 +369,129 @@ export async function listAssignableStaff (): Promise<{ id: string, label: strin
       id: m.user,
       label: `${m.user_name || m.user_email} (${m.role})`,
     }))
+}
+
+// --- billing ---------------------------------------------------------------
+
+export interface InvoiceQuery {
+  customer?: string
+  status?: InvoiceStatus[]
+  payment_state?: PaymentState
+  overdue?: boolean
+  /** Organization-local dates, as `issued_on` already is on the row. */
+  issued_from?: string
+  issued_to?: string
+  ordering?: string
+  limit?: number
+  offset?: number
+}
+
+export async function listInvoices (query: InvoiceQuery = {}): Promise<Paginated<Invoice>> {
+  const { data } = await api.get<Paginated<Invoice>>('/api/billing/invoices/', {
+    params: query,
+    paramsSerializer: { indexes: null },
+  })
+  return data
+}
+
+export async function getInvoice (id: string): Promise<Invoice> {
+  const { data } = await api.get<Invoice>(`/api/billing/invoices/${id}/`)
+  return data
+}
+
+/**
+ * Visits that are finished and on no live invoice.
+ *
+ * `amount_cents` is what each one will bill -- the price agreed when it was
+ * scheduled, or the no-access fee. The server works it out so that what the
+ * dispatcher is shown before pressing the button is what lands on the line.
+ */
+export async function listBillableJobs (customerId?: string): Promise<BillableJob[]> {
+  const { data } = await api.get<BillableJob[]>('/api/billing/invoices/billable-jobs/', {
+    params: customerId ? { customer: customerId } : {},
+  })
+  return data
+}
+
+/** Open a draft over a customer's visits. The server builds the lines. */
+export async function draftInvoice (customerId: string, jobIds: string[]): Promise<Invoice> {
+  const { data } = await api.post<Invoice>('/api/billing/invoices/', {
+    customer: customerId,
+    jobs: jobIds,
+  })
+  return data
+}
+
+export async function updateInvoice (id: string, payload: InvoiceRequest): Promise<Invoice> {
+  const { data } = await api.patch<Invoice>(`/api/billing/invoices/${id}/`, payload)
+  return data
+}
+
+export async function deleteInvoice (id: string): Promise<void> {
+  await api.delete(`/api/billing/invoices/${id}/`)
+}
+
+export async function issueInvoice (id: string): Promise<Invoice> {
+  const { data } = await api.post<Invoice>(`/api/billing/invoices/${id}/issue/`)
+  return data
+}
+
+export async function voidInvoice (id: string, reason: string): Promise<Invoice> {
+  const { data } = await api.post<Invoice>(`/api/billing/invoices/${id}/void/`, { reason })
+  return data
+}
+
+/** Queue the invoice email. 202, not 200 -- a worker does the sending. */
+export async function sendInvoice (id: string): Promise<Invoice> {
+  const { data } = await api.post<Invoice>(`/api/billing/invoices/${id}/send/`)
+  return data
+}
+
+export async function addInvoiceLine (payload: InvoiceLineRequest): Promise<InvoiceLine> {
+  const { data } = await api.post<InvoiceLine>('/api/billing/invoice-lines/', payload)
+  return data
+}
+
+export async function updateInvoiceLine (
+  id: string,
+  payload: PatchedInvoiceLineRequest,
+): Promise<InvoiceLine> {
+  const { data } = await api.patch<InvoiceLine>(`/api/billing/invoice-lines/${id}/`, payload)
+  return data
+}
+
+export async function deleteInvoiceLine (id: string): Promise<void> {
+  await api.delete(`/api/billing/invoice-lines/${id}/`)
+}
+
+/** Re-price an hourly visit from the hours actually worked. Never automatic. */
+export async function repriceInvoiceLine (id: string): Promise<InvoiceLine> {
+  const { data } = await api.post<InvoiceLine>(`/api/billing/invoice-lines/${id}/reprice/`)
+  return data
+}
+
+export async function listPayments (
+  query: { invoice?: string, method?: string[], received_from?: string, received_to?: string } = {},
+): Promise<Paginated<Payment>> {
+  const { data } = await api.get<Paginated<Payment>>('/api/billing/payments/', {
+    params: query,
+    paramsSerializer: { indexes: null },
+  })
+  return data
+}
+
+export async function recordPayment (payload: RecordPaymentRequest): Promise<Payment> {
+  const { data } = await api.post<Payment>('/api/billing/payments/', payload)
+  return data
+}
+
+/** Void a payment. The row stays and the balance comes back (ADR-025). */
+export async function voidPayment (id: string, reason: string): Promise<Payment> {
+  const { data } = await api.post<Payment>(`/api/billing/payments/${id}/void/`, { reason })
+  return data
+}
+
+export async function updateOrganization (payload: OrganizationRequest): Promise<Organization> {
+  const { data } = await api.patch<Organization>('/api/organizations/current/', payload)
+  return data
 }

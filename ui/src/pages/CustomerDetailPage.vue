@@ -7,20 +7,24 @@
    * "codes on file" indicator comes from `has_access_codes`, which is exactly
    * what that field exists for.
    */
-  import type { Customer, ServiceLocation, ServiceLocationRequest } from '@/api/types'
+  import type { Customer, Invoice, ServiceLocation, ServiceLocationRequest } from '@/api/types'
   import { computed, ref, watch } from 'vue'
   import { useRoute } from 'vue-router'
   import {
     createLocation,
     getCustomer,
+    listInvoices,
     listLocations,
     updateCustomer,
     updateLocation,
   } from '@/api/endpoints'
+  import InvoiceStatusChip from '@/components/InvoiceStatusChip.vue'
   import RevealCodesDialog from '@/components/RevealCodesDialog.vue'
-  import { statusOf } from '@/stores/session'
+  import { formatCents } from '@/lib/money'
+  import { statusOf, useSessionStore } from '@/stores/session'
 
   const route = useRoute()
+  const session = useSessionStore()
   const customerId = computed(() => route.params.id as string)
 
   const customer = ref<Customer | null>(null)
@@ -40,6 +44,8 @@
   const revealOpen = ref(false)
   const revealLocationId = ref<string | null>(null)
 
+  const invoices = ref<Invoice[]>([])
+
   async function load () {
     loading.value = true
     error.value = ''
@@ -47,6 +53,13 @@
     try {
       customer.value = await getCustomer(customerId.value)
       locations.value = (await listLocations({ customer: customerId.value })).results
+
+      // Dispatchers and above only. A cleaner can reach a customer page but
+      // gets a 403 from billing, and an error card there would be noise about
+      // a rule working correctly.
+      invoices.value = session.isDispatcherOrHigher
+        ? (await listInvoices({ customer: customerId.value, limit: 20 })).results
+        : []
     } catch (error_) {
       error.value = statusOf(error_) === 404
         ? 'That customer does not exist, or belongs to another organization.'
@@ -226,6 +239,55 @@
           </v-list-item>
 
           <v-list-item v-if="locations.length === 0" title="No locations yet" />
+        </v-list>
+      </v-card>
+
+      <v-card v-if="session.isDispatcherOrHigher" border class="mt-4" flat>
+        <v-card-item>
+          <v-card-title class="text-subtitle-1">Invoices</v-card-title>
+
+          <template #append>
+            <v-btn size="small" :to="{ name: 'billing' }" variant="text">Billing</v-btn>
+          </template>
+        </v-card-item>
+
+        <v-list>
+          <v-list-item
+            v-for="invoice in invoices"
+            :key="invoice.id"
+            :to="{ name: 'invoice', params: { id: invoice.id } }"
+          >
+            <v-list-item-title>{{ invoice.number || 'Draft' }}</v-list-item-title>
+
+            <v-list-item-subtitle>
+              <template v-if="invoice.issued_on">
+                Issued {{ invoice.issued_on }} · due {{ invoice.due_on }}
+              </template>
+
+              <template v-else>Not yet issued</template>
+            </v-list-item-subtitle>
+
+            <template #append>
+              <div class="d-flex align-center ga-2">
+                <v-chip
+                  v-if="invoice.is_overdue"
+                  color="error"
+                  size="x-small"
+                  variant="tonal"
+                >
+                  Overdue
+                </v-chip>
+
+                <InvoiceStatusChip :invoice="invoice" />
+
+                <span class="text-body-2 text-no-wrap">
+                  {{ formatCents(invoice.total_cents) }}
+                </span>
+              </div>
+            </template>
+          </v-list-item>
+
+          <v-list-item v-if="invoices.length === 0" title="Nothing billed yet" />
         </v-list>
       </v-card>
 

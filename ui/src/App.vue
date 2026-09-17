@@ -33,6 +33,7 @@
         { title: 'My day', icon: 'mdi-clipboard-check-outline', to: '/my-day' },
         { title: 'Customers', icon: 'mdi-account-group-outline', to: '/customers' },
         { title: 'Recurring plans', icon: 'mdi-repeat', to: '/plans' },
+        { title: 'Billing', icon: 'mdi-receipt-text-outline', to: '/billing' },
         { title: 'Services', icon: 'mdi-tag-outline', to: '/services' },
       )
     } else if (session.isCleaner) {

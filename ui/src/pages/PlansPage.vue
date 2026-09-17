@@ -22,7 +22,8 @@
     previewPlan,
     updatePlan,
   } from '@/api/endpoints'
-  import { formatCents, formatDateTime, todayIn } from '@/lib/datetime'
+  import { formatDateTime, todayIn } from '@/lib/datetime'
+  import { formatCents } from '@/lib/money'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()

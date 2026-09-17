@@ -29,8 +29,9 @@
   import { bodyOf, errorDetail } from '@/api/errors'
   import JobStatusChip from '@/components/JobStatusChip.vue'
   import RevealCodesDialog from '@/components/RevealCodesDialog.vue'
-  import { formatCents, formatDateTime, formatDuration } from '@/lib/datetime'
+  import { formatDateTime, formatDuration } from '@/lib/datetime'
   import { statusLabel } from '@/lib/jobStatus'
+  import { formatCents } from '@/lib/money'
   import { statusOf, useSessionStore } from '@/stores/session'
 
   const route = useRoute()

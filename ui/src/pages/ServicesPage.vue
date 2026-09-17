@@ -3,13 +3,19 @@
    * The menu. Staff read it; admins and owners change it.
    *
    * Prices are integer cents everywhere (CLAUDE.md invariant 5). The inputs
-   * take dollars because nobody types cents, and convert on the way in and
-   * out -- the conversion happens here and nowhere else.
+   * take dollars because nobody types cents; `lib/money` does the conversion,
+   * in the one place with a spec covering the float that bit in Phase 3b.
    */
   import type { Service } from '@/api/types'
   import { ref } from 'vue'
   import { createService, listServices, updateService } from '@/api/endpoints'
-  import { formatCents } from '@/lib/datetime'
+  import { errorDetail } from '@/api/errors'
+  import {
+    centsToDollars,
+    dollarsToCents,
+    dollarsToRateString,
+    formatCents,
+  } from '@/lib/money'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -33,6 +39,7 @@
     per_sqft_rate: 0,
     default_duration_minutes: 120,
     is_active: true,
+    is_taxable: false,
   })
 
   const canEdit = session.role === 'owner' || session.role === 'admin'
@@ -66,11 +73,12 @@
         name: service.name,
         description: service.description ?? '',
         pricing_model: service.pricing_model,
-        base_price: (service.base_price_cents ?? 0) / 100,
-        hourly_rate: Number(service.hourly_rate_cents ?? 0) / 100,
-        per_sqft_rate: Number(service.per_sqft_rate_cents ?? 0) / 100,
+        base_price: centsToDollars(service.base_price_cents),
+        hourly_rate: centsToDollars(Number(service.hourly_rate_cents ?? 0)),
+        per_sqft_rate: centsToDollars(Number(service.per_sqft_rate_cents ?? 0)),
         default_duration_minutes: service.default_duration_minutes ?? 120,
         is_active: service.is_active ?? true,
+        is_taxable: service.is_taxable ?? false,
       }
       : {
         name: '',
@@ -81,6 +89,7 @@
         per_sqft_rate: 0,
         default_duration_minutes: 120,
         is_active: true,
+        is_taxable: false,
       }
     dialog.value = true
   }
@@ -93,14 +102,13 @@
       name: draft.value.name,
       description: draft.value.description,
       pricing_model: draft.value.pricing_model,
-      // Rounded on the way in: a price is whole cents, and 0.1 + 0.2 is not.
-      base_price_cents: Math.round(draft.value.base_price * 100),
-      hourly_rate_cents: String(Math.round(draft.value.hourly_rate * 100)),
-      // A rate keeps fractions of a cent (ADR-009), to the three places the API
-      // stores. Unrounded, $0.07 goes out as 7.000000000000001 and is refused.
-      per_sqft_rate_cents: (draft.value.per_sqft_rate * 100).toFixed(3),
+      base_price_cents: dollarsToCents(draft.value.base_price),
+      // A rate keeps fractions of a cent (ADR-009); an amount does not.
+      hourly_rate_cents: dollarsToRateString(draft.value.hourly_rate, 2),
+      per_sqft_rate_cents: dollarsToRateString(draft.value.per_sqft_rate, 3),
       default_duration_minutes: draft.value.default_duration_minutes,
       is_active: draft.value.is_active,
+      is_taxable: draft.value.is_taxable,
     }
 
     try {
@@ -110,10 +118,7 @@
       dialog.value = false
       await load()
     } catch (error_) {
-      const data = (error_ as { response?: { data?: Record<string, unknown> } }).response?.data
-      formError.value = typeof data === 'object' && data !== null
-        ? Object.entries(data).map(([key, value]) => `${key}: ${String(value)}`).join(' ')
-        : 'Could not save that service.'
+      formError.value = errorDetail(error_) ?? 'Could not save that service.'
     } finally {
       saving.value = false
     }
@@ -156,6 +161,15 @@
           <template #append>
             <v-chip class="mr-2" size="x-small" variant="tonal">
               {{ service.default_duration_minutes }} min
+            </v-chip>
+
+            <v-chip
+              v-if="service.is_taxable"
+              class="mr-2"
+              size="x-small"
+              variant="tonal"
+            >
+              Taxable
             </v-chip>
 
             <v-chip
@@ -250,7 +264,18 @@
           />
 
           <v-switch
+            v-model="draft.is_taxable"
+            color="primary"
+            density="compact"
+            hide-details
+            hint="Sales tax is one rate per organization; this says where it applies."
+            label="Taxable"
+            persistent-hint
+          />
+
+          <v-switch
             v-model="draft.is_active"
+            class="mt-3"
             color="primary"
             density="compact"
             hide-details

@@ -14,7 +14,6 @@
   import JobStatusChip from '@/components/JobStatusChip.vue'
   import {
     addDays,
-    formatCents,
     formatDayLabel,
     formatTime,
     todayIn,
@@ -22,6 +21,7 @@
     weekOf,
   } from '@/lib/datetime'
   import { JOB_STATUS_OPTIONS } from '@/lib/jobStatus'
+  import { formatCents } from '@/lib/money'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()

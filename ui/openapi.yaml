@@ -3918,7 +3918,7 @@ components:
           type: string
           format: uuid
         kind:
-          $ref: '#/components/schemas/KindEnum'
+          $ref: '#/components/schemas/LineKindEnum'
         job:
           type: string
           format: uuid
@@ -3966,7 +3966,7 @@ components:
           type: string
           format: uuid
         kind:
-          $ref: '#/components/schemas/KindEnum'
+          $ref: '#/components/schemas/LineKindEnum'
         description:
           type: string
           minLength: 1
@@ -4325,7 +4325,7 @@ components:
         * `complete` - Complete
         * `cancelled` - Cancelled
         * `no_access` - No access
-    KindEnum:
+    LineKindEnum:
       enum:
       - visit
       - no_access_fee
@@ -4482,22 +4482,6 @@ components:
       - user
       - user_email
       - user_name
-    MethodEnum:
-      enum:
-      - cash
-      - check
-      - money_order
-      - zelle
-      - card
-      - other
-      type: string
-      description: |-
-        * `cash` - Cash
-        * `check` - Check
-        * `money_order` - Money order
-        * `zelle` - Zelle
-        * `card` - Card
-        * `other` - Other
     NextStatus:
       type: object
       properties:
@@ -5177,7 +5161,7 @@ components:
           type: string
           format: uuid
         kind:
-          $ref: '#/components/schemas/KindEnum'
+          $ref: '#/components/schemas/LineKindEnum'
         description:
           type: string
           minLength: 1
@@ -5563,7 +5547,7 @@ components:
           type: string
           format: uuid
         method:
-          $ref: '#/components/schemas/MethodEnum'
+          $ref: '#/components/schemas/PaymentMethodEnum'
         amount_cents:
           type: integer
           maximum: 2147483647
@@ -5625,6 +5609,22 @@ components:
       - recorded_by_name
       - void_reason
       - voided_at
+    PaymentMethodEnum:
+      enum:
+      - cash
+      - check
+      - money_order
+      - zelle
+      - card
+      - other
+      type: string
+      description: |-
+        * `cash` - Cash
+        * `check` - Check
+        * `money_order` - Money order
+        * `zelle` - Zelle
+        * `card` - Card
+        * `other` - Other
     PaymentStateEnum:
       enum:
       - unpaid
@@ -5731,7 +5731,7 @@ components:
           type: string
           format: uuid
         method:
-          $ref: '#/components/schemas/MethodEnum'
+          $ref: '#/components/schemas/PaymentMethodEnum'
         amount_cents:
           type: integer
           minimum: 1

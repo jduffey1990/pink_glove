@@ -31,6 +31,31 @@ export type MaterializeResult = Schemas['MaterializeResponse']
 export type AccessWarning = Schemas['AccessWarning']
 export type RevealedCodes = Schemas['RevealedCodes']
 
+export type Invoice = Schemas['Invoice']
+export type InvoiceLine = Schemas['InvoiceLine']
+export type InvoiceStatus = Schemas['InvoiceStatusEnum']
+export type LineKind = Schemas['LineKindEnum']
+export type Payment = Schemas['Payment']
+export type PaymentMethod = Schemas['PaymentMethodEnum']
+export type PaymentState = Schemas['PaymentStateEnum']
+export type BillableJob = Schemas['BillableJob']
+
+/**
+ * What the server says this invoice will accept right now.
+ *
+ * A string union rather than an enum on the wire: `available_actions` is a
+ * list of action names, and the server is the only place they are decided
+ * (ADR-023). Narrowed here so a page cannot check for an action that does not
+ * exist.
+ */
+export type InvoiceAction
+  = | 'edit'
+    | 'delete'
+    | 'issue'
+    | 'void'
+    | 'send'
+    | 'record_payment'
+
 export type Customer = Schemas['Customer']
 export type ServiceLocation = Schemas['ServiceLocation']
 export type Service = Schemas['Service']
@@ -49,6 +74,11 @@ export type ServiceLocationRequest = Schemas['PatchedServiceLocationRequest']
 export type CustomerRequest = Schemas['PatchedCustomerRequest']
 export type ServiceRequest = Schemas['PatchedServiceRequest']
 export type JobRequest = Schemas['PatchedJobRequest']
+export type InvoiceRequest = Schemas['PatchedInvoiceRequest']
+export type InvoiceLineRequest = Schemas['InvoiceLineRequest']
+export type PatchedInvoiceLineRequest = Schemas['PatchedInvoiceLineRequest']
+export type RecordPaymentRequest = Schemas['RecordPaymentRequest']
+export type OrganizationRequest = Schemas['PatchedOrganizationRequest']
 export type RecurringPlanRequest = Schemas['PatchedRecurringPlanRequest']
 
 export type LocationSummary = Schemas['LocationSummary']

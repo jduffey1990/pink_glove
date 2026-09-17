@@ -10,7 +10,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   addDays,
-  formatCents,
   formatDuration,
   formatTime,
   isoWeekdayOfDate,
@@ -124,18 +123,5 @@ describe('formatDuration', () => {
     [150, '2 h 30 m'],
   ])('%s -> %s', (minutes, expected) => {
     expect(formatDuration(minutes)).toBe(expected)
-  })
-})
-
-describe('formatCents', () => {
-  it('renders integer cents as money', () => {
-    expect(formatCents(15_000)).toBe('$150.00')
-    expect(formatCents(1)).toBe('$0.01')
-    expect(formatCents(0)).toBe('$0.00')
-  })
-
-  it('renders a missing price as a dash rather than zero', () => {
-    expect(formatCents(null)).toBe('—')
-    expect(formatCents(undefined)).toBe('—')
   })
 })

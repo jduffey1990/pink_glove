@@ -128,12 +128,3 @@ export function formatDuration (minutes: number | null): string {
   }
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} m`
 }
-
-/** Integer cents as money. Money is cents everywhere (CLAUDE.md invariant 5). */
-export function formatCents (cents: number | null | undefined): string {
-  if (cents === null || cents === undefined) {
-    return '—'
-  }
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
-    .format(cents / 100)
-}

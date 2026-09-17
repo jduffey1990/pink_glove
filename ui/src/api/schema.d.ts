@@ -1592,7 +1592,7 @@ export interface components {
             readonly organization: string;
             /** Format: uuid */
             invoice: string;
-            kind: components["schemas"]["KindEnum"];
+            kind: components["schemas"]["LineKindEnum"];
             /** Format: uuid */
             readonly job: string | null;
             description: string;
@@ -1612,7 +1612,7 @@ export interface components {
         InvoiceLineRequest: {
             /** Format: uuid */
             invoice: string;
-            kind: components["schemas"]["KindEnum"];
+            kind: components["schemas"]["LineKindEnum"];
             description: string;
             amount_cents: number;
             is_taxable?: boolean;
@@ -1791,7 +1791,7 @@ export interface components {
          *     * `adjustment` - Adjustment
          * @enum {string}
          */
-        KindEnum: "visit" | "no_access_fee" | "adjustment";
+        LineKindEnum: "visit" | "no_access_fee" | "adjustment";
         Liveness: {
             status: string;
         };
@@ -1859,16 +1859,6 @@ export interface components {
             readonly role: components["schemas"]["RoleEnum"];
             readonly is_active: boolean;
         };
-        /**
-         * @description * `cash` - Cash
-         *     * `check` - Check
-         *     * `money_order` - Money order
-         *     * `zelle` - Zelle
-         *     * `card` - Card
-         *     * `other` - Other
-         * @enum {string}
-         */
-        MethodEnum: "cash" | "check" | "money_order" | "zelle" | "card" | "other";
         NextStatus: {
             status: components["schemas"]["JobStatusEnum"];
             reason_required: boolean;
@@ -2246,7 +2236,7 @@ export interface components {
         PatchedInvoiceLineRequest: {
             /** Format: uuid */
             invoice?: string;
-            kind?: components["schemas"]["KindEnum"];
+            kind?: components["schemas"]["LineKindEnum"];
             description?: string;
             amount_cents?: number;
             is_taxable?: boolean;
@@ -2475,7 +2465,7 @@ export interface components {
             readonly organization: string;
             /** Format: uuid */
             invoice: string;
-            method: components["schemas"]["MethodEnum"];
+            method: components["schemas"]["PaymentMethodEnum"];
             amount_cents: number;
             tip_cents?: number;
             /** Format: date */
@@ -2496,6 +2486,16 @@ export interface components {
             /** Format: date-time */
             readonly created_at: string;
         };
+        /**
+         * @description * `cash` - Cash
+         *     * `check` - Check
+         *     * `money_order` - Money order
+         *     * `zelle` - Zelle
+         *     * `card` - Card
+         *     * `other` - Other
+         * @enum {string}
+         */
+        PaymentMethodEnum: "cash" | "check" | "money_order" | "zelle" | "card" | "other";
         /**
          * @description * `unpaid` - Unpaid
          *     * `partial` - Partly paid
@@ -2553,7 +2553,7 @@ export interface components {
         RecordPaymentRequest: {
             /** Format: uuid */
             invoice: string;
-            method: components["schemas"]["MethodEnum"];
+            method: components["schemas"]["PaymentMethodEnum"];
             amount_cents: number;
             /** @default 0 */
             tip_cents: number;
