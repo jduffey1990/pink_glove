@@ -19,7 +19,7 @@ describe('job status presentation', () => {
 })
 
 describe('canMoveTo', () => {
-  it("answers from the server's list, not from the current status", () => {
+  it('answers from the server\'s list, not from the current status', () => {
     // A cleaner on a scheduled job: the machine allows cancelling, the server
     // does not offer it to them, so neither does the page.
     const job = {
