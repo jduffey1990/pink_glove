@@ -55,22 +55,19 @@ def evaluate_access_reveals(organization_id: str, local_date: str | None = None)
         logger.warning("evaluate_access_reveals: no active organization %s", organization_id)
         return {"evaluated": 0, "flagged": 0}
 
-    tz = organization.tz
     reveals = AccessReveal.objects.filter(organization=organization).select_related(
         "job", "organization"
     )
 
     if local_date:
         target = dt.date.fromisoformat(local_date)
-        day_start = dt.datetime.combine(target, dt.time.min, tzinfo=tz)
-        day_end = dt.datetime.combine(target, dt.time.max, tzinfo=tz)
-        reveals = reveals.filter(created_at__gte=day_start, created_at__lte=day_end)
+        day_start, day_end = organization.local_day_bounds(target, target)
+        reveals = reveals.filter(created_at__gte=day_start, created_at__lt=day_end)
     else:
         # Only days that are over locally. A reveal made at 23:30 local is not
         # judged until the next local day, even though in UTC it may already
         # look like yesterday.
-        today_local = timezone.now().astimezone(tz).date()
-        cutoff = dt.datetime.combine(today_local, dt.time.min, tzinfo=tz)
+        cutoff, _ = organization.local_day_bounds(organization.today())
         reveals = reveals.filter(evaluated_at__isnull=True, created_at__lt=cutoff)
 
     evaluated = flagged = 0

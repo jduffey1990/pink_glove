@@ -13,6 +13,7 @@ import datetime as dt
 from django.db import models, transaction
 from django.utils import timezone
 
+from app.exceptions import ConflictError
 from scheduling.enums import ALLOWED_TRANSITIONS, REASON_REQUIRED_STATUSES, JobStatus
 from scheduling.models import Job, JobAssignment, RecurringPlan, TimeEntry
 
@@ -23,8 +24,14 @@ MATERIALIZATION_HORIZON = dt.timedelta(days=56)
 
 
 def organization_today(organization) -> dt.date:
-    """The organization's current local date, which is the one it schedules by."""
-    return timezone.now().astimezone(organization.tz).date()
+    """
+    The organization's current local date, which is the one it schedules by.
+
+    Kept as a module-level alias because the recurrence code reads better with
+    it; the rule itself lives on `Organization` so billing and the audit pass
+    reckon "today" the same way.
+    """
+    return organization.today()
 
 
 def expand_occurrences(
@@ -261,24 +268,10 @@ def regenerate_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> dic
 # Job actions
 # ---------------------------------------------------------------------------
 # These raise Django's ValidationError for "you gave me bad input" (rendered as
-# a 400 by app.exceptions, ADR-015) and ConflictError for "the record is not in
-# a state where that makes sense" (409). The distinction matters to the
+# a 400 by app.exceptions, ADR-015) and `app.exceptions.ConflictError` for "the
+# record is not in a state where that makes sense" (409). Both are rendered by
+# the handler, so no view catches either. The distinction matters to the
 # frontend: a 400 means fix the payload, a 409 means re-read the job.
-
-
-class ConflictError(Exception):
-    """
-    The request was well-formed but conflicts with the record's current state.
-
-    Carries an optional `payload` merged into the response body -- the status
-    action uses it to return the allowed next states, so a client that guessed
-    wrong can render the right buttons without a second round trip.
-    """
-
-    def __init__(self, detail: str, payload: dict | None = None):
-        super().__init__(detail)
-        self.detail = detail
-        self.payload = payload or {}
 
 
 def assert_can_be_assigned(*, user, organization) -> None:

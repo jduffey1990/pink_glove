@@ -8,8 +8,6 @@ reckons it. A job at 23:30 on the 14th in Denver is the 15th in UTC, and it
 still belongs under the 14th.
 """
 
-import datetime as dt
-
 from django_filters import rest_framework as filters
 from rest_framework.exceptions import ValidationError
 
@@ -20,21 +18,6 @@ from scheduling.models import Job, TimeEntry, assigned_to
 #: most a month; an unbounded range over a busy tenant is a slow query nobody
 #: asked for.
 MAX_RANGE_DAYS = 62
-
-
-def _local_day_bounds(organization, date_from, date_to):
-    """The UTC half-open interval covering [date_from, date_to] locally."""
-    tz = organization.tz
-    start = end = None
-
-    if date_from:
-        start = dt.datetime.combine(date_from, dt.time.min, tzinfo=tz)
-    if date_to:
-        # Exclusive upper bound on the following midnight, which is cleaner
-        # than time.max and does not lose the final microsecond of the day.
-        end = dt.datetime.combine(date_to + dt.timedelta(days=1), dt.time.min, tzinfo=tz)
-
-    return start, end
 
 
 class JobFilterSet(filters.FilterSet):
@@ -82,8 +65,7 @@ class JobFilterSet(filters.FilterSet):
                     }
                 )
 
-        organization = self.request.organization
-        start, end = _local_day_bounds(organization, date_from, date_to)
+        start, end = self.request.organization.local_day_bounds(date_from, date_to)
 
         if start is not None:
             queryset = queryset.filter(scheduled_start__gte=start)
@@ -109,7 +91,7 @@ class TimeEntryFilterSet(filters.FilterSet):
 
         date_from = self.form.cleaned_data.get("date_from")
         date_to = self.form.cleaned_data.get("date_to")
-        start, end = _local_day_bounds(self.request.organization, date_from, date_to)
+        start, end = self.request.organization.local_day_bounds(date_from, date_to)
 
         if start is not None:
             queryset = queryset.filter(clock_in__gte=start)

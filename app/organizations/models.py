@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo, available_timezones
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
 from django.utils.text import slugify
 
 from base.models import Base
@@ -117,6 +118,36 @@ class Organization(Base):
     @property
     def tz(self) -> ZoneInfo:
         return ZoneInfo(self.timezone)
+
+    def today(self) -> dt.date:
+        """
+        This organization's current local date.
+
+        The one date the business reckons by: what the schedule calls today,
+        and what an invoice is issued on. `timezone.now().date()` is UTC's
+        answer, which is tomorrow's for a Denver tenant after 5pm.
+        """
+        return timezone.now().astimezone(self.tz).date()
+
+    def local_day_bounds(
+        self, date_from: dt.date | None = None, date_to: dt.date | None = None
+    ) -> tuple[dt.datetime | None, dt.datetime | None]:
+        """
+        The UTC interval covering [date_from, date_to] as *this* organization
+        reckons those days. Either end may be None, and comes back None.
+
+        Half-open: `start <= x < end`, with `end` at the midnight following
+        `date_to`. Cleaner than `time.max`, and it does not lose the last
+        microsecond of the day. Callers filter with `__gte` and `__lt`.
+        """
+        start = end = None
+
+        if date_from is not None:
+            start = dt.datetime.combine(date_from, dt.time.min, tzinfo=self.tz)
+        if date_to is not None:
+            end = dt.datetime.combine(date_to + dt.timedelta(days=1), dt.time.min, tzinfo=self.tz)
+
+        return start, end
 
     def is_within_business_hours(self, when: dt.datetime) -> bool:
         """

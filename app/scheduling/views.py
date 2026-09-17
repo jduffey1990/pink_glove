@@ -13,15 +13,15 @@ resolved tenant and never from request data.
 import datetime as dt
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
-from rest_framework import filters, status
+from rest_framework import filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from app.exceptions import ConflictError
 from base.permissions import IsDispatcherOrHigher, IsOrgMember, IsStaff
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
@@ -42,7 +42,6 @@ from scheduling.serializers import (
     TimeEntrySerializer,
 )
 from scheduling.services import (
-    ConflictError,
     assign_user,
     clock_in,
     clock_out,
@@ -69,10 +68,6 @@ REGENERATING_FIELDS = frozenset(
         "is_active",
     }
 )
-
-
-def _conflict(exc: ConflictError) -> Response:
-    return Response({"detail": exc.detail, **exc.payload}, status=status.HTTP_409_CONFLICT)
 
 
 class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
@@ -147,8 +142,7 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
             count = 6
 
         tz = plan.organization.tz
-        today = timezone.now().astimezone(tz).date()
-        window_start = max(today, plan.starts_on)
+        window_start = max(plan.organization.today(), plan.starts_on)
 
         # Widen the window until enough occurrences turn up or a year is spent:
         # a monthly rule needs a much longer reach than a weekly one.
@@ -285,12 +279,6 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
             )
         instance.delete()
 
-    def destroy(self, request, *args, **kwargs):
-        try:
-            return super().destroy(request, *args, **kwargs)
-        except ConflictError as exc:
-            return _conflict(exc)
-
     @extend_schema(
         request=AssignSerializer,
         responses={200: JobSerializer, 400: DetailSerializer, 409: DetailSerializer},
@@ -304,10 +292,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
 
         user = self._staff_user(serializer.validated_data["user"])
 
-        try:
-            assign_user(job=job, user=user, assigned_by=request.user)
-        except ConflictError as exc:
-            return _conflict(exc)
+        assign_user(job=job, user=user, assigned_by=request.user)
 
         job.refresh_from_db()
         return Response(self.get_serializer(job).data)
@@ -357,15 +342,12 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
         serializer = StatusChangeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            transition_job(
-                job=job,
-                to_status=serializer.validated_data["status"],
-                actor=request.user,
-                reason=serializer.validated_data.get("reason", ""),
-            )
-        except ConflictError as exc:
-            return _conflict(exc)
+        transition_job(
+            job=job,
+            to_status=serializer.validated_data["status"],
+            actor=request.user,
+            reason=serializer.validated_data.get("reason", ""),
+        )
 
         job.refresh_from_db()
         return Response(self.get_serializer(job).data)
@@ -378,10 +360,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
     @action(detail=True, methods=["post"], url_path="clock-in", url_name="clock-in")
     def clock_in_action(self, request, pk=None):
         job = self.get_object()
-        try:
-            clock_in(job=job, user=request.user)
-        except ConflictError as exc:
-            return _conflict(exc)
+        clock_in(job=job, user=request.user)
 
         job.refresh_from_db()
         return Response(self.get_serializer(job).data)
@@ -394,10 +373,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
     @action(detail=True, methods=["post"], url_path="clock-out", url_name="clock-out")
     def clock_out_action(self, request, pk=None):
         job = self.get_object()
-        try:
-            clock_out(job=job, user=request.user)
-        except ConflictError as exc:
-            return _conflict(exc)
+        clock_out(job=job, user=request.user)
 
         job.refresh_from_db()
         return Response(self.get_serializer(job).data)
