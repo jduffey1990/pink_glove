@@ -15,6 +15,7 @@ from rest_framework.viewsets import ReadOnlyModelViewSet
 from base.permissions import IsStaff
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
+from users.enums import DISPATCHER_ROLES, STAFF_ROLES
 from users.models import CustomUser, MagicLinkToken, Membership
 from users.serializers import (
     MagicLinkConsumeSerializer,
@@ -133,3 +134,19 @@ class MembershipViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
     queryset = Membership.objects.select_related("user", "organization")
     serializer_class = MembershipSerializer
     permission_classes = [IsStaff]
+
+    def get_queryset(self):
+        """
+        A staff directory for cleaners; the whole membership list for the
+        office. A cleaner meets the customers they need on the job itself,
+        with the contact details that job warrants -- not as a list of every
+        homeowner's email address.
+        """
+        queryset = super().get_queryset()
+        if self.request.user.is_superuser:
+            return queryset
+
+        membership = getattr(self.request, "membership", None)
+        if membership is not None and membership.role in DISPATCHER_ROLES:
+            return queryset
+        return queryset.filter(role__in=STAFF_ROLES)

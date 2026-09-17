@@ -42,6 +42,27 @@ class TestMembershipDirectory:
         assert response.status_code == 200
         assert response.json()["count"] == 2
 
+    def test_a_cleaner_is_not_shown_the_customers(self, api_client, organization, make_member):
+        homeowner = make_member(organization, role=Role.CUSTOMER)
+        api_client.force_login(make_member(organization, role=Role.CLEANER))
+
+        response = api_client.get(LIST)
+
+        assert str(homeowner.id) not in {row["user"] for row in response.json()["results"]}
+        membership_id = homeowner.memberships.get().id
+        assert (
+            api_client.get(reverse("users:membership-detail", args=[membership_id])).status_code
+            == 404
+        )
+
+    def test_a_dispatcher_is(self, api_client, organization, make_member):
+        homeowner = make_member(organization, role=Role.CUSTOMER)
+        api_client.force_login(make_member(organization, role=Role.DISPATCHER))
+
+        rows = api_client.get(LIST).json()["results"]
+
+        assert str(homeowner.id) in {row["user"] for row in rows}
+
     def test_a_customer_cannot(self, api_client, organization, make_member):
         api_client.force_login(make_member(organization, role=Role.CUSTOMER))
 
