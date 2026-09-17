@@ -9,7 +9,9 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 Everything through Phase 3 is on `main`, tests green — backend and the first
 frontend slice both. Next work is Phase 4, billing. Read "Phase 3b as built"
-before touching `ui/`.
+before touching `ui/`, and "Phase gate — baseline" at the end of this file: it
+lists decisions that are yours to make before Phase 4 and a backlog to fold in
+as files are touched.
 
 ```bash
 cd app
@@ -23,7 +25,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **466 passing** in `app/`, and **65** in `ui/` (`cd ui && npm test`).
+Expect **522 passing** in `app/`, and **77** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -875,3 +877,137 @@ database that outlives a key change — the message names the field.
 
 **Not in 3b, unchanged:** customer portal, billing, notifications, offline
 support, push, a production build pipeline for `ui/`.
+
+---
+
+## Phase gate — baseline (2026-09-17)
+
+The gate in `CLAUDE.md` was adopted after Phase 3b, so this first run covers
+everything through 3b rather than one phase. Branch `phase-gate-baseline`.
+Three reviewers ran in parallel (coverage; DRY / modularity / orthogonality;
+authentication and authorization); every finding acted on was reproduced with a
+failing test before it was fixed. Backend 466 → 522 tests, frontend 65 → 77.
+
+### Fixed
+
+**Security**
+
+- **Notes and photos could be edited by anyone who could see them.** A full
+  `ModelViewSet` with guards on create and delete and none on update: a cleaner
+  could rewrite a dispatcher's note, or re-point one at another job. Edits are
+  now author-or-dispatcher and `job` is fixed after creation.
+- **Soft-deleted assignments and jobs kept granting access.** The soft-delete
+  manager filters only the model being queried, never a join. A cleaner taken
+  off a job still listed and opened it (address, access notes, customer phone)
+  and its notes; a cleaner on a *deleted* job could still reveal its codes,
+  logged against no job at all. `scheduling.models.assigned_to()` now carries
+  the rule for every join. **Any new join across a soft-deletable relation has
+  the same trap.**
+- **Magic links signed in staff.** ADR-008 makes them the customer flow; the
+  view issued one to any account, so an owner's mailbox alone was an owner
+  session with no password and no 2FA. Now "a customer and nothing more",
+  checked at issue and again at consume.
+- **The sign-in throttles did not hold.** `NUM_PROXIES` unset means DRF keys on
+  the raw `X-Forwarded-For`, so varying the header bought a fresh bucket per
+  request; counters sat in per-process memory (x4 workers, reset on recycle).
+  `NUM_PROXIES` is explicit (0; 1 in production; env-overridable), counters are
+  in Redis, login has a per-account throttle. First tests that a 429 can
+  happen. **Set `NUM_PROXIES` to the real proxy depth when ADR-006 is decided.**
+- **2FA attempts were counted on the instance**, so a stale copy wrote its own
+  count back: parallel guesses cost one attempt. Conditional `UPDATE`s now, for
+  attempts, code consumption and magic-link consumption.
+- **`Customer.user` accepted any account in the system**, another
+  organization's included (`CustomUser` is not a `TenantModel`, so the FK guard
+  never saw it). Narrowed to customer members of the caller's organization.
+- `/health/ready/` no longer returns raw driver errors; `client_ip` honours
+  `NUM_PROXIES` and drops junk instead of handing an inet column a 500; Celery
+  defaults to production settings like wsgi/asgi.
+
+**Contract and frontend**
+
+- **Three `@action`s had the wrong schema and nothing noticed** — spectacular
+  does not warn on a viewset action, it borrows the viewset's serializer.
+  Annotated; `test_every_action_carries_extend_schema` closes the blind spot;
+  the UI's hand-written response types are now generated aliases.
+- **Any 403 signed the user out client-side**, though the API returns 403 to
+  signed-in users by design (ADR-017). The client now re-reads the session and
+  signs out only if it is gone.
+- **The pages kept their own copies of the job state machine**, contrary to
+  what `CLAUDE.md` claimed, and My Day's had drifted (`no_access` was not
+  "finished"). `Job` now publishes `next_statuses` (per caller, with
+  `reason_required`) and `is_terminal` from the same function
+  `transition_job` enforces through; a test checks published == accepted for
+  every status x role x target.
+- A $0.07/sq ft rate could not be saved (`0.07 * 100` is not `7`).
+- The deploy-audit command in `CLAUDE.md` reported two warnings as written.
+  `pre-commit` was configured but **not installed** in this checkout, so no
+  hook had been running; it is now, and all hooks pass.
+
+### Yours to decide (not changed)
+
+1. **Django admin is a password-only door into the same session.** No 2FA, no
+   throttle, and a superuser can then act in any tenant. Options: 2FA on
+   `AdminSite.login`, lockout (django-axes), a separate host or IP allow-list.
+   Decide before anything is deployed.
+2. **`Organization.is_active` is not enforced on requests** — only the beat
+   fan-out respects it. Members of a deactivated organization keep working.
+   What it should mean belongs with Phase 4 (non-payment).
+3. **An admin can review their own flagged reveal**, and a second review
+   silently overwrites the first.
+4. **The membership directory shows customer-role members' emails to
+   cleaners.** Probably should be staff-only rows for non-dispatchers.
+5. **No upload size cap** on job photos or the logo; with S3/GCS media,
+   **photo privacy depends on bucket settings nothing in the repo sets**.
+6. The 2FA code is in the email *subject* (lock-screen previews, mail logs).
+
+### Coverage gaps left open
+
+Isolation and role tests exist for list/retrieve almost everywhere, and for
+little else. Still untested, highest value first: cross-organization
+update/delete/actions on `ServiceLocation`, `Service`, `RecurringPlan`
+(`regenerate` is never called over HTTP; plan DELETE is never tested), `Job`
+(`status`, `clock-in/out`, `unassign` against a rival job) and `TimeEntry`;
+the `review` action's 403/404 paths; a dispatcher PATCHing the organization;
+photo delete. Frontend: the router guard, `listAssignableStaff`, and
+`RevealCodesDialog` have logic and no spec.
+
+### DRY / modularity backlog — fold in as files are touched
+
+- Role-scoped `get_queryset` is written three times in `scheduling/views.py`,
+  and `membership → role` is extracted five times. Wants a helper in
+  `base/permissions.py` and a mixin in `base/viewsets.py`.
+- ADR-020's "which edits regenerate" rule lives in `RecurringPlanViewSet.update`,
+  so an edit from admin, a task or the seed does not regenerate. Wants
+  `services.update_plan()`. Same for preview windowing and job deletion.
+- `try/except ConflictError` x5 and `except ValueError → {"service": ...}` x4
+  in `scheduling/views.py`; handle once in `app/exceptions.py`.
+- The ±24h assignment window filter is written three times in
+  `scheduling/permissions.py`, two of them queries that are not permissions
+  (and are lazy-imported by `audit`).
+- `clock_in` sets status by hand though `transition_job`'s docstring names it
+  as a caller.
+- Local-day bounds are computed two different ways (`scheduling/filters.py`
+  half-open, `audit/tasks.py` `time.max`); "organization's today" three times.
+- Customer/location and date-order rules exist in both model `clean` and
+  serializer `validate`, with identical strings.
+- UI: field-error flattening is copy-pasted across four pages (use
+  `src/api/errors.ts`); the `timeZone` computed is repeated on four pages; auth
+  paths are called from the store rather than `endpoints.ts`; `LoginPage`
+  hardcodes the invalid-credentials string instead of rendering `detail`.
+- Tests: ~15 sites build `JobAssignment`/`TimeEntry` rows by hand instead of
+  using the factories.
+- `IsCustomerOfJob` is a permission class defined in a views module and
+  near-duplicates `base.permissions.IsCustomer`.
+- Cross-app serializer imports: `customers.views → audit.serializers`,
+  `two_factor.views → users.serializers`.
+
+### Couplings found (now listed in `CLAUDE.md`)
+
+Role tiers are mirrored in four places in `ui/`; `scheduling/serializers.py`
+chooses a 400's field by reading the text of a `catalog` error message;
+`customers` lazy-imports `scheduling.permissions` to avoid an import cycle.
+
+### Production guard
+
+All work is on `phase-gate-baseline`; nothing was committed to `main` after the
+branch was cut. There is no production.

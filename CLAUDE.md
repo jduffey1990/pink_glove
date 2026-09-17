@@ -94,8 +94,12 @@ REDIS_URL=redis://localhost:6379/0 \
 # Lint / format
 .venv/bin/ruff check . && .venv/bin/ruff format .
 
-# Deploy audit -- must come back clean
-SECRET_KEY=x ALLOWED_HOSTS=example.com CORS_ALLOWED_ORIGINS=https://example.com \
+# Deploy audit -- must come back clean. It needs a real-looking SECRET_KEY (a
+# short one is itself a warning) and SECURE_SSL_REDIRECT, which production.py
+# leaves off by default because most platforms redirect at the edge.
+SECRET_KEY=$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(64))") \
+SECURE_SSL_REDIRECT=True ALLOWED_HOSTS=example.com \
+CORS_ALLOWED_ORIGINS=https://example.com \
   .venv/bin/python manage.py check --deploy --settings=app.settings.production
 
 # Migrations
@@ -182,7 +186,8 @@ customers use magic links and are never challenged.
   browser's.** Use `src/lib/datetime.ts`; the API's `date_from`/`date_to` are
   organization-local dates and the backend does the conversion.
 - **The server owns the job state machine.** Render the next-status buttons
-  from the 409 body's `allowed` list rather than from a client-side copy.
+  from the job's `next_statuses` (and a 409 body's `allowed` list when one
+  arrives), never from a client-side copy. `is_terminal` likewise.
 - A dialog rendered behind a `v-if` that flips in the same tick as its
   `v-model` mounts with the model already true, so a `watch` on it needs
   `{ immediate: true }` or it never fires.
@@ -218,7 +223,9 @@ uncommitted work. Every commit passes, for the side it touches:
   `ui/openapi.yaml` and `ui/src/api/schema.d.ts` in the same commit (ADR-019).
 
 There is no CI; pre-commit (ruff, schema currency, eslint, gitleaks) is the
-only automatic check, so do not bypass it with `--no-verify`.
+only automatic check, so do not bypass it with `--no-verify`. It only runs if
+the hook is installed in this checkout -- `app/.venv/bin/pre-commit install`
+once, and check `.git/hooks/pre-commit` exists before trusting a quiet commit.
 
 ## Phase gate
 
@@ -253,9 +260,19 @@ fresh session can read what was checked and what was left.
    - `ENUM_NAME_OVERRIDES` in settings needs an entry per choice set whose
      field name collides (`Role`, `JobStatus`/`CustomerStatus`);
    - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`;
-   - the job state machine lives on the server and the UI renders the 409's
-     `allowed` list, so a new status touches backend enum, transitions and
-     schema, but no client-side table.
+   - the job state machine lives on the server: `Job.next_statuses` and
+     `is_terminal` say what the caller may do, and a 409's `allowed` list
+     corrects a stale page. A new status touches the backend enum, the
+     transitions, the schema and its label in `ui/src/lib/jobStatus.ts` --
+     never a client-side table of moves;
+   - role tiers are mirrored in `ui/`: `DISPATCHER_ROLES` in
+     `src/stores/session.ts`, the route tiers in `src/router/index.ts`,
+     `canEdit` in `ServicesPage.vue`, and the customer filter in
+     `listAssignableStaff`. Changing a tier in `users/enums.py` means all four;
+   - `scheduling/serializers.py` picks the field for a pricing 400 by reading
+     the text of the `ValueError` from `catalog.models.Service.quote_cents`;
+   - `customers/views.py` lazy-imports `scheduling.permissions`, because
+     `scheduling` already imports `customers.models`.
 5. **Security (authentication and authorization).**
    - Every new model holding tenant data inherits `TenantModel`, and every
      view over it inherits `TenantViewSetMixin` (invariant 1).
@@ -267,6 +284,9 @@ fresh session can read what was checked and what was left.
      record (invariant 4).
    - No authorization decision lives only in the UI — hiding a button is not
      a permission.
+   - A full `ModelViewSet` guards update as well as create and delete, and any
+     join across a soft-deletable relation filters `deleted_at` itself (the
+     manager only covers the model being queried; see `assigned_to()`).
    - Access codes stay write-only and encrypted, and are read only through the
      audited reveal (ADR-014, ADR-016); nothing sensitive is logged.
    - No secrets in git or in the `ui/` bundle (invariant 7).
