@@ -43,6 +43,7 @@ REST_FRAMEWORK = {
         "two_factor_issue": "1000/hour",
         "two_factor_verify": "1000/hour",
         "magic_link": "1000/hour",
+        "login_account": "1000/hour",
     },
 }
 

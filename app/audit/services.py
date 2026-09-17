@@ -1,6 +1,9 @@
 """Recording helpers for the audit trail."""
 
+import ipaddress
+
 from django.core.exceptions import ValidationError
+from rest_framework.settings import api_settings
 
 from audit.models import AccessReveal
 from users.enums import DISPATCHER_ROLES
@@ -8,16 +11,29 @@ from users.enums import DISPATCHER_ROLES
 
 def client_ip(request) -> str | None:
     """
-    Best-effort client IP.
+    Best-effort client IP, read the same way the throttles read it.
 
     X-Forwarded-For is only meaningful behind a proxy you control -- a direct
-    client can set it to anything. It is recorded as a hint for a human
-    reviewing a flag, never as an access-control input.
+    client can set it to anything. So with `NUM_PROXIES` at 0 it is ignored,
+    and otherwise the entry that many from the end is the one our own proxy
+    wrote. It is recorded as a hint for a human reviewing a flag, never as an
+    access-control input.
+
+    Anything that does not parse as an address is dropped rather than stored:
+    the column is an inet, and a junk header would otherwise turn a reveal
+    into a 500.
     """
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip() or None
-    return request.META.get("REMOTE_ADDR") or None
+    num_proxies = api_settings.NUM_PROXIES or 0
+    candidate = request.META.get("REMOTE_ADDR")
+
+    forwarded = [part.strip() for part in request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")]
+    if num_proxies > 0 and forwarded != [""]:
+        candidate = forwarded[-min(num_proxies, len(forwarded))]
+
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except (TypeError, ValueError):
+        return None
 
 
 def resolve_reveal_job(*, request, location, job_id=None):

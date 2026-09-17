@@ -23,6 +23,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
 from base.serializers import DetailSerializer
+from base.throttles import LoginAccountThrottle
 from two_factor.models import TrustedDevice, TwoFactorCode
 from two_factor.serializers import (
     ChallengeIssuedSerializer,
@@ -69,7 +70,7 @@ def _set_device_cookie(response, raw_token: str) -> None:
 )
 class LoginView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
+    throttle_classes = [ScopedRateThrottle, LoginAccountThrottle]
     throttle_scope = "two_factor_issue"
 
     def post(self, request):

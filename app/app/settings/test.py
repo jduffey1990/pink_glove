@@ -33,6 +33,9 @@ CELERY_TASK_ALWAYS_EAGER = True
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_RESULT_BACKEND = "cache+memory://"
 
+# No Redis needed to run the suite, and no counters leaking between runs.
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.InMemoryStorage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
@@ -48,5 +51,6 @@ REST_FRAMEWORK = {  # noqa: F405
         "two_factor_issue": "10000/hour",
         "two_factor_verify": "10000/hour",
         "magic_link": "10000/hour",
+        "login_account": "10000/hour",
     },
 }

@@ -171,11 +171,20 @@ REST_FRAMEWORK = {
     # viewsets rather than hand-maintained.
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_RATES": {
-        # Phase 1: consumed by the two_factor views.
+        # Phase 1: consumed by the two_factor views. Keyed on client IP.
         "two_factor_issue": "5/hour",
         "two_factor_verify": "10/hour",
         "magic_link": "5/hour",
+        # Keyed on the address being signed in to, whatever IP asks -- the IP
+        # buckets above do nothing against a guesser who rotates addresses.
+        # Looser than they are because it also counts the owner's own typos.
+        "login_account": "20/hour",
     },
+    # How many proxies sit in front of the app, which is how DRF decides which
+    # entry of X-Forwarded-For to believe. Left unset, DRF keys throttles on the
+    # raw header, and a client that varies it gets a fresh bucket per request.
+    # 0 means "trust REMOTE_ADDR only". production.py defaults it to 1.
+    "NUM_PROXIES": config("NUM_PROXIES", default=0, cast=int),
 }
 
 # --------------------------------------------------------------------------
@@ -323,6 +332,17 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 REDIS_URL = CELERY_BROKER_URL
+
+# Throttle counters live here. The default per-process LocMemCache would give
+# every gunicorn worker its own count -- four workers, four times the rate --
+# and forget it whenever one recycles.
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": REDIS_URL,
+        "KEY_PREFIX": "pink_glove",
+    }
+}
 
 # --------------------------------------------------------------------------
 # Application URLs

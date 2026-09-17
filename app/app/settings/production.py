@@ -43,6 +43,16 @@ if "*" in ALLOWED_HOSTS:
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = config("SECURE_SSL_REDIRECT", default=False, cast=bool)  # noqa: F405
 
+# The same assumption as SECURE_PROXY_SSL_HEADER above: exactly one proxy we
+# control in front of the app, so the last X-Forwarded-For entry is the one it
+# wrote. Set NUM_PROXIES to the real depth if the deploy target differs (a CDN
+# in front of a load balancer is 2) -- too low and every client shares the
+# proxy's bucket, too high and the header is spoofable again.
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,  # noqa: F405
+    "NUM_PROXIES": config("NUM_PROXIES", default=1, cast=int),  # noqa: F405
+}
+
 SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=60 * 60 * 24 * 365, cast=int)  # noqa: F405
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
