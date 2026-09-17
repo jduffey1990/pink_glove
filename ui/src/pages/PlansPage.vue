@@ -22,12 +22,12 @@
     previewPlan,
     updatePlan,
   } from '@/api/endpoints'
+  import { errorDetail } from '@/api/errors'
   import { formatDateTime, todayIn } from '@/lib/datetime'
   import { formatCents } from '@/lib/money'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
-  const timeZone = computed(() => session.organization?.timezone ?? 'UTC')
 
   const plans = ref<RecurringPlan[]>([])
   const customers = ref<Customer[]>([])
@@ -92,7 +92,7 @@
       ? { ...plan }
       : {
         rrule: 'FREQ=WEEKLY',
-        starts_on: todayIn(timeZone.value),
+        starts_on: todayIn(session.timeZone),
         preferred_start_time: '09:00:00',
         is_active: true,
       }
@@ -151,10 +151,7 @@
       dialog.value = false
       await load()
     } catch (error_) {
-      const data = (error_ as { response?: { data?: Record<string, unknown> } }).response?.data
-      formError.value = typeof data === 'object' && data !== null
-        ? Object.entries(data).map(([key, value]) => `${key}: ${String(value)}`).join(' ')
-        : 'Could not save that plan.'
+      formError.value = errorDetail(error_) ?? 'Could not save that plan.'
     } finally {
       saving.value = false
     }
@@ -382,7 +379,7 @@
               size="small"
               variant="tonal"
             >
-              {{ formatDateTime(occurrence.utc, timeZone) }}
+              {{ formatDateTime(occurrence.utc, session.timeZone) }}
             </v-chip>
           </v-chip-group>
 

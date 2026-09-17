@@ -35,6 +35,21 @@ export const PAYMENT_METHOD_OPTIONS = (
 ).map(value => ({ value, title: PAYMENT_METHOD_LABEL[value] }))
 
 /**
+ * The same labels as the chips use, shaped for a select.
+ *
+ * Derived rather than re-typed: a filter dropdown that says "Partly paid"
+ * while the chip beside it says something else is the kind of drift this file
+ * exists to prevent.
+ */
+export const INVOICE_STATUS_OPTIONS = (
+  Object.keys(INVOICE_STATUS_LOOK) as InvoiceStatus[]
+).map(value => ({ value, title: INVOICE_STATUS_LOOK[value].label }))
+
+export const PAYMENT_STATE_OPTIONS = (
+  Object.keys(PAYMENT_STATE_LOOK) as PaymentState[]
+).map(value => ({ value, title: PAYMENT_STATE_LOOK[value].label }))
+
+/**
  * What an invoice is showing right now: its payment state once issued, its
  * own status while it is not.
  *

@@ -18,9 +18,9 @@
     updateCustomer,
     updateLocation,
   } from '@/api/endpoints'
-  import InvoiceStatusChip from '@/components/InvoiceStatusChip.vue'
+  import { errorDetail } from '@/api/errors'
+  import InvoiceListItem from '@/components/InvoiceListItem.vue'
   import RevealCodesDialog from '@/components/RevealCodesDialog.vue'
-  import { formatCents } from '@/lib/money'
   import { statusOf, useSessionStore } from '@/stores/session'
 
   const route = useRoute()
@@ -122,10 +122,7 @@
       locationDialog.value = false
       await load()
     } catch (error_) {
-      const data = (error_ as { response?: { data?: Record<string, unknown> } }).response?.data
-      formError.value = typeof data === 'object' && data !== null
-        ? Object.entries(data).map(([key, value]) => `${key}: ${String(value)}`).join(' ')
-        : 'Could not save that location.'
+      formError.value = errorDetail(error_) ?? 'Could not save that location.'
     } finally {
       saving.value = false
     }
@@ -252,40 +249,11 @@
         </v-card-item>
 
         <v-list>
-          <v-list-item
+          <InvoiceListItem
             v-for="invoice in invoices"
             :key="invoice.id"
-            :to="{ name: 'invoice', params: { id: invoice.id } }"
-          >
-            <v-list-item-title>{{ invoice.number || 'Draft' }}</v-list-item-title>
-
-            <v-list-item-subtitle>
-              <template v-if="invoice.issued_on">
-                Issued {{ invoice.issued_on }} · due {{ invoice.due_on }}
-              </template>
-
-              <template v-else>Not yet issued</template>
-            </v-list-item-subtitle>
-
-            <template #append>
-              <div class="d-flex align-center ga-2">
-                <v-chip
-                  v-if="invoice.is_overdue"
-                  color="error"
-                  size="x-small"
-                  variant="tonal"
-                >
-                  Overdue
-                </v-chip>
-
-                <InvoiceStatusChip :invoice="invoice" />
-
-                <span class="text-body-2 text-no-wrap">
-                  {{ formatCents(invoice.total_cents) }}
-                </span>
-              </div>
-            </template>
-          </v-list-item>
+            :invoice="invoice"
+          />
 
           <v-list-item v-if="invoices.length === 0" title="Nothing billed yet" />
         </v-list>

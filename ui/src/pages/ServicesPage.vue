@@ -7,7 +7,7 @@
    * in the one place with a spec covering the float that bit in Phase 3b.
    */
   import type { Service } from '@/api/types'
-  import { ref } from 'vue'
+  import { computed, ref } from 'vue'
   import { createService, listServices, updateService } from '@/api/endpoints'
   import { errorDetail } from '@/api/errors'
   import {
@@ -42,7 +42,8 @@
     is_taxable: false,
   })
 
-  const canEdit = session.role === 'owner' || session.role === 'admin'
+  // The API enforces this independently; hiding the button is a courtesy.
+  const canEdit = computed(() => session.isAdminOrHigher)
 
   const PRICING_MODELS = [
     { value: 'flat', title: 'Flat rate' },

@@ -38,7 +38,6 @@
   const session = useSessionStore()
 
   const jobId = computed(() => route.params.id as string)
-  const timeZone = computed(() => session.organization?.timezone ?? 'UTC')
 
   const job = ref<Job | null>(null)
   const notes = ref<JobNote[]>([])
@@ -238,7 +237,7 @@
         <v-spacer />
 
         <span class="text-body-2 text-medium-emphasis">
-          {{ formatDateTime(job.scheduled_start, timeZone) }}
+          {{ formatDateTime(job.scheduled_start, session.timeZone) }}
           · {{ formatDuration(job.duration_minutes) }}
         </span>
       </div>
@@ -416,7 +415,7 @@
 
               <template v-else>
                 <p class="text-caption text-medium-emphasis mb-2">
-                  Clocked in at {{ formatDateTime(openEntry.clock_in, timeZone) }}
+                  Clocked in at {{ formatDateTime(openEntry.clock_in, session.timeZone) }}
                 </p>
 
                 <v-btn

@@ -17,7 +17,8 @@ from rest_framework import serializers
 
 from base.viewsets import TenantModelSerializer
 from catalog.models import Service
-from customers.models import Customer, ServiceLocation
+from customers.models import ServiceLocation
+from customers.serializers import CustomerSummarySerializer
 from scheduling.enums import REASON_REQUIRED_STATUSES, JobStatus
 from scheduling.models import (
     Job,
@@ -67,15 +68,6 @@ class LocationSummarySerializer(serializers.ModelSerializer):
 
     def get_has_access_codes(self, obj) -> bool:
         return bool(obj.gate_code or obj.alarm_code or obj.key_location)
-
-
-class CustomerSummarySerializer(serializers.ModelSerializer):
-    display_name = serializers.CharField(read_only=True)
-
-    class Meta:
-        model = Customer
-        fields = ("id", "display_name", "phone", "preferred_contact_method")
-        read_only_fields = fields
 
 
 class ServiceSummarySerializer(serializers.ModelSerializer):

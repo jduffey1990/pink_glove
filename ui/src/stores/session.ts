@@ -26,6 +26,9 @@ import {
 /** Mirrors users.enums.DISPATCHER_ROLES on the backend. */
 const DISPATCHER_ROLES = new Set<Role>(['owner', 'admin', 'dispatcher'])
 
+/** Mirrors users.enums.ADMIN_ROLES. */
+const ADMIN_ROLES = new Set<Role>(['owner', 'admin'])
+
 /** Where the organization choice is remembered across a page reload. */
 const ORGANIZATION_STORAGE_KEY = 'pink_glove.organization'
 
@@ -97,8 +100,20 @@ export const useSessionStore = defineStore('session', () => {
   const isDispatcherOrHigher = computed(
     () => role.value !== null && DISPATCHER_ROLES.has(role.value),
   )
+  const isAdminOrHigher = computed(
+    () => role.value !== null && ADMIN_ROLES.has(role.value),
+  )
   const isCleaner = computed(() => role.value === 'cleaner')
   const isCustomer = computed(() => role.value === 'customer')
+
+  /**
+   * The zone every date on every screen is reckoned in.
+   *
+   * Never the browser's: a dispatcher in Denver looking at "Monday" must see
+   * the day the API filed the job under (CLAUDE.md invariant 8). Six pages
+   * were each deriving this the same way; it belongs here, once.
+   */
+  const timeZone = computed(() => organization.value?.timezone ?? 'UTC')
 
   /** True when the user must choose before anything else can be scoped. */
   const needsOrganizationChoice = computed(
@@ -199,8 +214,10 @@ export const useSessionStore = defineStore('session', () => {
     organization,
     isStaff,
     isDispatcherOrHigher,
+    isAdminOrHigher,
     isCleaner,
     isCustomer,
+    timeZone,
     needsOrganizationChoice,
     boot,
     refresh,

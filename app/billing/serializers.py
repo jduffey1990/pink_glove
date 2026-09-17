@@ -16,7 +16,7 @@ from base.viewsets import TenantModelSerializer
 from billing import services
 from billing.enums import LineKind, PaymentMethod, PaymentState
 from billing.models import Invoice, InvoiceLine, Payment
-from scheduling.serializers import CustomerSummarySerializer
+from customers.serializers import CustomerSummarySerializer
 
 
 class InvoiceLineSerializer(TenantModelSerializer):

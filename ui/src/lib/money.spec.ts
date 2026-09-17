@@ -5,6 +5,8 @@ import {
   dollarsToRateString,
   formatCents,
   formatPercent,
+  noAccessFeeToApi,
+  noAccessFeeToForm,
 } from './money'
 
 describe('dollarsToCents', () => {
@@ -98,5 +100,48 @@ describe('formatPercent', () => {
   it('shows a dash for nothing', () => {
     expect(formatPercent(null)).toBe('—')
     expect(formatPercent('')).toBe('—')
+  })
+})
+
+describe('the no-access fee, which means two different things', () => {
+  it('shows a flat fee in dollars and a percentage as itself', () => {
+    expect(noAccessFeeToForm('flat', '2500.000')).toBe(25)
+    expect(noAccessFeeToForm('percent', '50.000')).toBe(50)
+  })
+
+  it('sends a flat fee as cents and a percentage as a percentage', () => {
+    expect(noAccessFeeToApi('flat', 25)).toBe('2500.000')
+    expect(noAccessFeeToApi('percent', 50)).toBe('50.000')
+  })
+
+  it('does not convert a percentage as though it were dollars', () => {
+    // The bug this function exists to prevent: 50 sent as 5000 is a 5000%
+    // no-access fee.
+    expect(noAccessFeeToApi('percent', 50)).not.toBe('5000.000')
+  })
+
+  it('does not send a flat fee as dollars', () => {
+    // And the other way: $25 sent as 25 is a 25-cent fee.
+    expect(noAccessFeeToApi('flat', 25)).not.toBe('25.000')
+  })
+
+  it('round-trips both types', () => {
+    expect(noAccessFeeToApi('flat', noAccessFeeToForm('flat', '2500.000'))).toBe('2500.000')
+    expect(noAccessFeeToApi('percent', noAccessFeeToForm('percent', '33.333'))).toBe('33.333')
+  })
+
+  it('keeps the fractions of a percent the API stores', () => {
+    expect(noAccessFeeToApi('percent', 33.333)).toBe('33.333')
+  })
+
+  it('treats an empty field as nothing', () => {
+    expect(noAccessFeeToForm('flat', null)).toBe(0)
+    expect(noAccessFeeToApi('flat', '')).toBe('0.000')
+    expect(noAccessFeeToApi('percent', '')).toBe('0.000')
+  })
+
+  it('reports a typo rather than sending a silent zero', () => {
+    expect(noAccessFeeToApi('flat', 'lots')).toBe('NaN')
+    expect(noAccessFeeToApi('percent', 'lots')).toBe('NaN')
   })
 })

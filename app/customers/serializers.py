@@ -62,6 +62,24 @@ class ServiceLocationSerializer(TenantModelSerializer):
         return bool(obj.gate_code or obj.alarm_code or obj.key_location)
 
 
+class CustomerSummarySerializer(serializers.ModelSerializer):
+    """
+    A customer as another app's payload shows them: enough to know who this
+    is and how to reach them, and nothing else.
+
+    Lives here rather than in whichever app first needed it, so that changing
+    what a customer summary contains is a change to `customers` -- scheduling
+    and billing both read it, and neither owns it.
+    """
+
+    display_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Customer
+        fields = ("id", "display_name", "phone", "preferred_contact_method")
+        read_only_fields = fields
+
+
 class ServiceLocationSummarySerializer(TenantModelSerializer):
     """
     Nested inside a customer. Deliberately omits the encrypted access fields:

@@ -26,7 +26,7 @@
   } from '@/api/endpoints'
   import { errorDetail } from '@/api/errors'
   import InvoiceStatusChip from '@/components/InvoiceStatusChip.vue'
-  import { todayIn } from '@/lib/datetime'
+  import { formatDayLabel, todayIn } from '@/lib/datetime'
   import { offers, PAYMENT_METHOD_LABEL, PAYMENT_METHOD_OPTIONS } from '@/lib/invoiceStatus'
   import { centsToDollars, dollarsToCents, formatCents, formatPercent } from '@/lib/money'
   import { useSessionStore } from '@/stores/session'
@@ -34,8 +34,6 @@
   const session = useSessionStore()
   const route = useRoute()
   const router = useRouter()
-
-  const timeZone = computed(() => session.organization?.timezone ?? 'UTC')
 
   const invoice = ref<Invoice | null>(null)
   const loading = ref(false)
@@ -220,7 +218,7 @@
       // named, so the field is not the guard.
       amount: centsToDollars(invoice.value?.balance_cents ?? 0),
       tip: 0,
-      received_on: todayIn(timeZone.value),
+      received_on: todayIn(session.timeZone),
       reference: '',
     }
     paymentDialog.value = true
@@ -527,7 +525,7 @@
                 </v-list-item-title>
 
                 <v-list-item-subtitle>
-                  {{ entry.received_on }}
+                  {{ formatDayLabel(entry.received_on) }}
                   <template v-if="entry.reference"> · {{ entry.reference }}</template>
                   <template v-if="entry.recorded_by_name"> · {{ entry.recorded_by_name }}</template>
                   <template v-if="entry.is_void"> · voided: {{ entry.void_reason }}</template>
@@ -565,8 +563,8 @@
               <v-divider class="my-3" />
 
               <div v-if="invoice.issued_on" class="text-body-2">
-                Issued {{ invoice.issued_on }}<br>
-                Due {{ invoice.due_on }}
+                Issued {{ formatDayLabel(invoice.issued_on) }}<br>
+                Due {{ formatDayLabel(invoice.due_on!) }}
               </div>
 
               <div v-else class="text-body-2 text-medium-emphasis">

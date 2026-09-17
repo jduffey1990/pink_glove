@@ -78,3 +78,41 @@ export function formatPercent (rate: string | number | null | undefined): string
   const value = Number(String(rate).trim() || Number.NaN)
   return Number.isFinite(value) ? `${Number(value.toFixed(3))}%` : '—'
 }
+
+/**
+ * The no-access fee, which means two different things.
+ *
+ * `Organization.no_access_fee_value` is **cents** when the type is `flat` and
+ * a **percentage** when it is `percent`. So the form shows dollars for one and
+ * a plain number for the other, and the conversion runs one way and not the
+ * other. Getting this backwards charges a customer 2500% of the visit, or 25
+ * cents instead of $25 -- which is why it is here with a spec rather than
+ * inline in the settings page.
+ */
+export type NoAccessFeeType = 'none' | 'flat' | 'percent'
+
+/** API value -> what the form field shows. */
+export function noAccessFeeToForm (
+  type: NoAccessFeeType,
+  value: string | number | null | undefined,
+): number {
+  const amount = Number(value ?? 0)
+  if (!Number.isFinite(amount)) {
+    return 0
+  }
+  return type === 'flat' ? centsToDollars(amount) : amount
+}
+
+/** What the form field shows -> the decimal string the API stores. */
+export function noAccessFeeToApi (
+  type: NoAccessFeeType,
+  value: string | number | null | undefined,
+): string {
+  if (type === 'flat') {
+    const cents = dollarsToCents(value)
+    return Number.isNaN(cents) ? Number.NaN.toString() : cents.toFixed(3)
+  }
+
+  const percent = Number(String(value ?? 0).trim() || 0)
+  return Number.isFinite(percent) ? percent.toFixed(3) : Number.NaN.toString()
+}

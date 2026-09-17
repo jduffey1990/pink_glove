@@ -10,10 +10,10 @@
    * says and nothing that has already gone out.
    */
   import type { Organization } from '@/api/types'
-  import { ref } from 'vue'
+  import { computed, ref } from 'vue'
   import { getCurrentOrganization, updateOrganization } from '@/api/endpoints'
   import { errorDetail } from '@/api/errors'
-  import { centsToDollars, dollarsToCents } from '@/lib/money'
+  import { noAccessFeeToApi, noAccessFeeToForm } from '@/lib/money'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -24,7 +24,8 @@
   const error = ref('')
   const saved = ref(false)
 
-  const canEdit = session.role === 'owner' || session.role === 'admin'
+  // The API enforces this independently; hiding the button is a courtesy.
+  const canEdit = computed(() => session.isAdminOrHigher)
 
   const FEE_TYPES = [
     { value: 'none', title: 'No charge' },
@@ -47,9 +48,10 @@
     form.value = {
       tax_rate_percent: String(current.tax_rate_percent ?? '0.000'),
       no_access_fee_type: current.no_access_fee_type ?? 'none',
-      no_access_fee_value: current.no_access_fee_type === 'flat'
-        ? centsToDollars(Number(current.no_access_fee_value ?? 0))
-        : Number(current.no_access_fee_value ?? 0),
+      no_access_fee_value: noAccessFeeToForm(
+        current.no_access_fee_type ?? 'none',
+        current.no_access_fee_value,
+      ),
       invoice_prefix: current.invoice_prefix ?? 'INV',
       invoice_terms_days: current.invoice_terms_days ?? 14,
       invoice_footer: current.invoice_footer ?? '',
@@ -77,13 +79,14 @@
     error.value = ''
     saved.value = false
 
-    // The value means cents for a flat fee and a percentage otherwise, so it
-    // converts one way and not the other.
-    const value = form.value.no_access_fee_type === 'flat'
-      ? dollarsToCents(form.value.no_access_fee_value)
-      : Number(form.value.no_access_fee_value)
+    // Cents for a flat fee and a percentage otherwise -- see `lib/money`,
+    // which has the spec for the two directions.
+    const value = noAccessFeeToApi(
+      form.value.no_access_fee_type ?? 'none',
+      form.value.no_access_fee_value,
+    )
 
-    if (Number.isNaN(value)) {
+    if (value === 'NaN') {
       error.value = 'That fee is not a number.'
       saving.value = false
       return
@@ -93,7 +96,7 @@
       organization.value = await updateOrganization({
         tax_rate_percent: String(form.value.tax_rate_percent),
         no_access_fee_type: form.value.no_access_fee_type,
-        no_access_fee_value: value.toFixed(3),
+        no_access_fee_value: value,
         invoice_prefix: form.value.invoice_prefix,
         invoice_terms_days: form.value.invoice_terms_days,
         invoice_footer: form.value.invoice_footer,

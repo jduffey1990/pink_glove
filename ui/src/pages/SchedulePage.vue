@@ -27,8 +27,7 @@
   const session = useSessionStore()
   const router = useRouter()
 
-  const timeZone = computed(() => session.organization?.timezone ?? 'UTC')
-  const anchor = ref(todayIn(timeZone.value))
+  const anchor = ref(todayIn(session.timeZone))
   const jobs = ref<Job[]>([])
   const loading = ref(false)
   const error = ref('')
@@ -48,7 +47,7 @@
 
     for (const job of jobs.value) {
       // Bucket on the date the API filtered by, which is the local one.
-      const day = toIsoDate(job.scheduled_start, timeZone.value)
+      const day = toIsoDate(job.scheduled_start, session.timeZone)
       buckets.get(day)?.push(job)
     }
 
@@ -79,9 +78,13 @@
     }
   }
 
-  watch([anchor, statusFilter, assigneeFilter, timeZone], load, { immediate: true, deep: true })
+  watch(
+    [anchor, statusFilter, assigneeFilter, () => session.timeZone],
+    load,
+    { immediate: true, deep: true },
+  )
 
-  watch(timeZone, zone => {
+  watch(() => session.timeZone, zone => {
     anchor.value = todayIn(zone)
   })
 
@@ -96,10 +99,10 @@
   }
 
   function goToToday () {
-    anchor.value = todayIn(timeZone.value)
+    anchor.value = todayIn(session.timeZone)
   }
 
-  const isToday = (day: string) => day === todayIn(timeZone.value)
+  const isToday = (day: string) => day === todayIn(session.timeZone)
 </script>
 
 <template>
@@ -116,7 +119,7 @@
       <v-spacer />
 
       <v-chip v-if="session.organization" size="small" variant="tonal">
-        {{ timeZone }}
+        {{ session.timeZone }}
       </v-chip>
     </div>
 
@@ -181,7 +184,7 @@
           @click="router.push({ name: 'job', params: { id: job.id } })"
         >
           <div class="text-caption font-weight-medium">
-            {{ formatTime(job.scheduled_start, timeZone) }}
+            {{ formatTime(job.scheduled_start, session.timeZone) }}
           </div>
 
           <div class="text-body-2 text-truncate">

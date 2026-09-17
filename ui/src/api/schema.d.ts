@@ -1525,6 +1525,14 @@ export interface components {
          * @enum {string}
          */
         CustomerStatusEnum: "lead" | "active" | "inactive" | "archived";
+        /**
+         * @description A customer as another app's payload shows them: enough to know who this
+         *     is and how to reach them, and nothing else.
+         *
+         *     Lives here rather than in whichever app first needed it, so that changing
+         *     what a customer summary contains is a change to `customers` -- scheduling
+         *     and billing both read it, and neither owns it.
+         */
         CustomerSummary: {
             /** Format: uuid */
             readonly id: string;

@@ -21,8 +21,7 @@
   const session = useSessionStore()
   const router = useRouter()
 
-  const timeZone = computed(() => session.organization?.timezone ?? 'UTC')
-  const day = ref(todayIn(timeZone.value))
+  const day = ref(todayIn(session.timeZone))
   const jobs = ref<Job[]>([])
   const loading = ref(false)
   const error = ref('')
@@ -56,8 +55,9 @@
     }
   }
 
-  watch([day, timeZone], load, { immediate: true })
-  watch(timeZone, zone => {
+  watch([day, () => session.timeZone], load, { immediate: true })
+
+  watch(() => session.timeZone, zone => {
     day.value = todayIn(zone)
   })
 
@@ -97,7 +97,7 @@
     await act(job, () => setJobStatus(job.id, 'no_access', reason.value.trim()))
   }
 
-  const isToday = computed(() => day.value === todayIn(timeZone.value))
+  const isToday = computed(() => day.value === todayIn(session.timeZone))
 </script>
 
 <template>
@@ -154,7 +154,7 @@
       <v-card-item>
         <template #prepend>
           <div class="text-h6 font-weight-medium">
-            {{ formatTime(job.scheduled_start, timeZone) }}
+            {{ formatTime(job.scheduled_start, session.timeZone) }}
           </div>
         </template>
 
