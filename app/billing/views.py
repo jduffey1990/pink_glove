@@ -185,7 +185,11 @@ class InvoiceLineViewSet(TenantViewSetMixin, ModelViewSet):
     with no job behind it. Every write is refused once the invoice is issued.
     """
 
-    queryset = InvoiceLine.objects.select_related("invoice", "job", "organization")
+    # The soft-delete manager covers the line and not the invoice it hangs
+    # off, so a discarded draft's lines would still be listed and editable.
+    queryset = InvoiceLine.objects.select_related("invoice", "job", "organization").filter(
+        invoice__deleted_at__isnull=True
+    )
     serializer_class = InvoiceLineSerializer
     permission_classes = [IsDispatcherOrHigher]
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]

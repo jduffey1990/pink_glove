@@ -28,7 +28,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **780 passing** in `app/`, and **97** in `ui/` (`cd ui && npm test`).
+Expect **818 passing** in `app/`, and **118** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -1248,3 +1248,146 @@ chooses a 400's field by reading the text of a `catalog` error message;
 
 All work is on `phase-gate-baseline`; nothing was committed to `main` after the
 branch was cut. There is no production.
+
+---
+
+## Phase 4a as built
+
+Delivered as specified: the `billing` app, the four tables, the rules in
+`billing/services.py`, `/api/billing/`, three screens, the invoice email, and a
+seed that has already billed a book of business. Backend 552 → 818, frontend
+77 → 118. Branch `phase-4-billing`.
+
+**Two deviations from the 4a spec**, both deliberate:
+
+1. `Invoice.number` is `default=""` rather than nullable. `ruff`'s DJ001 is in
+   the selected rule set and every other `CharField` in the repo reads that
+   way; the partial unique constraint keys off `number != ""` instead.
+2. `Payment.delete()` raises unconditionally rather than only for a non-draft.
+   A payment has no draft state to be in.
+
+**Two things the spec did not ask for and the work needed.**
+
+*Closing the past.* The materializer has no business inventing history, so a
+seeded board had a fortnight of visits all still "scheduled" — a business that
+never turned up, and nothing billable at all. `seed_demo` now walks them
+through the real state machine, and turns the most recent into a no-access so
+the fee has something to price. `seed_demo --force` also applies the billing
+settings to an organization it *found*, not only one it created; without that,
+a run against a pre-Phase-4 database built INV-prefixed invoices at 0% tax and
+reported success.
+
+*A billing settings screen.* 4a.5 says "organization settings gain tax rate,
+no-access fee, prefix, terms and footer". There was no organization settings
+screen, so there is one now, at `/billing/settings`, admin-and-above to save.
+
+**Found by driving it in a browser, not by tests.** Pressing Email did nothing
+visible. The mail went out — the worker log had the subject line — but
+`sent_at` is stamped by that worker *after* the send, and the 202 returns
+first, so the "Emailed" line the page keys off was never yet true. The page
+now says "Queued to ...", and "Emailed" still means `sent_at`.
+
+**Not in 4a, unchanged:** Stripe of any kind (4b, 4c), the customer's own view
+of their invoices (Phase 5), a PDF, statements, credit notes as a first-class
+object (an adjustment line is the mechanism), partial refunds.
+
+### Phase gate — Phase 4a (2026-09-17)
+
+Three reviewers ran in parallel (coverage; DRY/modularity/orthogonality;
+authentication and authorization), plus `/security-review` on the phase diff.
+Every finding acted on below was reproduced before it was fixed.
+
+**1. Test coverage.** Backend 552 → 818, frontend 77 → 118 (counts updated
+under "Start here"). Every new endpoint has a cross-tenant test on update,
+delete and actions as well as list and retrieve, and a test per role on each
+side of its permission line — including the *allow* side for owner and admin,
+which the baseline gate's own tests only covered for dispatcher. Added after
+review: the payment filters (all of them were untested, including the
+`voided=true` double negative), the invoice date and customer filters, the
+reprice endpoint's happy path, the email task's failure branch, and
+cross-tenant detail reads on lines and payments. Two tests were rewritten for
+overclaiming: one asserted `sent_at` on a 202 response, which only holds
+because Celery runs eagerly under test and contradicts the endpoint's own
+documented contract; another was named for recording who issued an invoice and
+asserted only the amounts — `actor` was accepted by two services and used by
+neither, so `created_by` and `issued_by` now exist and are recorded.
+*Gap left open:* no page component has a vitest spec, here or anywhere in the
+repo. The risky logic was extracted to `src/lib/` instead — `money.ts` (the
+no-access fee, which means cents when flat and a percentage when not) and
+`billable.ts` (the grouping and its totals) — and spec'd there.
+
+**2. DRY.** Folded in from the backlog: `ConflictError` handled once in
+`app/exceptions.py` (five try/excepts and a `destroy` override gone);
+`Organization.today()` / `local_day_bounds()` replacing three hand-rolled
+versions; `lib/money.ts` replacing inline `Math.round(x * 100)`; `errorDetail`
+adopted in the three pages this phase touched; `session.timeZone` replacing the
+same computed on six pages; `session.isAdminOrHigher` replacing the admin tier
+written out twice. New this phase and folded in before the gate closed:
+`InvoiceListItem` for the row two pages drew, and `INVOICE_STATUS_OPTIONS` /
+`PAYMENT_STATE_OPTIONS` derived from the chip labels rather than re-typed.
+*Still open, in files this phase touched:* `except ValueError → {"service": …}`
+×4, role-scoped `get_queryset` ×3 and `membership → role` ×5, all in
+`scheduling/views.py`; ADR-020's regeneration rule still inside
+`RecurringPlanViewSet.update`; `IsCustomerOfJob` still defined in a views
+module.
+
+**3. Modularity.** No page reaches the backend except through `ui/src/api/`;
+no `fetch` anywhere. All billing rules live in `billing/services.py`, which the
+views, the seed and the Celery task all call. Billing reaches other apps
+through models and their methods (`Organization.no_access_fee_cents`,
+`Service.quote_cents`, `Job.time_entries`), never their views.
+
+**4. Orthogonality.** `CustomerSummarySerializer` moved from `scheduling` to
+`customers`, the app that owns the model — billing had imported it from
+scheduling, which would have been a third cross-app serializer import. New
+couplings, now listed in `CLAUDE.md`: three more `ENUM_NAME_OVERRIDES` rows
+(`InvoiceStatus`, and `PaymentMethod`/`LineKind`, which otherwise generate as
+`MethodEnum` and `KindEnum`); and `billing` imports `scheduling` and `catalog`
+while nothing imports `billing`, so that dependency must stay one-way.
+`available_actions` was going to be a fourth: it is now published as a schema
+enum, so the frontend's `InvoiceAction` is generated rather than hand-kept.
+
+**5. Security.** Five real holes, all closed, all with tests:
+
+- **An invoice could go void with live money against it.** `void_invoice`
+  checked for payments off an unlocked row. The money then vanished from every
+  screen (the balance short-circuits on a non-issued invoice) while the visits
+  were freed and billed again.
+- **Two dispatchers issuing at once burned an invoice number.** Only the
+  sequence was locked. Both passed the draft check, both took a number, and one
+  of them held a number that existed on no document — the gap ADR-026 says the
+  sequence does not have. Both fixed by `_locked_status()`.
+- **A visit line could be moved onto another customer's invoice.** `clean()`
+  refused it; DRF never calls `full_clean()`, and `TenantModel.save()` only
+  compares organizations, so within one tenant it went through — and the
+  description printed in the other customer's invoice email.
+- **A visit line could be rewritten in place**, silently, contradicting the
+  viewset's own docstring: a $150 taxable visit set to one cent and untaxed
+  read as though it always had been. Corrections are adjustment lines now.
+- **`billable_jobs` joined to `customer` without filtering `deleted_at`** — the
+  same trap that cost the baseline gate three bugs, one join further out.
+
+Also: the invoice-line serializer's `invoice` field is scoped to the caller's
+organization, so another tenant's id gets "does not exist" rather than a 400
+describing the invoice; `InvoiceAdmin.status` is read-only; `draft_invoice`'s
+`select_for_update` no longer locks a row in every joined table.
+`/security-review` on the phase diff afterwards returned **no HIGH or MEDIUM
+findings**. Deploy audit clean. Nothing is `AllowAny`; all three viewsets state
+`IsDispatcherOrHigher`.
+
+*Known and accepted:* `send` is unthrottled and does not de-duplicate, so a
+dispatcher can mail a customer the same invoice repeatedly — email rate
+limiting belongs with Phase 5's notifications. The `payment_state` and
+`overdue` filters evaluate in Python over the tenant's whole invoice table,
+which is linear in its size; revisit if a tenant's invoice count makes it bite.
+
+**6. Branch and production guard.** All of Phase 4a is on `phase-4-billing`.
+Nothing was committed to `main`, nothing was pushed, and there is no production.
+
+**Verified in a real browser** (Chromium via Playwright, driven from a
+scratchpad — no browser automation was added to the repo, per the 3b spec): 27
+checks at 1440px across both seeded organizations, re-run after the gate's
+refactors. The invoice lifecycle end to end (draft → adjustment → issue →
+email → payment → void → balance returns), the server-owned action buttons, the
+per-tenant prefixes and tax rate, a cross-tenant invoice URL refused, and the
+cleaner's 403 with no Billing link at all.

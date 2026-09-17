@@ -1126,3 +1126,41 @@ class TestPermissions:
 
         assert dispatcher_client.get(INVOICES_URL).status_code == 200
         assert dispatcher_client.post(invoice_url(draft, "issue/")).status_code == 403
+
+
+@pytest.mark.django_db
+class TestEdgesTheSecurityReviewRaised:
+    def test_a_discarded_drafts_lines_are_gone_from_the_api(self, dispatcher_client, draft):
+        """
+        The soft-delete manager covers the line, not the invoice it hangs off.
+        Without an explicit filter the orphans stay listed and editable.
+        """
+        line = draft.lines.get()
+        draft.delete()
+
+        assert dispatcher_client.get(line_url(line)).status_code == 404
+        assert {row["id"] for row in dispatcher_client.get(LINES_URL).json()["results"]} == set()
+
+    def test_a_negative_subtotal_is_a_409_not_a_500(self, dispatcher_client, org, draft):
+        """
+        A large untaxed discount against heavily taxed lines leaves a positive
+        total over a negative subtotal, which the snapshot's PositiveInteger
+        column refuses at the database rather than in the API.
+        """
+        org.tax_rate_percent = "900.000"
+        org.save()
+        draft.lines.update(is_taxable=True)
+        InvoiceLine.objects.create(
+            organization=org,
+            invoice=draft,
+            kind=LineKind.ADJUSTMENT,
+            description="Large goodwill credit",
+            amount_cents=-20000,
+            is_taxable=False,
+        )
+
+        response = dispatcher_client.post(invoice_url(draft, "issue/"))
+
+        assert response.status_code == 409
+        draft.refresh_from_db()
+        assert draft.status == InvoiceStatus.DRAFT

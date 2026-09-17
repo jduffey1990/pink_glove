@@ -428,7 +428,11 @@ def issue_invoice(invoice: Invoice, *, actor=None, today: dt.date | None = None)
         )
 
     amounts = totals(invoice)
-    if amounts["total_cents"] <= 0:
+    if amounts["total_cents"] <= 0 or amounts["subtotal_cents"] < 0:
+        # The subtotal is checked as well as the total because they can differ
+        # in sign: a large untaxed discount against heavily taxed lines leaves
+        # a positive total over a negative subtotal, which the snapshot's
+        # PositiveIntegerField would refuse with a 500 rather than this 409.
         raise ConflictError(
             "An invoice has to come to more than nothing. Adjust the lines, or delete the draft.",
             {"status": invoice.status, **amounts},
