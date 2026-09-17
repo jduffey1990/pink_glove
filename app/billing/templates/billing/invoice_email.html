@@ -1,0 +1,55 @@
+{% autoescape on %}
+<div style="font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #333; max-width: 640px;">
+  <p>Hi {{ invoice.bill_to_name|default:"there" }},</p>
+
+  <p>Here is invoice <strong>{{ invoice.number }}</strong> from
+     {{ organization.name }}.</p>
+
+  <table style="width: 100%; border-collapse: collapse; margin: 20px 0;">
+    <tbody>
+      {% for line in lines %}
+        <tr>
+          <td style="padding: 6px 0; border-bottom: 1px solid #eee;">{{ line.description }}</td>
+          <td style="padding: 6px 0; border-bottom: 1px solid #eee; text-align: right;">{{ line.amount }}</td>
+        </tr>
+      {% endfor %}
+      <tr>
+        <td style="padding: 6px 0;">Subtotal</td>
+        <td style="padding: 6px 0; text-align: right;">{{ subtotal }}</td>
+      </tr>
+      {% if invoice.tax_cents %}
+        <tr>
+          <td style="padding: 6px 0;">Tax ({{ tax_rate }}%)</td>
+          <td style="padding: 6px 0; text-align: right;">{{ tax }}</td>
+        </tr>
+      {% endif %}
+      <tr>
+        <td style="padding: 6px 0; font-weight: 600; border-top: 2px solid #333;">Total</td>
+        <td style="padding: 6px 0; font-weight: 600; border-top: 2px solid #333; text-align: right;">{{ total }}</td>
+      </tr>
+      {% if paid != "$0.00" %}
+        <tr>
+          <td style="padding: 6px 0;">Paid</td>
+          <td style="padding: 6px 0; text-align: right;">{{ paid }}</td>
+        </tr>
+      {% endif %}
+      <tr>
+        <td style="padding: 6px 0; font-weight: 600;">Balance due</td>
+        <td style="padding: 6px 0; font-weight: 600; text-align: right;">{{ balance }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  {% if is_settled %}
+    <p>This invoice is paid in full. Thank you.</p>
+  {% else %}
+    <p>Payment is due by <strong>{{ invoice.due_on|date:"j F Y" }}</strong>.</p>
+  {% endif %}
+
+  {% if invoice.notes %}<p>{{ invoice.notes|linebreaksbr }}</p>{% endif %}
+
+  {% if footer %}<p style="color: #666;">{{ footer|linebreaksbr }}</p>{% endif %}
+
+  <p>&mdash; {{ organization.name }}</p>
+</div>
+{% endautoescape %}
