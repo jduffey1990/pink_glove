@@ -20,7 +20,7 @@ from django.utils import timezone
 from base.permissions import IsOrgMember
 from customers.models import ServiceLocation
 from scheduling.enums import TERMINAL_STATUSES
-from scheduling.models import Job, JobAssignment
+from scheduling.models import Job, JobAssignment, assigned_to
 from users.enums import DISPATCHER_ROLES, STAFF_ROLES
 
 #: How far either side of a job's window an assignment still counts as "this
@@ -100,6 +100,8 @@ class IsAssignedCleaner(IsOrgMember):
                 user=request.user,
                 job__location=location,
                 job__organization=request.organization,
+                # The manager hides deleted assignments, not deleted jobs.
+                job__deleted_at__isnull=True,
                 job__scheduled_start__lte=now + ASSIGNMENT_WINDOW,
                 job__scheduled_end__gte=now - ASSIGNMENT_WINDOW,
             )
@@ -120,9 +122,9 @@ def nearest_job_for_location(*, user, location, organization, now=None) -> Job |
 
     candidates = (
         Job.objects.filter(
+            assigned_to(user),
             organization=organization,
             location=location,
-            assignments__user=user,
             scheduled_start__lte=now + ASSIGNMENT_WINDOW,
             scheduled_end__gte=now - ASSIGNMENT_WINDOW,
         )

@@ -231,6 +231,23 @@ class Job(TenantModel):
         return self.plan_occurrence is not None and self.scheduled_start != self.plan_occurrence
 
 
+def assigned_to(user, *, via: str = "") -> models.Q:
+    """
+    "`user` has a live assignment" as a join condition, from `Job` or, with
+    `via="job__"`, from anything hanging off one.
+
+    Exists because the soft-delete manager only filters the model being
+    queried: a join to `assignments` also matches rows `unassign_user` has
+    soft-deleted, so a bare `assignments__user=user` keeps showing a cleaner
+    the jobs they were taken off. Both conditions sit in one `Q` so they bind
+    to the same joined row.
+    """
+    user_id = getattr(user, "pk", user)
+    return models.Q(
+        **{f"{via}assignments__user_id": user_id, f"{via}assignments__deleted_at__isnull": True}
+    )
+
+
 class JobAssignment(TenantModel):
     """
     Which cleaner is doing this job.

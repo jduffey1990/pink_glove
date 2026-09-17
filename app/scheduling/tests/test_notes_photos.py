@@ -102,6 +102,16 @@ class TestReadingNotes:
         bodies = [row["body"] for row in response.json()["results"]]
         assert bodies == ["Mine"]
 
+    def test_a_cleaner_taken_off_a_job_stops_seeing_its_notes(
+        self, cleaner_client, dispatcher_client, cleaner, assigned_job
+    ):
+        from scheduling.models import JobAssignment
+
+        dispatcher_client.post(NOTES, {"job": str(assigned_job.id), "body": "Mine"}, format="json")
+        JobAssignment.objects.get(job=assigned_job, user=cleaner).delete()
+
+        assert cleaner_client.get(NOTES).json()["count"] == 0
+
     def test_a_dispatcher_sees_them_all(self, dispatcher_client, assigned_job, other_job):
         dispatcher_client.post(NOTES, {"job": str(assigned_job.id), "body": "A"}, format="json")
         dispatcher_client.post(NOTES, {"job": str(other_job.id), "body": "B"}, format="json")

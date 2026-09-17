@@ -26,7 +26,7 @@ from base.permissions import IsDispatcherOrHigher, IsOrgMember, IsStaff
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 from scheduling.filters import JobFilterSet, TimeEntryFilterSet
-from scheduling.models import Job, JobNote, JobPhoto, RecurringPlan, TimeEntry
+from scheduling.models import Job, JobNote, JobPhoto, RecurringPlan, TimeEntry, assigned_to
 from scheduling.permissions import IsAssignedCleaner
 from scheduling.serializers import (
     AssignSerializer,
@@ -266,7 +266,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
         if role in DISPATCHER_ROLES:
             return queryset
         if role == Role.CLEANER:
-            return queryset.filter(assignments__user=user).distinct()
+            return queryset.filter(assigned_to(user)).distinct()
         if role == Role.CUSTOMER:
             return queryset.filter(customer__user=user)
 
@@ -466,7 +466,7 @@ class JobRelatedViewSet(TenantViewSetMixin, ModelViewSet):
         if role in DISPATCHER_ROLES:
             return queryset
         if role == Role.CLEANER:
-            return queryset.filter(job__assignments__user=user).distinct()
+            return queryset.filter(assigned_to(user, via="job__")).distinct()
 
         # Customers cannot reach either of these at all.
         return queryset.none()

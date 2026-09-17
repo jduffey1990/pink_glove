@@ -14,7 +14,7 @@ from django_filters import rest_framework as filters
 from rest_framework.exceptions import ValidationError
 
 from scheduling.enums import JobStatus
-from scheduling.models import Job, TimeEntry
+from scheduling.models import Job, TimeEntry, assigned_to
 
 #: Longest span a single query may cover. A dispatcher looks at a week, or at
 #: most a month; an unbounded range over a busy tenant is a slow query nobody
@@ -41,7 +41,7 @@ class JobFilterSet(filters.FilterSet):
     date_from = filters.DateFilter(method="filter_noop")
     date_to = filters.DateFilter(method="filter_noop")
     status = filters.MultipleChoiceFilter(choices=JobStatus.choices)
-    assignee = filters.UUIDFilter(field_name="assignments__user_id", distinct=True)
+    assignee = filters.UUIDFilter(method="filter_assignee")
     mine = filters.BooleanFilter(method="filter_mine")
 
     class Meta:
@@ -55,10 +55,13 @@ class JobFilterSet(filters.FilterSet):
         """
         return queryset
 
+    def filter_assignee(self, queryset, name, value):
+        return queryset.filter(assigned_to(value)).distinct()
+
     def filter_mine(self, queryset, name, value):
         if not value:
             return queryset
-        return queryset.filter(assignments__user=self.request.user).distinct()
+        return queryset.filter(assigned_to(self.request.user)).distinct()
 
     def filter_queryset(self, queryset):
         queryset = super().filter_queryset(queryset)

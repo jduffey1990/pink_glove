@@ -283,6 +283,31 @@ class TestRevealsBindToAJob:
         assert response.status_code == 403
         assert not AccessReveal.objects.exists()
 
+    def test_a_cleaner_on_a_deleted_job_is_refused(
+        self, api_client, organization, location, cleaner
+    ):
+        """A deleted visit justifies nothing -- and would log a reveal bound to no job."""
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        self._assign(organization, job, cleaner)
+        job.delete()
+        api_client.force_login(cleaner)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.status_code == 403
+        assert not AccessReveal.objects.exists()
+
+    def test_a_cleaner_taken_off_the_job_is_refused(
+        self, api_client, organization, location, cleaner
+    ):
+        job = self._job_at(organization, location, start=timezone.now() + dt.timedelta(hours=1))
+        self._assign(organization, job, cleaner).delete()
+        api_client.force_login(cleaner)
+
+        response = api_client.post(reveal_url(location), {"acknowledged": True}, format="json")
+
+        assert response.status_code == 403
+
     def test_a_cleaner_assigned_to_a_cancelled_job_is_refused(
         self, api_client, organization, location, cleaner
     ):

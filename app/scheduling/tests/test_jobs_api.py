@@ -63,6 +63,23 @@ class TestRoleScoping:
 
         assert [row["id"] for row in response.json()["results"]] == [str(assigned_job.id)]
 
+    def test_a_cleaner_taken_off_a_job_stops_seeing_it(self, cleaner_client, cleaner, assigned_job):
+        """Unassigning soft-deletes the row, and a join does not filter soft deletes."""
+        JobAssignment.objects.get(job=assigned_job, user=cleaner).delete()
+
+        assert cleaner_client.get(LIST).json()["count"] == 0
+        assert cleaner_client.get(LIST, {"mine": "true"}).json()["count"] == 0
+        assert cleaner_client.get(detail(assigned_job)).status_code == 404
+
+    def test_the_assignee_filter_ignores_removed_assignments(
+        self, dispatcher_client, cleaner, assigned_job
+    ):
+        JobAssignment.objects.get(job=assigned_job, user=cleaner).delete()
+
+        response = dispatcher_client.get(LIST, {"assignee": str(cleaner.id)})
+
+        assert response.json()["count"] == 0
+
     def test_a_cleaner_cannot_open_a_job_they_are_not_on(self, cleaner_client, organization, job):
         assert cleaner_client.get(detail(job)).status_code == 404
 
