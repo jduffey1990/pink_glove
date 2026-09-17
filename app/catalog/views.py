@@ -1,13 +1,15 @@
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema
 from rest_framework import filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from base.permissions import IsAdminOrHigher, IsStaff
+from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 from catalog.models import Service
-from catalog.serializers import QuoteSerializer, ServiceSerializer
+from catalog.serializers import QuoteResultSerializer, QuoteSerializer, ServiceSerializer
 
 
 class ServiceViewSet(TenantViewSetMixin, ModelViewSet):
@@ -27,6 +29,11 @@ class ServiceViewSet(TenantViewSetMixin, ModelViewSet):
         )
         return [permission() for permission in permission_classes]
 
+    @extend_schema(
+        request=QuoteSerializer,
+        responses={200: QuoteResultSerializer, 400: DetailSerializer},
+        summary="Price this service for a given size or duration",
+    )
     @action(detail=True, methods=["post"], serializer_class=QuoteSerializer)
     def quote(self, request, pk=None):
         """Price this service for a given size or duration."""

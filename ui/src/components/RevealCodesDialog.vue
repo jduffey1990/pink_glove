@@ -12,7 +12,7 @@
    *    look costs another logged reveal, which is the entire point: the log is
    *    a record of doors opened, not of pages loaded.
    */
-  import type { RevealedCodes } from '@/api/endpoints'
+  import type { RevealedCodes } from '@/api/types'
   import { ref, watch } from 'vue'
   import { fetchAccessWarning, revealAccessCodes } from '@/api/endpoints'
   import { statusOf } from '@/stores/session'

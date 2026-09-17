@@ -24,6 +24,24 @@ class RevealRequestSerializer(serializers.Serializer):
     )
 
 
+class RevealedCodesSerializer(serializers.Serializer):
+    """
+    What a reveal returns. Describes the response for the schema (ADR-019);
+    this is the one read shape in the API that carries the codes.
+    """
+
+    gate_code = serializers.CharField(allow_blank=True)
+    alarm_code = serializers.CharField(allow_blank=True)
+    key_location = serializers.CharField(allow_blank=True)
+    reveal_id = serializers.UUIDField()
+    job = serializers.UUIDField(allow_null=True)
+
+
+class AcknowledgementRequiredSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    acknowledgement_required = serializers.BooleanField()
+
+
 class AccessWarningSerializer(serializers.Serializer):
     """
     The acknowledgement copy, served so the frontend never hardcodes it.

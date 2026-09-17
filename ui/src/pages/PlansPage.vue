@@ -11,8 +11,7 @@
    *    eight weeks of visits already on the board, keeping the ones a
    *    dispatcher moved or worked (ADR-020), and they need to see which.
    */
-  import type { PlanPreview } from '@/api/endpoints'
-  import type { Customer, RecurringPlan, Service, ServiceLocation } from '@/api/types'
+  import type { Customer, PlanPreview, RecurringPlan, Service, ServiceLocation } from '@/api/types'
   import { computed, ref, watch } from 'vue'
   import {
     createPlan,

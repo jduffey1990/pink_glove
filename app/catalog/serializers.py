@@ -48,3 +48,11 @@ class QuoteSerializer(serializers.Serializer):
 
     square_feet = serializers.IntegerField(required=False, min_value=0)
     hours = serializers.DecimalField(required=False, max_digits=6, decimal_places=2, min_value=0)
+
+
+class QuoteResultSerializer(serializers.Serializer):
+    """The quote action's response, described for the schema (ADR-019)."""
+
+    service = serializers.CharField()
+    pricing_model = serializers.CharField()
+    amount_cents = serializers.IntegerField()

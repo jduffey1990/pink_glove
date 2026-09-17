@@ -1,5 +1,6 @@
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -31,6 +32,11 @@ class AccessRevealViewSet(TenantViewSetMixin, ReadOnlyModelViewSet):
     filterset_fields = ["user", "location", "is_flagged", "acknowledged"]
     ordering_fields = ["created_at", "is_flagged"]
 
+    @extend_schema(
+        request=ReviewSerializer,
+        responses={200: AccessRevealSerializer},
+        summary="Mark a flagged reveal as looked at",
+    )
     @action(detail=True, methods=["post"])
     def review(self, request, pk=None):
         """

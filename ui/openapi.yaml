@@ -99,6 +99,7 @@ paths:
 
         Closing a flag records who closed it and what they were told. Nothing
         about the original reveal is altered.
+      summary: Mark a flagged reveal as looked at
       parameters:
       - in: path
         name: id
@@ -109,6 +110,17 @@ paths:
         required: true
       tags:
       - audit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
       security:
       - cookieAuth: []
       responses:
@@ -446,6 +458,7 @@ paths:
     post:
       operationId: catalog_services_quote_create
       description: Price this service for a given size or duration.
+      summary: Price this service for a given size or duration
       parameters:
       - in: path
         name: id
@@ -474,7 +487,13 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Quote'
+                $ref: '#/components/schemas/QuoteResult'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
           description: ''
   /api/customers/customers/:
     get:
@@ -959,6 +978,7 @@ paths:
         What is enforced here is a relationship, not a time: a cleaner needs an
         assignment at this location (ADR-017). Dispatchers and above are
         unrestricted, as they already are for the location record itself.
+      summary: Reveal this location's access codes, and record who asked
       parameters:
       - in: path
         name: id
@@ -973,13 +993,13 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ServiceLocationRequest'
+              $ref: '#/components/schemas/RevealRequestRequest'
           application/x-www-form-urlencoded:
             schema:
-              $ref: '#/components/schemas/ServiceLocationRequest'
+              $ref: '#/components/schemas/RevealRequestRequest'
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/ServiceLocationRequest'
+              $ref: '#/components/schemas/RevealRequestRequest'
         required: true
       security:
       - cookieAuth: []
@@ -988,7 +1008,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ServiceLocation'
+                $ref: '#/components/schemas/RevealedCodes'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcknowledgementRequired'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
           description: ''
   /api/organizations/current/:
     get:
@@ -2606,6 +2638,16 @@ components:
           type: string
       required:
       - warning
+    AcknowledgementRequired:
+      type: object
+      properties:
+        detail:
+          type: string
+        acknowledgement_required:
+          type: boolean
+      required:
+      - acknowledgement_required
+      - detail
     AssignRequest:
       type: object
       properties:
@@ -4138,17 +4180,6 @@ components:
         * `flat` - Flat rate
         * `hourly` - Hourly
         * `per_sqft` - Per square foot
-    Quote:
-      type: object
-      description: Inputs for `POST /api/catalog/services/{id}/quote/`.
-      properties:
-        square_feet:
-          type: integer
-          minimum: 0
-        hours:
-          type: string
-          format: decimal
-          pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
     QuoteRequest:
       type: object
       description: Inputs for `POST /api/catalog/services/{id}/quote/`.
@@ -4160,6 +4191,20 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
+    QuoteResult:
+      type: object
+      description: The quote action's response, described for the schema (ADR-019).
+      properties:
+        service:
+          type: string
+        pricing_model:
+          type: string
+        amount_cents:
+          type: integer
+      required:
+      - amount_cents
+      - pricing_model
+      - service
     Readiness:
       type: object
       properties:
@@ -4341,6 +4386,57 @@ components:
       required:
       - kept
       - regenerated
+    RevealRequestRequest:
+      type: object
+      description: |-
+        Body for the reveal action.
+
+        `acknowledged` must be explicitly true. Requiring it server-side means the
+        warning is part of the contract rather than a dialog the frontend could
+        quietly stop showing, and the log can state that the user saw it.
+      properties:
+        acknowledged:
+          type: boolean
+        job:
+          type: string
+          format: uuid
+          nullable: true
+          description: The visit this reveal is for. Dispatcher and above may name
+            one; a cleaner's is resolved from their assignment and this is ignored.
+      required:
+      - acknowledged
+    RevealedCodes:
+      type: object
+      description: |-
+        What a reveal returns. Describes the response for the schema (ADR-019);
+        this is the one read shape in the API that carries the codes.
+      properties:
+        gate_code:
+          type: string
+        alarm_code:
+          type: string
+        key_location:
+          type: string
+        reveal_id:
+          type: string
+          format: uuid
+        job:
+          type: string
+          format: uuid
+          nullable: true
+      required:
+      - alarm_code
+      - gate_code
+      - job
+      - key_location
+      - reveal_id
+    ReviewRequest:
+      type: object
+      description: An admin closing out a flagged reveal after asking about it.
+      properties:
+        review_note:
+          type: string
+          default: ''
     RoleEnum:
       enum:
       - owner

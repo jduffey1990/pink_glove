@@ -62,6 +62,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
+         * Mark a flagged reveal as looked at
          * @description Mark a flagged reveal as looked at.
          *
          *     Closing a flag records who closed it and what they were told. Nothing
@@ -205,7 +206,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Price this service for a given size or duration. */
+        /**
+         * Price this service for a given size or duration
+         * @description Price this service for a given size or duration.
+         */
         post: operations["catalog_services_quote_create"];
         delete?: never;
         options?: never;
@@ -387,6 +391,7 @@ export interface paths {
         get?: never;
         put?: never;
         /**
+         * Reveal this location's access codes, and record who asked
          * @description Return this location's access codes and record who asked.
          *
          *     Ordinary schedule data -- address, phone, arrival time -- is not gated
@@ -1088,6 +1093,10 @@ export interface components {
          */
         AccessWarning: {
             warning: string;
+        };
+        AcknowledgementRequired: {
+            detail: string;
+            acknowledgement_required: boolean;
         };
         AssignRequest: {
             /** Format: uuid */
@@ -1880,16 +1889,16 @@ export interface components {
          */
         PricingModelEnum: "flat" | "hourly" | "per_sqft";
         /** @description Inputs for `POST /api/catalog/services/{id}/quote/`. */
-        Quote: {
-            square_feet?: number;
-            /** Format: decimal */
-            hours?: string;
-        };
-        /** @description Inputs for `POST /api/catalog/services/{id}/quote/`. */
         QuoteRequest: {
             square_feet?: number;
             /** Format: decimal */
             hours?: string;
+        };
+        /** @description The quote action's response, described for the schema (ADR-019). */
+        QuoteResult: {
+            service: string;
+            pricing_model: string;
+            amount_cents: number;
         };
         Readiness: {
             status: components["schemas"]["ReadinessStatusEnum"];
@@ -1988,6 +1997,39 @@ export interface components {
         RegenerateResponse: {
             regenerated: number;
             kept: number;
+        };
+        /**
+         * @description Body for the reveal action.
+         *
+         *     `acknowledged` must be explicitly true. Requiring it server-side means the
+         *     warning is part of the contract rather than a dialog the frontend could
+         *     quietly stop showing, and the log can state that the user saw it.
+         */
+        RevealRequestRequest: {
+            acknowledged: boolean;
+            /**
+             * Format: uuid
+             * @description The visit this reveal is for. Dispatcher and above may name one; a cleaner's is resolved from their assignment and this is ignored.
+             */
+            job?: string | null;
+        };
+        /**
+         * @description What a reveal returns. Describes the response for the schema (ADR-019);
+         *     this is the one read shape in the API that carries the codes.
+         */
+        RevealedCodes: {
+            gate_code: string;
+            alarm_code: string;
+            key_location: string;
+            /** Format: uuid */
+            reveal_id: string;
+            /** Format: uuid */
+            job: string | null;
+        };
+        /** @description An admin closing out a flagged reveal after asking about it. */
+        ReviewRequest: {
+            /** @default  */
+            review_note: string;
         };
         /**
          * @description * `owner` - Owner
@@ -2285,7 +2327,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReviewRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["ReviewRequest"];
+                "multipart/form-data": components["schemas"]["ReviewRequest"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -2596,7 +2644,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Quote"];
+                    "application/json": components["schemas"]["QuoteResult"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
                 };
             };
         };
@@ -2955,9 +3011,9 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ServiceLocationRequest"];
-                "application/x-www-form-urlencoded": components["schemas"]["ServiceLocationRequest"];
-                "multipart/form-data": components["schemas"]["ServiceLocationRequest"];
+                "application/json": components["schemas"]["RevealRequestRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["RevealRequestRequest"];
+                "multipart/form-data": components["schemas"]["RevealRequestRequest"];
             };
         };
         responses: {
@@ -2966,7 +3022,23 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ServiceLocation"];
+                    "application/json": components["schemas"]["RevealedCodes"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AcknowledgementRequired"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
                 };
             };
         };

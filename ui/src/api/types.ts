@@ -24,6 +24,13 @@ export type JobPhoto = Schemas['JobPhoto']
 export type TimeEntry = Schemas['TimeEntry']
 export type RecurringPlan = Schemas['RecurringPlan']
 
+/** Action responses. Generated like everything else -- never restated by hand. */
+export type PlanPreview = Schemas['PreviewResponse']
+export type RegenerateResult = Schemas['RegenerateResponse']
+export type MaterializeResult = Schemas['MaterializeResponse']
+export type AccessWarning = Schemas['AccessWarning']
+export type RevealedCodes = Schemas['RevealedCodes']
+
 export type Customer = Schemas['Customer']
 export type ServiceLocation = Schemas['ServiceLocation']
 export type Service = Schemas['Service']

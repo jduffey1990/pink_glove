@@ -7,6 +7,7 @@
  */
 
 import type {
+  AccessWarning,
   Customer,
   CustomerRequest,
   Job,
@@ -14,11 +15,15 @@ import type {
   JobPhoto,
   JobRequest,
   JobStatus,
+  MaterializeResult,
   Membership,
   Organization,
   Paginated,
+  PlanPreview,
   RecurringPlan,
   RecurringPlanRequest,
+  RegenerateResult,
+  RevealedCodes,
   Service,
   ServiceLocation,
   ServiceLocationRequest,
@@ -170,16 +175,6 @@ export async function correctTimeEntry (
 
 // --- recurring plans -------------------------------------------------------
 
-export interface PlanPreview {
-  timezone: string
-  occurrences: { local: string, utc: string }[]
-}
-
-export interface RegenerateResult {
-  regenerated: number
-  kept: number
-}
-
 export async function listPlans (
   query: { customer?: string, location?: string, is_active?: boolean } = {},
 ): Promise<Paginated<RecurringPlan>> {
@@ -228,8 +223,8 @@ export async function previewPlan (id: string, count = 6): Promise<PlanPreview> 
   return data
 }
 
-export async function materializePlan (id: string): Promise<{ created: number }> {
-  const { data } = await api.post<{ created: number }>(`/api/scheduling/plans/${id}/materialize/`)
+export async function materializePlan (id: string): Promise<MaterializeResult> {
+  const { data } = await api.post<MaterializeResult>(`/api/scheduling/plans/${id}/materialize/`)
   return data
 }
 
@@ -286,14 +281,6 @@ export async function updateLocation (
   return data
 }
 
-export interface RevealedCodes {
-  gate_code: string
-  alarm_code: string
-  key_location: string
-  reveal_id: string
-  job: string | null
-}
-
 /**
  * Fetch the warning a user must acknowledge before codes are revealed.
  *
@@ -302,7 +289,7 @@ export interface RevealedCodes {
  * has happened yet.
  */
 export async function fetchAccessWarning (locationId: string): Promise<string> {
-  const { data } = await api.get<{ warning: string }>(
+  const { data } = await api.get<AccessWarning>(
     `/api/customers/locations/${locationId}/access-warning/`,
   )
   return data.warning

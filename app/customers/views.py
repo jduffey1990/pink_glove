@@ -6,9 +6,15 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
 from audit.models import ACCESS_WARNING
-from audit.serializers import AccessWarningSerializer, RevealRequestSerializer
+from audit.serializers import (
+    AccessWarningSerializer,
+    AcknowledgementRequiredSerializer,
+    RevealedCodesSerializer,
+    RevealRequestSerializer,
+)
 from audit.services import record_reveal, resolve_reveal_job
 from base.permissions import IsDispatcherOrHigher
+from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 from customers.models import Customer, ServiceLocation
 from customers.serializers import CustomerSerializer, ServiceLocationSerializer
@@ -73,6 +79,15 @@ class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):
         self.get_object()  # 404s for another organization's location
         return Response({"warning": ACCESS_WARNING})
 
+    @extend_schema(
+        request=RevealRequestSerializer,
+        responses={
+            200: RevealedCodesSerializer,
+            400: AcknowledgementRequiredSerializer,
+            403: DetailSerializer,
+        },
+        summary="Reveal this location's access codes, and record who asked",
+    )
     @action(detail=True, methods=["post"], url_path="reveal-access")
     def reveal_access(self, request, pk=None):
         """

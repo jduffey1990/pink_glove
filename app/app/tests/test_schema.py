@@ -46,6 +46,44 @@ class TestSchemaGeneration:
         assert schema["info"]["title"] == "pink_glove API"
 
 
+def _routed_viewsets(patterns=None):
+    from django.urls import URLPattern, URLResolver, get_resolver
+
+    for pattern in get_resolver().url_patterns if patterns is None else patterns:
+        if isinstance(pattern, URLResolver):
+            yield from _routed_viewsets(pattern.url_patterns)
+        elif isinstance(pattern, URLPattern):
+            cls = getattr(pattern.callback, "cls", None)
+            if cls is not None and hasattr(cls, "get_extra_actions"):
+                yield cls
+
+
+class TestEveryActionIsDescribed:
+    """
+    The zero-warning test has a blind spot. On a viewset, spectacular does not
+    warn about an `@action` it cannot describe: it quietly borrows the
+    viewset's `serializer_class` for both request and response. `reveal-access`
+    was published as "takes a ServiceLocation, returns a ServiceLocation" that
+    way, and the frontend hand-wrote the real shape beside the generated one.
+    """
+
+    def test_every_action_carries_extend_schema(self):
+        undescribed = sorted(
+            {
+                f"{cls.__module__}.{cls.__name__}.{extra.__name__}"
+                for cls in _routed_viewsets()
+                for extra in cls.get_extra_actions()
+                if "schema" not in extra.kwargs
+            }
+        )
+
+        assert not undescribed, (
+            "These actions have no @extend_schema, so their request and response "
+            "in the generated schema are the viewset's serializer, not their own:\n  "
+            + "\n  ".join(undescribed)
+        )
+
+
 @pytest.mark.django_db
 class TestSchemaEndpoints:
     def test_schema_requires_authentication(self, api_client):
