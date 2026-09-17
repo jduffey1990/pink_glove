@@ -2,7 +2,6 @@ import logging
 
 from django.conf import settings
 from django.contrib.auth import login, logout
-from django.core.mail import send_mail
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import ensure_csrf_cookie
 from drf_spectacular.utils import extend_schema
@@ -24,6 +23,7 @@ from users.serializers import (
     MembershipSerializer,
     SessionSerializer,
 )
+from users.services import may_use_magic_link, send_magic_link
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,9 @@ class MagicLinkRequestView(APIView):
         user = CustomUser.objects.filter(email=email, is_active=True).first()
         body = {"detail": "If that address has an account, a sign-in link is on its way."}
 
-        if user is None:
+        # Staff get the same 202 as a stranger: they sign in with a password
+        # and a code, and saying so here would reveal which addresses are staff.
+        if user is None or not may_use_magic_link(user):
             return Response(body, status=status.HTTP_202_ACCEPTED)
 
         token, raw_token = MagicLinkToken.issue(user)
@@ -94,16 +96,7 @@ class MagicLinkRequestView(APIView):
         if settings.LOCAL:
             body["dev_link"] = link
         else:
-            try:
-                send_mail(
-                    subject="Your sign-in link",
-                    message=f"Sign in here: {link}\n\nThis link expires in 15 minutes.",
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[user.email],
-                    fail_silently=False,
-                )
-            except Exception:
-                logger.exception("Failed to send magic link to user %s", user.pk)
+            send_magic_link(user, link)
 
         return Response(body, status=status.HTTP_202_ACCEPTED)
 
@@ -123,7 +116,8 @@ class MagicLinkConsumeView(APIView):
         serializer.is_valid(raise_exception=True)
 
         user = MagicLinkToken.consume(serializer.validated_data["token"])
-        if user is None or not user.is_active:
+        # Asked again here because a role can change while a link is live.
+        if user is None or not user.is_active or not may_use_magic_link(user):
             return Response(
                 {"detail": "That sign-in link is invalid or has expired."},
                 status=status.HTTP_401_UNAUTHORIZED,

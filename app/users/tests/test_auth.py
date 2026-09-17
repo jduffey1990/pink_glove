@@ -3,7 +3,7 @@ from django.urls import reverse
 
 from app.middleware.tenant import ORGANIZATION_HEADER
 from users.enums import Role
-from users.models import MagicLinkToken
+from users.models import MagicLinkToken, Membership
 
 SESSION_URL = reverse("users:session")
 MAGIC_LINK_URL = reverse("users:magic-link-request")
@@ -102,39 +102,85 @@ class TestMagicLink:
         """LOCAL exposes dev_link, which is how these tests learn the token."""
         settings.LOCAL = True
 
+    @pytest.fixture
+    def homeowner(self, organization, make_member):
+        return make_member(organization, role=Role.CUSTOMER, email="homeowner@example.com")
+
     def _request_link(self, api_client, email):
         return api_client.post(MAGIC_LINK_URL, {"email": email})
 
-    def test_unknown_address_looks_identical_to_a_known_one(self, api_client, owner):
-        known = self._request_link(api_client, owner.email)
+    def _token_for(self, api_client, user):
+        return self._request_link(api_client, user.email).json()["dev_link"].rsplit("/", 1)[-1]
+
+    def test_unknown_address_looks_identical_to_a_known_one(self, api_client, homeowner):
+        known = self._request_link(api_client, homeowner.email)
         unknown = self._request_link(api_client, "nobody@example.com")
 
         assert known.status_code == unknown.status_code == 202
         assert known.json()["detail"] == unknown.json()["detail"]
         assert MagicLinkToken.objects.count() == 1
 
-    def test_a_valid_link_signs_the_user_in(self, api_client, owner):
-        link = self._request_link(api_client, owner.email).json()["dev_link"]
-        token = link.rsplit("/", 1)[-1]
-
-        response = api_client.post(MAGIC_CONSUME_URL, {"token": token})
+    def test_a_valid_link_signs_the_user_in(self, api_client, homeowner):
+        response = api_client.post(
+            MAGIC_CONSUME_URL, {"token": self._token_for(api_client, homeowner)}
+        )
 
         assert response.status_code == 200
-        assert response.json()["email"] == owner.email
+        assert response.json()["email"] == homeowner.email
 
-    def test_a_link_works_only_once(self, api_client, owner):
-        token = self._request_link(api_client, owner.email).json()["dev_link"].rsplit("/", 1)[-1]
+    @pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN, Role.DISPATCHER, Role.CLEANER])
+    def test_staff_are_never_issued_a_link(self, api_client, organization, make_member, role):
+        """ADR-008: a link is one factor, and would stand in for password + 2FA."""
+        staff = make_member(organization, role=role)
+
+        response = self._request_link(api_client, staff.email)
+
+        assert response.status_code == 202
+        assert "dev_link" not in response.json()
+        assert not MagicLinkToken.objects.exists()
+
+    def test_a_superuser_is_never_issued_a_link(self, api_client, superuser):
+        self._request_link(api_client, superuser.email)
+
+        assert not MagicLinkToken.objects.exists()
+
+    def test_a_customer_who_is_also_staff_elsewhere_is_not_issued_a_link(
+        self, api_client, homeowner, other_organization
+    ):
+        Membership.objects.create(
+            user=homeowner, organization=other_organization, role=Role.DISPATCHER
+        )
+
+        self._request_link(api_client, homeowner.email)
+
+        assert not MagicLinkToken.objects.exists()
+
+    def test_a_link_issued_before_a_promotion_no_longer_works(self, api_client, homeowner):
+        token = self._token_for(api_client, homeowner)
+        Membership.objects.filter(user=homeowner).update(role=Role.ADMIN)
+
+        assert api_client.post(MAGIC_CONSUME_URL, {"token": token}).status_code == 401
+
+    def test_a_deactivated_user_cannot_use_a_live_link(self, api_client, homeowner):
+        token = self._token_for(api_client, homeowner)
+        homeowner.is_active = False
+        homeowner.save()
+
+        assert api_client.post(MAGIC_CONSUME_URL, {"token": token}).status_code == 401
+
+    def test_a_link_works_only_once(self, api_client, homeowner):
+        token = self._token_for(api_client, homeowner)
         api_client.post(MAGIC_CONSUME_URL, {"token": token})
         api_client.post(reverse("users:logout"))
 
         assert api_client.post(MAGIC_CONSUME_URL, {"token": token}).status_code == 401
 
-    def test_an_expired_link_is_refused(self, api_client, owner):
+    def test_an_expired_link_is_refused(self, api_client, homeowner):
         from datetime import timedelta
 
         from django.utils import timezone
 
-        token = self._request_link(api_client, owner.email).json()["dev_link"].rsplit("/", 1)[-1]
+        token = self._token_for(api_client, homeowner)
         MagicLinkToken.objects.update(expires_at=timezone.now() - timedelta(minutes=1))
 
         assert api_client.post(MAGIC_CONSUME_URL, {"token": token}).status_code == 401
@@ -142,8 +188,8 @@ class TestMagicLink:
     def test_a_bogus_token_is_refused(self, api_client):
         assert api_client.post(MAGIC_CONSUME_URL, {"token": "nonsense"}).status_code == 401
 
-    def test_the_raw_token_is_never_stored(self, api_client, owner):
-        token = self._request_link(api_client, owner.email).json()["dev_link"].rsplit("/", 1)[-1]
+    def test_the_raw_token_is_never_stored(self, api_client, homeowner):
+        token = self._token_for(api_client, homeowner)
 
         assert not MagicLinkToken.objects.filter(token_hash=token).exists()
         assert MagicLinkToken.objects.count() == 1
