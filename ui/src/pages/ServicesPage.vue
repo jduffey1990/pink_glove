@@ -96,7 +96,9 @@
       // Rounded on the way in: a price is whole cents, and 0.1 + 0.2 is not.
       base_price_cents: Math.round(draft.value.base_price * 100),
       hourly_rate_cents: String(Math.round(draft.value.hourly_rate * 100)),
-      per_sqft_rate_cents: String(draft.value.per_sqft_rate * 100),
+      // A rate keeps fractions of a cent (ADR-009), to the three places the API
+      // stores. Unrounded, $0.07 goes out as 7.000000000000001 and is refused.
+      per_sqft_rate_cents: (draft.value.per_sqft_rate * 100).toFixed(3),
       default_duration_minutes: draft.value.default_duration_minutes,
       is_active: draft.value.is_active,
     }
