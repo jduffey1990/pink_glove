@@ -29,7 +29,26 @@ class OrganizationAdmin(admin.ModelAdmin):
         ),
         ("Branding", {"fields": ("logo", "primary_color")}),
         (
-            "Billing (Phase 4)",
+            "Invoicing",
+            {
+                "fields": (
+                    "tax_rate_percent",
+                    "no_access_fee_type",
+                    "no_access_fee_value",
+                    "invoice_prefix",
+                    "invoice_terms_days",
+                    "invoice_footer",
+                ),
+                "description": (
+                    "Frozen onto each invoice when it is issued, so editing one of "
+                    "these never changes a document that has already gone out. The "
+                    "no-access fee value is cents when the type is flat and a "
+                    "percentage when it is proportional."
+                ),
+            },
+        ),
+        (
+            "Stripe (Phase 4b/4c)",
             {
                 "fields": ("stripe_customer_id", "stripe_subscription_id"),
                 "classes": ("collapse",),

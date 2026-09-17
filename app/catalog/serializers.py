@@ -18,6 +18,7 @@ class ServiceSerializer(TenantModelSerializer):
             "per_sqft_rate_cents",
             "default_duration_minutes",
             "is_active",
+            "is_taxable",
             "created_at",
             "updated_at",
         )

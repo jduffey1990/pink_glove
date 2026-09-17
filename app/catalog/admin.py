@@ -13,7 +13,7 @@ class ServiceAdmin(admin.ModelAdmin):
         "default_duration_minutes",
         "is_active",
     )
-    list_filter = ("organization", "pricing_model", "is_active")
+    list_filter = ("organization", "pricing_model", "is_active", "is_taxable")
     search_fields = ("name", "description")
     autocomplete_fields = ("organization",)
     readonly_fields = ("id", "created_at", "updated_at", "deleted_at")
@@ -28,6 +28,7 @@ class ServiceAdmin(admin.ModelAdmin):
                     "base_price_cents",
                     "hourly_rate_cents",
                     "per_sqft_rate_cents",
+                    "is_taxable",
                 ),
                 "description": (
                     "All amounts in cents. base_price_cents doubles as the minimum "

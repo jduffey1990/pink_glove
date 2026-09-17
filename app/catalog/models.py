@@ -53,6 +53,13 @@ class Service(TenantModel):
 
     is_active = models.BooleanField(default=True, db_index=True)
 
+    #: Snapshotted onto each invoice line at draft time (ADR-026). Defaults to
+    #: false because cleaning labour is untaxed in most US jurisdictions, and a
+    #: wrong `true` overcharges a customer where a wrong `false` does not.
+    is_taxable = models.BooleanField(
+        default=False, help_text="Whether sales tax applies to this service."
+    )
+
     class Meta(TenantModel.Meta):
         verbose_name = "Service"
         verbose_name_plural = "Services"

@@ -41,6 +41,12 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "working_days",
             "reveal_buffer_before_minutes",
             "reveal_buffer_after_minutes",
+            "tax_rate_percent",
+            "no_access_fee_type",
+            "no_access_fee_value",
+            "invoice_prefix",
+            "invoice_terms_days",
+            "invoice_footer",
             "is_active",
             "created_at",
         )

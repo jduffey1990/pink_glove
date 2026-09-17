@@ -1,13 +1,16 @@
 import datetime as dt
+from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo, available_timezones
 
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
 
 from base.models import Base
 from base.validators import MaxFileSize
+from organizations.enums import NoAccessFeeType
 
 #: ISO weekday numbers, the convention `datetime.isoweekday()` returns.
 MONDAY, SUNDAY = 1, 7
@@ -97,6 +100,47 @@ class Organization(Base):
 
     is_active = models.BooleanField(default=True)
 
+    # --- Billing settings ---------------------------------------------------
+    # Read by `billing.services` when an invoice is drafted and frozen onto it
+    # when it is issued (ADR-026). Changing one of these must never alter an
+    # invoice that has already gone out, which is why the invoice keeps its own
+    # copy rather than a pointer back here.
+
+    #: One flat rate for the whole organization; each service says whether it
+    #: is taxable. A rate per service location was rejected -- see ADR-026.
+    #: Decimal, not cents: 8.25% is a rate, and rounding the rate rather than
+    #: the total loses money (the same reasoning as `catalog.Service`).
+    tax_rate_percent = models.DecimalField(
+        max_digits=6,
+        decimal_places=3,
+        default=Decimal("0.000"),
+        validators=[MinValueValidator(Decimal("0.000"))],
+        help_text="Sales tax rate as a percentage, e.g. 8.250 for 8.25%.",
+    )
+
+    no_access_fee_type = models.CharField(
+        max_length=16, choices=NoAccessFeeType.choices, default=NoAccessFeeType.NONE
+    )
+    no_access_fee_value = models.DecimalField(
+        max_digits=10,
+        decimal_places=3,
+        default=Decimal("0.000"),
+        validators=[MinValueValidator(Decimal("0.000"))],
+        help_text="Cents when the fee is flat, a percentage when it is proportional.",
+    )
+
+    invoice_prefix = models.CharField(
+        max_length=8, default="INV", help_text="Prefix on invoice numbers, e.g. INV-0001."
+    )
+    invoice_terms_days = models.PositiveSmallIntegerField(
+        default=14, help_text="Days from issue to the due date."
+    )
+    invoice_footer = models.TextField(
+        blank=True,
+        default="",
+        help_text='Printed at the foot of every invoice, e.g. "Make checks payable to ...".',
+    )
+
     # Parked for Phase 4 -- tenants paying for the software, as distinct from
     # the tenant's own customers paying invoices. See ADR-007.
     stripe_customer_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
@@ -148,6 +192,25 @@ class Organization(Base):
             end = dt.datetime.combine(date_to + dt.timedelta(days=1), dt.time.min, tzinfo=self.tz)
 
         return start, end
+
+    def no_access_fee_cents(self, job_price_cents: int) -> int:
+        """
+        What a no-access visit costs, in whole cents.
+
+        NONE is zero and the caller skips the line entirely -- an organization
+        that does not charge for a locked door should not see a $0.00 row on
+        the invoice explaining that it did not.
+
+        Rounded once, half up, like every other money calculation here.
+        """
+        if self.no_access_fee_type == NoAccessFeeType.FLAT:
+            raw = Decimal(self.no_access_fee_value)
+        elif self.no_access_fee_type == NoAccessFeeType.PERCENT:
+            raw = Decimal(job_price_cents) * Decimal(self.no_access_fee_value) / Decimal(100)
+        else:
+            return 0
+
+        return int(raw.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
     def is_within_business_hours(self, when: dt.datetime) -> bool:
         """

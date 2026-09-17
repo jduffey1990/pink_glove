@@ -1430,6 +1430,13 @@ export interface components {
             status: components["schemas"]["JobStatusEnum"];
             reason_required: boolean;
         };
+        /**
+         * @description * `none` - No charge
+         *     * `flat` - Flat amount
+         *     * `percent` - Percentage of the visit price
+         * @enum {string}
+         */
+        NoAccessFeeTypeEnum: "none" | "flat" | "percent";
         /** @enum {unknown} */
         NullEnum: null;
         /** @description One upcoming occurrence, in both the forms a UI needs. */
@@ -1470,6 +1477,23 @@ export interface components {
             working_days?: number[];
             reveal_buffer_before_minutes?: number;
             reveal_buffer_after_minutes?: number;
+            /**
+             * Format: decimal
+             * @description Sales tax rate as a percentage, e.g. 8.250 for 8.25%.
+             */
+            tax_rate_percent?: string;
+            no_access_fee_type?: components["schemas"]["NoAccessFeeTypeEnum"];
+            /**
+             * Format: decimal
+             * @description Cents when the fee is flat, a percentage when it is proportional.
+             */
+            no_access_fee_value?: string;
+            /** @description Prefix on invoice numbers, e.g. INV-0001. */
+            invoice_prefix?: string;
+            /** @description Days from issue to the due date. */
+            invoice_terms_days?: number;
+            /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
+            invoice_footer?: string;
             readonly is_active: boolean;
             /** Format: date-time */
             readonly created_at: string;
@@ -1502,6 +1526,23 @@ export interface components {
             working_days?: number[];
             reveal_buffer_before_minutes?: number;
             reveal_buffer_after_minutes?: number;
+            /**
+             * Format: decimal
+             * @description Sales tax rate as a percentage, e.g. 8.250 for 8.25%.
+             */
+            tax_rate_percent?: string;
+            no_access_fee_type?: components["schemas"]["NoAccessFeeTypeEnum"];
+            /**
+             * Format: decimal
+             * @description Cents when the fee is flat, a percentage when it is proportional.
+             */
+            no_access_fee_value?: string;
+            /** @description Prefix on invoice numbers, e.g. INV-0001. */
+            invoice_prefix?: string;
+            /** @description Days from issue to the due date. */
+            invoice_terms_days?: number;
+            /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
+            invoice_footer?: string;
         };
         OrganizationSummary: {
             /** Format: uuid */
@@ -1767,6 +1808,23 @@ export interface components {
             working_days?: number[];
             reveal_buffer_before_minutes?: number;
             reveal_buffer_after_minutes?: number;
+            /**
+             * Format: decimal
+             * @description Sales tax rate as a percentage, e.g. 8.250 for 8.25%.
+             */
+            tax_rate_percent?: string;
+            no_access_fee_type?: components["schemas"]["NoAccessFeeTypeEnum"];
+            /**
+             * Format: decimal
+             * @description Cents when the fee is flat, a percentage when it is proportional.
+             */
+            no_access_fee_value?: string;
+            /** @description Prefix on invoice numbers, e.g. INV-0001. */
+            invoice_prefix?: string;
+            /** @description Days from issue to the due date. */
+            invoice_terms_days?: number;
+            /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
+            invoice_footer?: string;
         };
         /**
          * @description Base serializer for tenant-owned models.
@@ -1863,6 +1921,8 @@ export interface components {
             /** @description Used to lay out the schedule before actual times are known. */
             default_duration_minutes?: number;
             is_active?: boolean;
+            /** @description Whether sales tax applies to this service. */
+            is_taxable?: boolean;
         };
         /**
          * @description Base serializer for tenant-owned models.
@@ -2075,6 +2135,8 @@ export interface components {
             /** @description Used to lay out the schedule before actual times are known. */
             default_duration_minutes?: number;
             is_active?: boolean;
+            /** @description Whether sales tax applies to this service. */
+            is_taxable?: boolean;
             /** Format: date-time */
             readonly created_at: string;
             /** Format: date-time */
@@ -2195,6 +2257,8 @@ export interface components {
             /** @description Used to lay out the schedule before actual times are known. */
             default_duration_minutes?: number;
             is_active?: boolean;
+            /** @description Whether sales tax applies to this service. */
+            is_taxable?: boolean;
         };
         ServiceSummary: {
             /** Format: uuid */

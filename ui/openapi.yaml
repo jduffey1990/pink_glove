@@ -3363,6 +3363,16 @@ components:
       required:
       - reason_required
       - status
+    NoAccessFeeTypeEnum:
+      enum:
+      - none
+      - flat
+      - percent
+      type: string
+      description: |-
+        * `none` - No charge
+        * `flat` - Flat amount
+        * `percent` - Percentage of the visit price
     NullEnum:
       enum:
       - null
@@ -3456,6 +3466,31 @@ components:
           type: integer
           maximum: 2147483647
           minimum: 0
+        tax_rate_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,3})?$
+          description: Sales tax rate as a percentage, e.g. 8.250 for 8.25%.
+        no_access_fee_type:
+          $ref: '#/components/schemas/NoAccessFeeTypeEnum'
+        no_access_fee_value:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,7}(?:\.\d{0,3})?$
+          description: Cents when the fee is flat, a percentage when it is proportional.
+        invoice_prefix:
+          type: string
+          description: Prefix on invoice numbers, e.g. INV-0001.
+          maxLength: 8
+        invoice_terms_days:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          description: Days from issue to the due date.
+        invoice_footer:
+          type: string
+          description: Printed at the foot of every invoice, e.g. "Make checks payable
+            to ...".
         is_active:
           type: boolean
           readOnly: true
@@ -3541,6 +3576,32 @@ components:
           type: integer
           maximum: 2147483647
           minimum: 0
+        tax_rate_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,3})?$
+          description: Sales tax rate as a percentage, e.g. 8.250 for 8.25%.
+        no_access_fee_type:
+          $ref: '#/components/schemas/NoAccessFeeTypeEnum'
+        no_access_fee_value:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,7}(?:\.\d{0,3})?$
+          description: Cents when the fee is flat, a percentage when it is proportional.
+        invoice_prefix:
+          type: string
+          minLength: 1
+          description: Prefix on invoice numbers, e.g. INV-0001.
+          maxLength: 8
+        invoice_terms_days:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          description: Days from issue to the due date.
+        invoice_footer:
+          type: string
+          description: Printed at the foot of every invoice, e.g. "Make checks payable
+            to ...".
       required:
       - name
       - timezone
@@ -4000,6 +4061,32 @@ components:
           type: integer
           maximum: 2147483647
           minimum: 0
+        tax_rate_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,3})?$
+          description: Sales tax rate as a percentage, e.g. 8.250 for 8.25%.
+        no_access_fee_type:
+          $ref: '#/components/schemas/NoAccessFeeTypeEnum'
+        no_access_fee_value:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,7}(?:\.\d{0,3})?$
+          description: Cents when the fee is flat, a percentage when it is proportional.
+        invoice_prefix:
+          type: string
+          minLength: 1
+          description: Prefix on invoice numbers, e.g. INV-0001.
+          maxLength: 8
+        invoice_terms_days:
+          type: integer
+          maximum: 32767
+          minimum: 0
+          description: Days from issue to the due date.
+        invoice_footer:
+          type: string
+          description: Printed at the foot of every invoice, e.g. "Make checks payable
+            to ...".
     PatchedRecurringPlanRequest:
       type: object
       description: |-
@@ -4165,6 +4252,9 @@ components:
           description: Used to lay out the schedule before actual times are known.
         is_active:
           type: boolean
+        is_taxable:
+          type: boolean
+          description: Whether sales tax applies to this service.
     PatchedTimeEntryRequest:
       type: object
       description: |-
@@ -4529,6 +4619,9 @@ components:
           description: Used to lay out the schedule before actual times are known.
         is_active:
           type: boolean
+        is_taxable:
+          type: boolean
+          description: Whether sales tax applies to this service.
         created_at:
           type: string
           format: date-time
@@ -4788,6 +4881,9 @@ components:
           description: Used to lay out the schedule before actual times are known.
         is_active:
           type: boolean
+        is_taxable:
+          type: boolean
+          description: Whether sales tax applies to this service.
       required:
       - name
     ServiceSummary:

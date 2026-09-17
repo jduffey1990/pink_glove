@@ -41,6 +41,33 @@ class TestServiceApi:
 
         assert response.status_code == 400
 
+    def test_is_taxable_defaults_off_and_can_be_set(self, authed_client):
+        """
+        Tax is one rate per organization; the service says whether it applies
+        (ADR-026). Off by default -- cleaning labour is untaxed in most US
+        jurisdictions, and a wrong `true` overcharges a customer.
+        """
+        response = authed_client.post(
+            LIST_URL,
+            {"name": "Standard clean", "pricing_model": "flat", "base_price_cents": 12000},
+            format="json",
+        )
+        assert response.data["is_taxable"] is False
+
+        response = authed_client.post(
+            LIST_URL,
+            {
+                "name": "Carpet supplies",
+                "pricing_model": "flat",
+                "base_price_cents": 4000,
+                "is_taxable": True,
+            },
+            format="json",
+        )
+
+        assert response.status_code == 201
+        assert Service.objects.get(name="Carpet supplies").is_taxable is True
+
     def test_list_excludes_other_organizations(self, authed_client, other_organization, service):
         Service.objects.create(organization=other_organization, name="Theirs", base_price_cents=1)
 
