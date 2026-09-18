@@ -76,7 +76,8 @@ failover and you own its backups.
 fly redis create --name pink-glove-staging-redis --region dfw --no-replicas
 ```
 
-Copy the `redis://…` URL it prints and set it:
+Copy the `redis://…` URL it prints (it is redacted in some terminals;
+`fly redis status pink-glove-staging-redis` shows it again) and set it:
 
 ```bash
 fly secrets set --app pink-glove-staging REDIS_URL='redis://default:…@fly-pink-glove-staging-redis.upstash.io:6379'
@@ -100,14 +101,22 @@ public bucket would still be a public bucket.
 
 ```bash
 fly secrets set --app pink-glove-staging \
-    SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(64))')" \
-    FIELD_ENCRYPTION_KEY="$(python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
+    SECRET_KEY="$(app/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+    FIELD_ENCRYPTION_KEY="$(app/.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
     ALLOWED_HOSTS=pink-glove-staging.fly.dev \
     FRONTEND_BASE_URL=https://pink-glove-staging.fly.dev \
-    EMAIL_HOST_PASSWORD='SG.…' \
-    DEFAULT_FROM_EMAIL='pink glove <noreply@yourdomain>' \
+    EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend \
+    DEFAULT_FROM_EMAIL='pink glove <noreply@pink-glove-staging.fly.dev>' \
     SECURE_HSTS_SECONDS=0
 ```
+
+(The venv's Python, because the Fernet generator needs the `cryptography`
+package.) `EMAIL_BACKEND=…console…` prints mail to the web and worker logs
+instead of sending it, so staging works before there is a mail account: the
+sign-in code is in `fly logs --app pink-glove-staging`. To send real mail,
+verify a single sender in SendGrid (any mailbox, no domain required), then
+`fly secrets set EMAIL_HOST_PASSWORD='SG.…' DEFAULT_FROM_EMAIL='…'` and
+`fly secrets unset EMAIL_BACKEND`.
 
 - **Back up `FIELD_ENCRYPTION_KEY` somewhere that is not Fly.** It encrypts
   gate and alarm codes. Lose it and every code is unreadable, permanently.
@@ -118,6 +127,9 @@ fly secrets set --app pink-glove-staging \
 - `EMAIL_HOST_PASSWORD` is a SendGrid API key by default (`EMAIL_HOST`,
   `EMAIL_HOST_USER` in `.env.example`); use a *separate* key for staging so
   it can be revoked alone.
+- Upstash Redis on the default plan bills per command, and Celery polls its
+  broker continuously. After a day, `fly redis status` shows the count; if it
+  is heading past a few million a month, a fixed-price plan is cheaper.
 
 ### 6. Deploy
 
@@ -154,7 +166,7 @@ fly ssh console --app pink-glove-staging -C "python manage.py seed_demo --force"
 ```
 
 Then sign in as one of the printed users (staff are challenged; the code
-arrives by email, so `EMAIL_HOST_PASSWORD` has to be real), upload a photo to
+arrives by email, or in `fly logs` with the console mail backend), upload a photo to
 a job, and confirm the image URL is on `fly.storage.tigris.dev`, carries a
 signature, and stops working after five minutes.
 
