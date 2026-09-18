@@ -24,7 +24,6 @@ is a JSON 404 and never a 200 with a page in it.
 
 from __future__ import annotations
 
-import functools
 from pathlib import Path
 
 from django.conf import settings
@@ -44,12 +43,21 @@ def dist_dir() -> Path | None:
     return Path(raw) if raw else None
 
 
-@functools.lru_cache(maxsize=1)
+_index_cache: dict[str, bytes] = {}
+
+
 def _read_index(path: str) -> bytes | None:
-    try:
-        return Path(path).read_bytes()
-    except OSError:
-        return None
+    """The file, held after the first successful read. A miss is not cached:
+    a build that appears later (or a transient read error) must not pin a 404
+    for the life of the process."""
+    body = _index_cache.get(path)
+    if body is None:
+        try:
+            body = Path(path).read_bytes()
+        except OSError:
+            return None
+        _index_cache[path] = body
+    return body
 
 
 # HEAD too: uptime monitors and `curl -I` ask that way.

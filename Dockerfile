@@ -86,6 +86,7 @@ COPY --chown=app:app app/ /code
 # the environment at runtime.
 RUN SECRET_KEY=build-time-only \
     ALLOWED_HOSTS=localhost \
+    FRONTEND_BASE_URL=https://localhost \
     FIELD_ENCRYPTION_KEY=build-time-only-not-a-key \
     MEDIA_BACKEND=s3 \
     MEDIA_BUCKET=build-time-only \

@@ -229,3 +229,34 @@ describe('losing the session', () => {
     })
   })
 })
+
+describe('API_BASE_URL', () => {
+  // The constant is computed at module load, so each case imports afresh.
+  async function baseUrl (): Promise<string> {
+    vi.resetModules()
+    return (await import('./client')).API_BASE_URL
+  }
+
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('is relative in a production build: the API serves the page (ADR-027)', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', undefined)
+    vi.stubEnv('DEV', false)
+
+    expect(await baseUrl()).toBe('')
+  })
+
+  it('points at the API port under the dev server', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', undefined)
+    vi.stubEnv('DEV', true)
+
+    expect(await baseUrl()).toBe('http://localhost:8000')
+  })
+
+  it('is overridden by VITE_API_BASE_URL either way', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example.com')
+    vi.stubEnv('DEV', false)
+
+    expect(await baseUrl()).toBe('https://api.example.com')
+  })
+})

@@ -11,8 +11,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if [ ! -x .venv/bin/python ]; then
-  echo "skipping schema check: app/.venv not found" >&2
+# CI sets PYTHON to the interpreter on its PATH; a checkout uses the venv.
+PYTHON="${PYTHON:-.venv/bin/python}"
+
+if ! command -v "$PYTHON" >/dev/null 2>&1 && [ ! -x "$PYTHON" ]; then
+  echo "skipping schema check: $PYTHON not found" >&2
   exit 0
 fi
 
@@ -22,7 +25,7 @@ cp ../ui/openapi.yaml "$before"
 
 # Test settings so this needs no database and no .env.
 DJANGO_SETTINGS_MODULE=app.settings.test \
-  .venv/bin/python manage.py spectacular --file ../ui/openapi.yaml >/dev/null
+  "$PYTHON" manage.py spectacular --file ../ui/openapi.yaml >/dev/null
 
 if ! diff -q "$before" ../ui/openapi.yaml >/dev/null; then
   cp "$before" ../ui/openapi.yaml   # leave the tree as we found it

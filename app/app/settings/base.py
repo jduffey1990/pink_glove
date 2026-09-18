@@ -92,6 +92,10 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    # Above whitenoise on purpose: whitenoise answers a file without running
+    # any middleware below it, and the SPA's files are served that way since
+    # ADR-027. It is pure process_response, so nothing else moves.
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
     # Whitenoise, taught the shape of Vite's hashed asset names (ADR-027).
     "app.middleware.static_files.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -102,7 +106,6 @@ MIDDLEWARE = [
     # request.user's memberships.
     "app.middleware.tenant.TenantMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 TEMPLATES = [
@@ -277,15 +280,15 @@ USE_TZ = True
 # Static and media
 # --------------------------------------------------------------------------
 # Whitenoise serves static from the container, so no bucket is required to
-# deploy. Media storage is env-selected; see docs/DECISIONS.md ADR-006.
+# deploy. Media storage is env-selected; see docs/DECISIONS.md ADR-027.
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
-# Only read with MEDIA_BACKEND=filesystem. The default is inside the image and
-# so is lost on every deploy; production.py refuses it unless MEDIA_ROOT is set
-# explicitly, which is how a mounted volume says it is one.
-MEDIA_ROOT = Path(config("MEDIA_ROOT", default=str(BASE_DIR / "media")))
+# Only read with MEDIA_BACKEND=filesystem, which is development only:
+# production.py refuses it, because nothing serves /media/ outside DEBUG and
+# the container's disk is thrown away on every deploy anyway.
+MEDIA_ROOT = BASE_DIR / "media"
 
 # The built frontend (ADR-027). Vite's output directory: `index.html` plus
 # `assets/` full of content-hashed files. Whitenoise serves the files from
@@ -432,6 +435,9 @@ CACHES = {
 # Application URLs
 # --------------------------------------------------------------------------
 
+# Where sign-in links point (magic links, the admin's redirect). Deployed it is
+# the API's own origin (ADR-027); production.py requires it and requires https,
+# because a customer's sign-in token travels in it.
 FRONTEND_BASE_URL = config("FRONTEND_BASE_URL", default="http://localhost:3000")
 
 # --------------------------------------------------------------------------

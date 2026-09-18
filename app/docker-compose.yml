@@ -102,8 +102,8 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # The Vite dev server. Development only -- a production image for the UI is
-  # deferred with the deploy target (ADR-006).
+  # The Vite dev server. Development only -- deployed, the build is baked into
+  # the one image and served by gunicorn (ADR-027).
   #
   # Node 22 because eslint-config-vuetify's toolchain calls Object.groupBy,
   # which does not exist before Node 21. Matches ui/.nvmrc.

@@ -11,10 +11,9 @@ from django.core.exceptions import ImproperlyConfigured
 from .base import *  # noqa: F403
 from .base import (
     ALLOWED_HOSTS,
-    BASE_DIR,
     FIELD_ENCRYPTION_KEY,
+    FRONTEND_BASE_URL,
     MEDIA_BUCKET,
-    MEDIA_ROOT,
     SECRET_KEY,
     UI_DIST_DIR,
     config,
@@ -36,6 +35,8 @@ _missing = [
         # Without this, every read of an encrypted column raises at runtime
         # rather than at startup. Fail now instead.
         ("FIELD_ENCRYPTION_KEY", FIELD_ENCRYPTION_KEY),
+        # Sign-in links are built from it; the base default is the dev server.
+        ("FRONTEND_BASE_URL", config("FRONTEND_BASE_URL", default="")),
     ]
     if not value
 ]
@@ -47,6 +48,10 @@ if _missing:
 if "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS must not contain '*' in production.")
 
+# A customer's sign-in token travels in this URL, in an email.
+if not FRONTEND_BASE_URL.startswith("https://"):
+    raise ImproperlyConfigured("FRONTEND_BASE_URL must be an https:// URL in production.")
+
 # --------------------------------------------------------------------------
 # Media
 # --------------------------------------------------------------------------
@@ -55,15 +60,14 @@ if "*" in ALLOWED_HOSTS:
 
 _media_backend = config("MEDIA_BACKEND", default="filesystem")
 if _media_backend == "filesystem":
-    # The image's own filesystem is thrown away on every deploy. A mounted
-    # volume is fine, and setting MEDIA_ROOT explicitly is how you say so.
-    if MEDIA_ROOT == BASE_DIR / "media":
-        raise ImproperlyConfigured(
-            "MEDIA_BACKEND=filesystem writes uploads inside the container, where the "
-            "next deploy loses them. Set MEDIA_BACKEND to s3 or gcs, or set MEDIA_ROOT "
-            "to a mounted volume."
-        )
-elif not MEDIA_BUCKET:
+    # Nothing serves /media/ outside DEBUG (urls.py), so uploads would land
+    # on a disk the next deploy throws away and be unreadable even before
+    # that. Private, signed object storage is the only deployed shape.
+    raise ImproperlyConfigured(
+        "MEDIA_BACKEND=filesystem is development only. Set MEDIA_BACKEND to s3 or gcs "
+        "and MEDIA_BUCKET to the bucket."
+    )
+if not MEDIA_BUCKET:
     raise ImproperlyConfigured(
         f"MEDIA_BACKEND={_media_backend} needs a bucket: set MEDIA_BUCKET (or BUCKET_NAME)."
     )
@@ -98,8 +102,11 @@ REST_FRAMEWORK = {
 }
 
 SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=60 * 60 * 24 * 365, cast=int)  # noqa: F405
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
+# Right for an app on its own subdomain, which is what docs/DEPLOY.md sets up.
+# On an apex domain these commit every subdomain to https and invite an
+# irreversible preload submission, so they can be switched off.
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=True, cast=bool)  # noqa: F405
+SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", default=True, cast=bool)  # noqa: F405
 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"

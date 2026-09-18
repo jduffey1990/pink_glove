@@ -6,8 +6,10 @@ from .base import MIDDLEWARE
 DEBUG = False
 
 # Whitenoise isn't under test and warns on every request about a missing
-# STATIC_ROOT that only exists after collectstatic.
-MIDDLEWARE = [m for m in MIDDLEWARE if "whitenoise" not in m.lower()]
+# STATIC_ROOT that only exists after collectstatic. Removed by its full path,
+# so renaming the class fails here rather than quietly leaving it in.
+MIDDLEWARE = list(MIDDLEWARE)
+MIDDLEWARE.remove("app.middleware.static_files.WhiteNoiseMiddleware")
 ENV = "test"
 LOCAL = False
 

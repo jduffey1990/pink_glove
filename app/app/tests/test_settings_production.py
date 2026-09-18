@@ -11,8 +11,10 @@ controlled environment; nothing here touches the settings the suite runs on.
 import importlib
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
+import decouple
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
@@ -26,6 +28,7 @@ _BASELINE = {
     "SECRET_KEY": "x" * 64,
     "ALLOWED_HOSTS": "example.com",
     "FIELD_ENCRYPTION_KEY": ENCRYPTION_KEY,
+    "FRONTEND_BASE_URL": "https://example.com",
     "CORS_ALLOWED_ORIGINS": "",
     "MEDIA_BACKEND": "s3",
     "MEDIA_BUCKET": "pink-glove-media",
@@ -47,6 +50,12 @@ def load(monkeypatch, tmp_path):
     import time. Afterwards base.py is reloaded once more under the real
     environment so the module in sys.modules is not left describing a
     fictional deployment.
+
+    python-decouple reads os.environ first and then a .env file it finds by
+    searching up from the settings package -- a developer's app/.env. That
+    file is replaced with an empty repository for every load here, so a value
+    a test leaves unset is genuinely unset and the outcome cannot depend on
+    what someone happens to have in their .env.
     """
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -56,10 +65,9 @@ def load(monkeypatch, tmp_path):
         env = {**_BASELINE, "UI_DIST_DIR": str(dist), **overrides}
         for key, value in env.items():
             monkeypatch.setenv(key, value)
-        # MEDIA_ROOT unset means "the default, inside the image", which is the
-        # case production.py refuses; a test that wants a volume passes one.
-        for key in unset if "MEDIA_ROOT" in overrides else ("MEDIA_ROOT", *unset):
+        for key in unset:
             monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(decouple.config, "config", decouple.Config(decouple.RepositoryEmpty()))
         importlib.reload(importlib.import_module("app.settings.base"))
         if "app.settings.production" in sys.modules:
             return importlib.reload(sys.modules["app.settings.production"])
@@ -79,10 +87,34 @@ class TestRequiredValues:
         assert production.LOCAL is False
         assert production.ALLOWED_HOSTS == ["example.com"]
 
-    @pytest.mark.parametrize("missing", ["SECRET_KEY", "ALLOWED_HOSTS", "FIELD_ENCRYPTION_KEY"])
+    @pytest.mark.parametrize(
+        "missing", ["SECRET_KEY", "ALLOWED_HOSTS", "FIELD_ENCRYPTION_KEY", "FRONTEND_BASE_URL"]
+    )
     def test_a_missing_required_value_fails_at_import(self, load, missing):
         with pytest.raises(ImproperlyConfigured, match=missing):
             load(**{missing: ""})
+
+    def test_the_frontend_url_must_be_https(self, load):
+        """A customer's sign-in token travels in it, in an email."""
+        with pytest.raises(ImproperlyConfigured, match="https"):
+            load(FRONTEND_BASE_URL="http://example.com")
+
+    def test_a_developers_dot_env_cannot_change_an_outcome(self, load, monkeypatch, tmp_path):
+        """
+        The fixture's own guarantee, checked: a .env that says SSL redirect on
+        and a test that leaves it unset still sees production's default.
+        """
+        dotenv = tmp_path / ".env"
+        dotenv.write_text("SECURE_SSL_REDIRECT=True\nNUM_PROXIES=7\n")
+        monkeypatch.setattr(
+            decouple.config, "config", decouple.Config(decouple.RepositoryEnv(str(dotenv)))
+        )
+        assert decouple.config("NUM_PROXIES", cast=int) == 7, "the .env is in force"
+
+        production = load(unset=("SECURE_SSL_REDIRECT", "NUM_PROXIES"))
+
+        assert production.SECURE_SSL_REDIRECT is False
+        assert production.REST_FRAMEWORK["NUM_PROXIES"] == 1
 
     def test_cors_origins_are_no_longer_required(self, load):
         """Single-origin (ADR-027): nothing cross-origin calls the API."""
@@ -116,25 +148,37 @@ class TestCookies:
 
 
 class TestMedia:
-    def test_filesystem_media_inside_the_image_is_refused(self, load):
-        with pytest.raises(ImproperlyConfigured, match="MEDIA_ROOT"):
+    def test_filesystem_media_is_refused(self, load):
+        """Nothing serves /media/ outside DEBUG, and the disk is ephemeral."""
+        with pytest.raises(ImproperlyConfigured, match="filesystem"):
             load(MEDIA_BACKEND="filesystem")
 
-    def test_filesystem_media_on_a_named_volume_is_allowed(self, load, tmp_path):
-        production = load(MEDIA_BACKEND="filesystem", MEDIA_ROOT=str(tmp_path / "vol"))
-
-        assert production.MEDIA_ROOT == tmp_path / "vol"
-        assert production.STORAGES["default"]["BACKEND"].endswith("FileSystemStorage")
+    def test_filesystem_is_also_the_default_and_so_refused_when_unset(self, load):
+        with pytest.raises(ImproperlyConfigured, match="filesystem"):
+            load(unset=("MEDIA_BACKEND",))
 
     @pytest.mark.parametrize("backend", ["s3", "gcs"])
     def test_a_cloud_backend_without_a_bucket_is_refused(self, load, backend):
         with pytest.raises(ImproperlyConfigured, match="bucket"):
             load(MEDIA_BACKEND=backend, MEDIA_BUCKET="", BUCKET_NAME="")
 
-    def test_the_bucket_falls_back_to_the_name_fly_storage_sets(self, load):
-        production = load(MEDIA_BUCKET="", BUCKET_NAME="from-fly")
+    @pytest.mark.parametrize("backend", ["s3", "gcs"])
+    def test_the_bucket_falls_back_to_the_name_fly_storage_sets(self, load, backend):
+        production = load(MEDIA_BACKEND=backend, MEDIA_BUCKET="", BUCKET_NAME="from-fly")
 
         assert production.STORAGES["default"]["OPTIONS"]["bucket_name"] == "from-fly"
+
+    def test_gcs_objects_are_private_and_read_through_expiring_urls(self, load):
+        options = load(MEDIA_BACKEND="gcs", MEDIA_URL_TTL_SECONDS="120").STORAGES["default"][
+            "OPTIONS"
+        ]
+
+        assert options["bucket_name"] == "pink-glove-media"
+        # None, not "private": uniform bucket-level access rejects per-object ACLs.
+        assert options["default_acl"] is None
+        assert options["querystring_auth"] is True
+        assert options["expiration"] == timedelta(seconds=120)
+        assert options["file_overwrite"] is False
 
     def test_s3_objects_are_private_and_read_through_expiring_urls(self, load):
         options = load(MEDIA_URL_TTL_SECONDS="120").STORAGES["default"]["OPTIONS"]
@@ -171,6 +215,33 @@ class TestFrontendBuild:
 
         assert production.UI_DIST_DIR == ""
         assert production.WHITENOISE_ROOT is None
+
+
+class TestEmail:
+    def test_the_backend_is_read_from_the_environment(self, load):
+        """So a rehearsal of the image can print mail instead of needing a key."""
+        console = "django.core.mail.backends.console.EmailBackend"
+
+        assert load(EMAIL_BACKEND=console).EMAIL_BACKEND == console
+
+    def test_and_is_smtp_by_default(self, load):
+        production = load(unset=("EMAIL_BACKEND",))
+
+        assert production.EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+
+
+class TestHsts:
+    def test_subdomains_and_preload_default_on_for_an_app_on_its_own_subdomain(self, load):
+        production = load(unset=("SECURE_HSTS_INCLUDE_SUBDOMAINS", "SECURE_HSTS_PRELOAD"))
+
+        assert production.SECURE_HSTS_INCLUDE_SUBDOMAINS is True
+        assert production.SECURE_HSTS_PRELOAD is True
+
+    def test_and_can_be_switched_off_for_an_apex_domain(self, load):
+        production = load(SECURE_HSTS_INCLUDE_SUBDOMAINS="False", SECURE_HSTS_PRELOAD="False")
+
+        assert production.SECURE_HSTS_INCLUDE_SUBDOMAINS is False
+        assert production.SECURE_HSTS_PRELOAD is False
 
 
 class TestProxies:

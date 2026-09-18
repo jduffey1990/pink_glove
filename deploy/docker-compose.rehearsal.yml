@@ -36,6 +36,10 @@ x-app: &app
     FIELD_ENCRYPTION_KEY: cGluay1nbG92ZS1sb2NhbC1kZXYta2V5LU5PVFJFQUw=  # gitleaks:allow
     ALLOWED_HOSTS: localhost
     FRONTEND_BASE_URL: https://localhost
+    # Off for localhost: HSTS is cached per host by the browser, and a year of
+    # it on "localhost" breaks every other local project served over http.
+    SECURE_HSTS_INCLUDE_SUBDOMAINS: "False"
+    SECURE_HSTS_PRELOAD: "False"
     DATABASE_URL: postgres://pink_glove:pink_glove@db:5432/pink_glove
     REDIS_URL: redis://redis:6379/0
     NUM_PROXIES: "1"
@@ -66,9 +70,10 @@ x-app: &app
 services:
   proxy:
     image: caddy:2-alpine
+    # Loopback only: this stack runs with throwaway keys and seeded data.
     ports:
-      - "443:443"
-      - "80:80"
+      - "127.0.0.1:443:443"
+      - "127.0.0.1:80:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -104,8 +109,8 @@ services:
       MINIO_ROOT_USER: rehearsal
       MINIO_ROOT_PASSWORD: rehearsal-secret
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     networks:
       default:
         aliases:
