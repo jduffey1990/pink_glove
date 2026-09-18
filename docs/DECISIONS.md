@@ -97,6 +97,10 @@ soft delete or drop the field; a column that lies is worse than no column.
 
 ## ADR-006: Deploy target deliberately deferred
 
+**Superseded by ADR-027 (Phase D, 2026-09-17): the target is Fly.io.** The env
+seam described here is what made the choice a configuration file rather than a
+rewrite, and it stays.
+
 **Decided.** Not chosen yet. Everything host-specific is behind an env seam:
 
 - `DATABASE_URL` (one var, via `dj-database-url`) — works on any managed Postgres
@@ -703,3 +707,89 @@ would still need a rate from somewhere, so there would be two tax systems.
 operator and more data entry for everyone else; it layers onto this design
 later (the snapshot already stores the rate used). **Rejected -- no tax.**
 Adding it afterwards means migrating every total and every screen showing one.
+
+---
+
+## ADR-027: Fly.io, one image, and the frontend served from the API's origin
+
+**Decided (Phase D, 2026-09-17).** ADR-006 deferred the deploy target; 4b ends
+the deferral because Stripe cannot deliver a webhook to localhost. Three
+decisions, taken together because each shapes the others.
+
+**1. The target is Fly.io.** One `deploy/fly.toml` describes `web`, `worker`
+and `beat` as process groups of one image -- the same shape as
+`app/docker-compose.yml` -- with the migration as the release command, Fly
+Postgres, Upstash Redis and a Tigris bucket for media, all attached as
+secrets. Staging and production are two apps from the same file; the app name
+is given on the command line so the file cannot quietly deploy to the wrong
+one. `NUM_PROXIES=1`: Fly's proxy is the one hop, and it appends the client
+address to `X-Forwarded-For`. Fly redirects to HTTPS at the edge, so
+`SECURE_SSL_REDIRECT` stays off. Staging costs a few dollars a month.
+
+**2. The image carries the frontend build, and gunicorn serves it.** The
+Dockerfile moved to the repository root and gained a Node stage; Vite's output
+lands in `/ui/dist`, whitenoise serves its files at the root URL (hashed
+assets under `/assets/` are cached for a year -- `app.middleware.static_files`
+teaches whitenoise that name shape), and a catch-all Django view answers every
+route the SPA's router owns with `index.html`, `Cache-Control: no-cache`. The
+catch-all is fenced off from `/api/`, `/admin/`, `/health/`, `/static/` and
+`/media/` so an unknown API path stays a 404. A production build calls the
+API with relative URLs; `VITE_API_BASE_URL` is for the dev server, which still
+runs on its own port.
+
+**3. Therefore one origin, and the cookies tighten.** With nothing cross-origin
+calling the API, `CORS_ALLOWED_ORIGINS` is no longer required in production
+and the session and CSRF cookies are `SameSite=Lax`. Both follow from one
+setting: an allowed origin loosens the cookies to `None` again, so a
+separately hosted frontend remains possible by configuration, and the two can
+never disagree.
+
+**Also decided here, because production settings now fail at import rather
+than at the first upload:** `MEDIA_BACKEND=filesystem` is refused unless
+`MEDIA_ROOT` is set explicitly (the default is inside the container and lost
+on every deploy); a cloud backend without a bucket is refused; a missing
+frontend build is refused unless `UI_DIST_DIR` is set empty on purpose. The
+image installs the `s3` extra, so the same image runs everywhere. Objects are
+written private and read through URLs that expire in `MEDIA_URL_TTL_SECONDS`.
+
+**Rejected -- Render.** The closest alternative: a `render.yaml` blueprint
+would describe the same three processes and preview environments come free.
+Each background worker is its own paid instance and there is no
+S3-compatible storage of its own, so staging lands around four times the
+cost for the same shape, and Stripe webhooks would need a fourth service or
+the web one. Nothing in the code prefers Fly; the env seam from ADR-006 means
+moving is `render.yaml` and a different set of secrets.
+
+**Rejected -- Cloud Run (what the source repo used).** Celery needs an
+always-on worker and exactly one beat; Cloud Run is built for request-scoped
+containers, so both become a second product (Cloud Run jobs, or a GCE VM) and
+the operational surface roughly doubles. The source repo's `terraform/` and
+four `cloud_deploy_*.yaml` files were what ADR-006 declined to carry over.
+
+**Rejected -- a VPS with the compose file.** Cheapest, and the compose file
+already works. But Jordan then owns Postgres backups, Redis persistence, TLS
+renewal and the box itself, on a product whose data is people's alarm codes.
+`deploy/docker-compose.rehearsal.yml` is that shape, kept for rehearsal
+only; the production check refusing filesystem media is what stops it being
+quietly promoted.
+
+**Rejected -- a separately hosted frontend (Cloudflare Pages, Netlify, a
+bucket).** Free and fast, but it is the cross-origin shape: `SameSite=None`
+cookies, `COOKIE_DOMAIN`, CORS kept in step with every hostname, a second
+deploy pipeline, and a frontend that can go live ahead of the API it was
+generated against (ADR-019). One image means the schema and the code that
+consumes it ship together or not at all. It remains available by setting
+`CORS_ALLOWED_ORIGINS`, `VITE_API_BASE_URL` and `UI_DIST_DIR=`.
+
+**Rejected -- deploying production from CI.** `main` deploys to staging once
+Jordan sets the `FLY_STAGING_APP` variable and a deploy token scoped to that
+one app; production is `fly deploy` from Jordan's machine. `CLAUDE.md` makes
+production Jordan's alone, and a workflow that could reach it is one bad merge
+from doing so.
+
+**Consequences.** `docker build` runs from the repository root, and the
+compose file's build context is `..`. The frontend build is refused rather
+than skipped when missing. A staff sign-in in a rehearsal is read from the web
+log (`EMAIL_BACKEND` is env-selectable for that). The `FIELD_ENCRYPTION_KEY`
+backup rule in `.env.example` becomes operational: `docs/DEPLOY.md` says where
+it must live.

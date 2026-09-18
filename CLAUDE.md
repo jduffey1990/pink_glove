@@ -19,6 +19,9 @@ modify it. Nothing Pomarium-branded belongs in this repo.
 
 ```
 pink_glove/
+├── Dockerfile              # ONE image: API, workers, and the built ui/ (ADR-027)
+├── .github/workflows/      # CI: pytest, ruff, schema, eslint, vue-tsc, vitest, image
+├── deploy/                 # fly.toml; the local rehearsal of the deployed shape
 ├── app/                    # Django backend
 │   ├── app/                # project package: settings/, urls, celery, middleware
 │   ├── base/               # Base + TenantModel, managers, TenantViewSetMixin, permissions
@@ -35,7 +38,7 @@ pink_glove/
 │   ├── src/stores/         # session store: boot, login, organization choice
 │   ├── src/lib/            # datetime helpers, all in the org's timezone
 │   └── src/pages/          # one file per screen
-└── docs/
+└── docs/                   # PLAN, DECISIONS, DEPLOY (the runbook)
 ```
 
 Settings are a package, selected by `DJANGO_SETTINGS_MODULE`:
@@ -100,11 +103,23 @@ REDIS_URL=redis://localhost:6379/0 \
 
 # Deploy audit -- must come back clean. It needs a real-looking SECRET_KEY (a
 # short one is itself a warning) and SECURE_SSL_REDIRECT, which production.py
-# leaves off by default because most platforms redirect at the edge.
+# leaves off by default because Fly redirects at the edge. Production settings
+# also refuse to import without a media bucket and a frontend build (ADR-027);
+# UI_DIST_DIR= (empty) is the explicit "not here" that lets the audit run
+# without one. CI runs this same command.
 SECRET_KEY=$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(64))") \
 SECURE_SSL_REDIRECT=True ALLOWED_HOSTS=example.com \
-CORS_ALLOWED_ORIGINS=https://example.com \
-  .venv/bin/python manage.py check --deploy --settings=app.settings.production
+FIELD_ENCRYPTION_KEY=audit-only-not-a-key \
+MEDIA_BACKEND=s3 MEDIA_BUCKET=audit-only UI_DIST_DIR= \
+  .venv/bin/python manage.py check --deploy --fail-level WARNING --settings=app.settings.production
+
+# The production image, from the REPOSITORY ROOT (the Dockerfile builds ui/
+# too). Then the rehearsal: the image under production settings behind one
+# TLS proxy with S3-compatible media -- see docs/DEPLOY.md, "Local rehearsal".
+# Run it before any change to settings/production.py, the Dockerfile,
+# deploy/, or how the frontend is served.
+(cd .. && docker build -t pink-glove:rehearsal . \
+  && docker compose -f deploy/docker-compose.rehearsal.yml up -d)
 
 # Migrations
 docker compose run --rm web python manage.py makemigrations
@@ -224,12 +239,15 @@ there, and leave merging into `main` to Jordan. Agents never commit on, merge
 into, or push to `main`, and never force-push anything. Push a branch only
 when Jordan asks.
 
-There is no production yet — the deploy target is deliberately deferred
-(ADR-006). When one exists, it is Jordan's alone: agents do not run anything
-against a live database or service, do not read or use production credentials,
-and do not change DNS, hosting settings, CI secrets, or deploy triggers.
-Deploy and cutover steps are written and rehearsed locally by agents and
-executed by Jordan.
+The deploy target is Fly.io (ADR-027, `docs/DEPLOY.md`); staging and
+production are stood up by Jordan, and both are Jordan's alone: agents do not
+run `fly` against a live app, do not run anything against a live database or
+service, do not read or use production credentials, and do not change DNS,
+hosting settings, CI secrets or variables, or deploy triggers. CI deploys
+`main` to staging only once Jordan sets `FLY_STAGING_APP`; nothing deploys
+production but Jordan. Deploy and cutover steps are written and rehearsed
+locally by agents (`deploy/docker-compose.rehearsal.yml`) and executed by
+Jordan.
 
 ## Commits
 
@@ -242,10 +260,13 @@ uncommitted work. Every commit passes, for the side it touches:
 - a serializer, view, url, model or enum change also carries the regenerated
   `ui/openapi.yaml` and `ui/src/api/schema.d.ts` in the same commit (ADR-019).
 
-There is no CI; pre-commit (ruff, schema currency, eslint, gitleaks) is the
-only automatic check, so do not bypass it with `--no-verify`. It only runs if
-the hook is installed in this checkout -- `app/.venv/bin/pre-commit install`
-once, and check `.git/hooks/pre-commit` exists before trusting a quiet commit.
+CI (`.github/workflows/ci.yml`) runs all of the above on every push, plus the
+schema check, the deploy audit and an image build; a red run on a branch is
+yours to fix before Jordan merges it. Pre-commit (ruff, schema currency,
+eslint, gitleaks) is the local gate, so do not bypass it with `--no-verify`.
+It only runs if the hook is installed in this checkout --
+`app/.venv/bin/pre-commit install` once, and check `.git/hooks/pre-commit`
+exists before trusting a quiet commit.
 
 ## Phase gate
 
@@ -281,7 +302,18 @@ fresh session can read what was checked and what was left.
      field name is too generic to identify it, or collides: `Role`,
      `JobStatus`/`CustomerStatus`, `InvoiceStatus`, and `PaymentMethod` /
      `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`;
-   - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`;
+   - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`
+     -- in development only. Deployed, the build is served by gunicorn from
+     the API's own origin (ADR-027): the SPA catch-all in `app/urls.py` must
+     exclude every top-level prefix the API owns (`api/`, `admin/`,
+     `health/`, `static/`, `media/`), so a new top-level prefix is added
+     there too or the SPA swallows its 404s; `ui/src/api/client.ts` calls a
+     relative URL in a production build; and the cookies' `SameSite` follows
+     `CORS_ALLOWED_ORIGINS` (Lax when empty, None when set);
+   - the Node version appears three times and must agree: `ui/.nvmrc`, the
+     `ui` compose service, and the Node stage of the root `Dockerfile`;
+   - `deploy/fly.toml` sets `NUM_PROXIES=1` because Fly's proxy is the one
+     hop. A CDN in front makes it 2 -- change the toml, not the settings;
    - the job state machine lives on the server: `Job.next_statuses` and
      `is_terminal` say what the caller may do, and a 409's `allowed` list
      corrects a stale page. A new status touches the backend enum, the
@@ -317,7 +349,9 @@ fresh session can read what was checked and what was left.
    - Access codes stay write-only and encrypted, and are read only through the
      audited reveal (ADR-014, ADR-016); nothing sensitive is logged.
    - No secrets in git or in the `ui/` bundle (invariant 7).
-   - The deploy audit (`check --deploy`) comes back clean.
+   - The deploy audit (`check --deploy`) comes back clean, and the local
+     rehearsal (`docs/DEPLOY.md`) still signs in over TLS and writes a
+     private object if the phase touched settings, the image or `deploy/`.
    - Run `/security-review` on the phase diff.
 6. **Branch and production guard.** Confirm the phase's work is on its branch,
    nothing was committed to `main`, and — once a production exists — nothing

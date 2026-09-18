@@ -8,13 +8,14 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 ## Start here
 
 Everything through Phase 3 is on `main`, tests green. **Phase 4a is built** on
-the branch `phase-4-billing` and waiting to be merged — see "Phase 4a as
-built" at the end of this file for what landed and what the gate found. Next
-work is **Phase D** (deploy target, staging, CI), which 4b needs for its
-webhook URL. Work on a branch, never on `main`; run the phase gate in
-`CLAUDE.md` at the end of each phase. Read "Phase 3b as built" before touching
-`ui/`, and "Phase gate — baseline": it records what was fixed and decided
-before Phase 4, and a backlog to fold in as files are touched.
+`phase-4-billing` and **Phase D is built** on `phase-d-deploy` (branched from
+4a, so merge 4a first), both waiting to be merged — see "Phase 4a as built"
+and "Phase D as built" at the end of this file. Next work is **4b** (Stripe
+Connect), once Jordan has stood up staging from `docs/DEPLOY.md` so there is
+a public URL for the webhook. Work on a branch, never on `main`; run the
+phase gate in `CLAUDE.md` at the end of each phase. Read "Phase 3b as built"
+before touching `ui/`, and "Phase gate — baseline": it records what was fixed
+and decided before Phase 4, and a backlog to fold in as files are touched.
 
 ```bash
 cd app
@@ -28,14 +29,15 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **818 passing** in `app/`, and **118** in `ui/` (`cd ui && npm test`).
+Expect **862 passing** in `app/`, and **118** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
 **Decisions still open, listed where they bite:**
 
-1. **Deploy target** — deliberately deferred (ADR-006). Nothing in the code
-   assumes one. Now also covers how the `ui/` build is served.
+1. ~~Deploy target~~ — **decided**: Fly.io, one image, the `ui/` build served
+   from the API's origin (ADR-027). Staging is Jordan's to stand up from
+   `docs/DEPLOY.md`; 4b's webhook URL is `https://<staging app>.fly.dev`.
 2. ~~Stripe Connect~~ — **decided**: Connect with direct charges, plus a
    platform subscription (ADR-024). Payments are a ledger and Stripe is one
    method (ADR-025); an invoice is a snapshot (ADR-026).
@@ -49,8 +51,8 @@ testing gotchas that will otherwise cost you an hour each.
 | 3a | Scheduling backend, audit evaluator, OpenAPI | **Done** |
 | 3b | Frontend slice (`ui/`), built against 3a | **Done** |
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
-| D | Deploy target, staging, CI (ADR-006) — before 4b | **Next** |
-| 4b | Stripe Connect: tenants take card payments | Not started |
+| D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
+| 4b | Stripe Connect: tenants take card payments | **Next**, once staging is up |
 | 4c | Platform subscription: tenants pay for pink_glove | Not started |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
@@ -1391,3 +1393,82 @@ refactors. The invoice lifecycle end to end (draft → adjustment → issue →
 email → payment → void → balance returns), the server-owned action buttons, the
 per-tenant prefixes and tax rate, a cross-tenant invoice URL refused, and the
 cleaner's 403 with no Billing link at all.
+
+---
+
+## Phase D as built
+
+Branch `phase-d-deploy`, on top of `phase-4-billing`. Backend 818 → 862,
+frontend 118 (unchanged). What the spec asked for, and what each turned into:
+
+**Decide the target → Fly.io, ADR-027.** One `deploy/fly.toml` with `web`,
+`worker` and `beat` as process groups of one image and the migration as the
+release command; Fly Postgres, Upstash Redis and a Tigris bucket attached as
+secrets. Staging and production are two apps from the same file, named on the
+command line. Render, Cloud Run, a VPS and a separately hosted frontend are
+each rejected in the ADR with the cost that decided it.
+
+**Stand up staging → written and rehearsed, not executed.** Production and
+staging are Jordan's alone (`CLAUDE.md`), so `docs/DEPLOY.md` is the
+stand-up, step by step, with every command and the two secrets CI needs.
+What *was* executed here is the rehearsal it tells Jordan to run first:
+`deploy/docker-compose.rehearsal.yml` runs the production image under
+production settings behind Caddy (TLS, one proxy deep, so `NUM_PROXIES=1`
+and `X-Forwarded-Proto` are real) with MinIO as the bucket. Seeded, then
+verified: readiness green; `/schedule` served with `no-cache` and a hashed
+asset with a one-year immutable cache; an unknown `/api/` path a 404 and not
+the page; http redirected to https; a dispatcher signed in over TLS by curl
+(CSRF cookie → 202 → code from the log → verify → invoices), and an owner
+signed in by headless Chromium (login → verify → `/schedule`, a deep link to
+`/billing` reloaded and still signed in, no console errors or failed
+requests); a private object written through the S3 backend, fetched with its
+signature (200) and without (403).
+
+**Serve the `ui/` build → from the API's origin.** The Dockerfile moved to
+the repository root and gained a Node stage; `docker build` and the compose
+build context are now the root. Whitenoise serves Vite's output at the root
+URL, a middleware subclass teaches it Vite's hash shape so `assets/` is
+immutable, and `app.spa.spa_index` answers the SPA's routes with the index
+(GET and HEAD, `Cache-Control: no-cache`), fenced off from every prefix the
+API owns. A production build calls relative URLs; the dev server is
+unchanged. Consequence taken deliberately: with nothing cross-origin,
+`CORS_ALLOWED_ORIGINS` is no longer required in production and the cookies
+are `SameSite=Lax`; setting an origin loosens them again, from the one
+setting.
+
+**`NUM_PROXIES` → 1, in `deploy/fly.toml`,** with the reasoning beside it and
+"a CDN makes it 2" in `CLAUDE.md`'s coupling list.
+
+**Private media → configured and refused when it is not.** The S3 and GCS
+storage options now carry the bucket, endpoint, region and credentials from
+the environment (the names `fly storage create` sets), path-style addressing
+and SigV4 for Tigris and MinIO, private ACL, expiring signed URLs, no
+overwrite. The image installs the `s3` extra. Production refuses
+`MEDIA_BACKEND=filesystem` unless `MEDIA_ROOT` names a volume, a cloud
+backend without a bucket, and a missing frontend build unless `UI_DIST_DIR`
+is set empty on purpose. Twenty-two tests import the production module under
+controlled environments and pin each refusal.
+
+**GitHub Actions → `.github/workflows/ci.yml`.** On every push and pull
+request: backend (ruff, ruff format, pytest against a Postgres service, the
+committed `openapi.yaml` regenerated and diffed, the deploy audit with
+`--fail-level WARNING`), frontend (eslint, vue-tsc, vitest, the committed
+`schema.d.ts` regenerated and diffed, `build-only`), then the image built
+with the GHA cache and not pushed. A final job deploys `main` to staging with
+`flyctl`, skipped until Jordan sets the `FLY_STAGING_APP` variable and a
+`FLY_API_TOKEN` scoped to that one app. Nothing deploys production.
+
+**Found on the way.** `npm run type-check` was failing on `phase-4-billing`
+before this phase touched anything: `billable.spec.ts` uses `toSorted()`
+because the lint config demands it, and `@vue/tsconfig`'s lib stops at
+ES2020, so lint and type-check could not both pass. `tsconfig.app.json` now
+sets `lib` to ES2023. The MinIO images left Docker Hub in 2025; the rehearsal
+pulls from quay.io. `seed_demo` refuses to run with `DEBUG` off, which the
+rehearsal (and staging) need `--force` for. The sign-in code is mailed from
+the request, not the worker, so a rehearsal reads it from the web log; the
+mail backend is now env-selectable so a rehearsal can print it at all.
+
+**Not done here, on purpose:** running `fly` against anything; creating the
+GitHub environment, variable or secret; a `FIELD_ENCRYPTION_KEY` rotation
+path (noted in the runbook as not built); a production Postgres topology
+beyond the recommendation in the runbook.
