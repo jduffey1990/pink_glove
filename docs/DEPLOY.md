@@ -99,10 +99,16 @@ public bucket would still be a public bucket.
 
 ### 5. The rest of the secrets
 
+`fly secrets set` never echoes what it stores and `fly secrets list` shows
+only digests, so generate the encryption key where you can see it, put it in
+your password manager, and only then set it:
+
 ```bash
+KEY="$(app/.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+echo "$KEY"        # store this now; there is no way to read it back later
 fly secrets set --app pink-glove-staging \
     SECRET_KEY="$(app/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
-    FIELD_ENCRYPTION_KEY="$(app/.venv/bin/python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" \
+    FIELD_ENCRYPTION_KEY="$KEY" \
     ALLOWED_HOSTS=pink-glove-staging.fly.dev \
     FRONTEND_BASE_URL=https://pink-glove-staging.fly.dev \
     EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend \
@@ -120,7 +126,9 @@ verify a single sender in SendGrid (any mailbox, no domain required), then
 
 - **Back up `FIELD_ENCRYPTION_KEY` somewhere that is not Fly.** It encrypts
   gate and alarm codes. Lose it and every code is unreadable, permanently.
-  Staging and production must have *different* keys.
+  Staging and production must have *different* keys. If it was set without
+  being seen, set a new one before the first deploy -- nothing is encrypted
+  until then, so overwriting costs nothing.
 - `SECURE_HSTS_SECONDS=0` while first bringing a hostname up. Once TLS is
   known good, `fly secrets set SECURE_HSTS_SECONDS=31536000`. A wrong HSTS
   header is cached by every visitor's browser and cannot be withdrawn.
