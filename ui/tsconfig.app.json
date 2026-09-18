@@ -9,6 +9,10 @@
     "src/**/__tests__/*"
   ],
   "compilerOptions": {
+    // The lint config prefers Array#toSorted (ES2023) and @vue/tsconfig's lib
+    // stops at ES2020, so without this the two disagree and one of lint or
+    // type-check always fails. Node 22 and every browser this ships to have it.
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "composite": true,
     // vue-router's Volar plugin resolves typed routes against this and warns
     // on every type-check without it. Routes here are declared by hand in
