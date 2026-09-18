@@ -9,7 +9,7 @@
 # bucket credentials) is a Fly secret on the app, never here. docs/DEPLOY.md
 # has the stand-up sequence.
 
-primary_region = "den"
+primary_region = "dfw"
 
 # Build from the repository root; the Dockerfile builds the frontend too.
 [build]

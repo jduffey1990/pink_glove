@@ -43,7 +43,11 @@ browser ──https──▶ Fly proxy ──http──▶ web (gunicorn)  ─�
 
 You need `flyctl` (`brew install flyctl`) signed in (`fly auth login`).
 Run from the repository root. Names below are suggestions; if you change one,
-change it everywhere it appears in this section.
+change it everywhere it appears in this section. The region is `dfw`
+(Dallas): central US, and one that supports Managed Postgres. Pick another
+from `fly platform regions` if the customers are elsewhere -- but pick it
+once, because a Postgres volume cannot move regions afterwards -- and put the
+same code in `primary_region` in `deploy/fly.toml`.
 
 ### 1. Create the app, without deploying
 
@@ -54,7 +58,7 @@ fly apps create pink-glove-staging
 ### 2. Postgres
 
 ```bash
-fly postgres create --name pink-glove-staging-db --region den \
+fly postgres create --name pink-glove-staging-db --region dfw \
     --vm-size shared-cpu-1x --volume-size 3 --initial-cluster-size 1
 fly postgres attach pink-glove-staging-db --app pink-glove-staging
 ```
@@ -69,7 +73,7 @@ failover and you own its backups.
 ### 3. Redis
 
 ```bash
-fly redis create --name pink-glove-staging-redis --region den --no-replicas
+fly redis create --name pink-glove-staging-redis --region dfw --no-replicas
 ```
 
 Copy the `redis://…` URL it prints and set it:
