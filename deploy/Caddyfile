@@ -1,0 +1,16 @@
+# One TLS-terminating proxy in front of gunicorn, for the local rehearsal
+# (docker-compose.rehearsal.yml). Stands in for Fly's edge: it terminates
+# HTTPS, forwards to the app over plain http, and writes X-Forwarded-Proto
+# and X-Forwarded-For -- which is what SECURE_PROXY_SSL_HEADER and
+# NUM_PROXIES=1 assume. Not used on Fly, which does all of this itself.
+
+localhost {
+	tls internal
+	encode gzip
+	reverse_proxy web:8000
+}
+
+# Plain http gets sent to https, as Fly's force_https does at its edge.
+http://localhost {
+	redir https://{host}{uri} permanent
+}

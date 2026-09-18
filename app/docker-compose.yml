@@ -2,11 +2,18 @@ name: pink-glove
 
 x-django: &django
   build:
-    context: .
+    # The repository root, not app/: the one Dockerfile builds the frontend
+    # too and bakes it into the image (ADR-027).
+    context: ..
+    dockerfile: Dockerfile
   image: pink-glove:local
   env_file: .env
   environment:
     DJANGO_SETTINGS_MODULE: app.settings.local
+    # The image carries a frontend build, but in development the Vite dev
+    # server on :3000 is the frontend. Empty means "do not serve it", so a
+    # stale build baked in weeks ago cannot be mistaken for the live one.
+    UI_DIST_DIR: ""
   depends_on:
     db:
       condition: service_healthy

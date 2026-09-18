@@ -1,0 +1,170 @@
+# The deployed shape, on one machine, for rehearsing before a real deploy.
+#
+# This is NOT development (that is app/docker-compose.yml) and NOT a deploy
+# target. It runs the production image under production settings, behind one
+# TLS-terminating proxy, with S3-compatible private media -- the three things
+# that differ from `runserver` and that only ever break on the first deploy:
+#
+#   - production settings refuse to start when misconfigured, so this is
+#     where a missing value is found;
+#   - the browser only sends Secure cookies over HTTPS, so sign-in cannot be
+#     rehearsed over plain http; Caddy terminates TLS with a self-signed cert
+#     and sets X-Forwarded-Proto/-For, exactly one proxy deep (NUM_PROXIES=1);
+#   - uploads go to MinIO through the same S3 backend and signed-URL path
+#     that Tigris on Fly uses, so the storage options are exercised too.
+#
+#   docker build -t pink-glove:rehearsal .              # from the repo root
+#   docker compose -f deploy/docker-compose.rehearsal.yml up -d
+#   curl -k https://localhost/health/ready/
+#   open https://localhost/                             # accept the cert
+#   docker compose -f deploy/docker-compose.rehearsal.yml run --rm web \
+#       python manage.py seed_demo --force      # --force: DEBUG is off here
+#   docker compose -f deploy/docker-compose.rehearsal.yml down -v
+#
+# The values below are for this rehearsal only. None of them may be reused
+# anywhere reachable from the internet.
+
+name: pink-glove-rehearsal
+
+x-app: &app
+  image: pink-glove:rehearsal
+  environment: &app-env
+    DJANGO_SETTINGS_MODULE: app.settings.production
+    SECRET_KEY: rehearsal-only-not-a-real-secret-key-rehearsal-only-not-a-real-secret-key
+    # The same throwaway Fernet key app/settings/local.py uses, so anything
+    # encrypted here is readable by anyone -- which is the point of a rehearsal.
+    FIELD_ENCRYPTION_KEY: cGluay1nbG92ZS1sb2NhbC1kZXYta2V5LU5PVFJFQUw=  # gitleaks:allow
+    ALLOWED_HOSTS: localhost
+    FRONTEND_BASE_URL: https://localhost
+    DATABASE_URL: postgres://pink_glove:pink_glove@db:5432/pink_glove
+    REDIS_URL: redis://redis:6379/0
+    NUM_PROXIES: "1"
+    SECURE_SSL_REDIRECT: "False"
+    # HSTS off: a year-long header cached by the browser for "localhost" would
+    # then break every other local project served over plain http.
+    SECURE_HSTS_SECONDS: "0"
+    MEDIA_BACKEND: s3
+    MEDIA_BUCKET: pink-glove-media
+    # `s3.localhost` resolves to MinIO inside the network (alias below) and to
+    # 127.0.0.1 in a browser, so the host in a signed URL is valid from both
+    # sides -- the signature covers it.
+    AWS_ENDPOINT_URL_S3: http://s3.localhost:9000
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: rehearsal
+    AWS_SECRET_ACCESS_KEY: rehearsal-secret
+    # Mail is printed to the sending process's log rather than sent. The
+    # sign-in code goes out from the request, so it is in `logs web`; the
+    # invoice email goes through Celery, so that one is in `logs worker`.
+    EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+    GUNICORN_WORKERS: "2"
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  proxy:
+    image: caddy:2-alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: pink_glove
+      POSTGRES_USER: pink_glove
+      POSTGRES_PASSWORD: pink_glove
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pink_glove -d pink_glove"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # quay.io, not Docker Hub: MinIO stopped publishing there in 2025.
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: rehearsal
+      MINIO_ROOT_PASSWORD: rehearsal-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      default:
+        aliases:
+          - s3.localhost
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Creates the bucket once. `fly storage create` does this on Fly.
+  minio-bucket:
+    image: quay.io/minio/mc:latest
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 rehearsal rehearsal-secret &&
+      mc mb --ignore-existing local/pink-glove-media
+      "
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  # The release command: runs to completion before web starts.
+  migrate:
+    <<: *app
+    command: python manage.py migrate --noinput
+    restart: "no"
+
+  web:
+    <<: *app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      minio-bucket:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    <<: *app
+    command: celery -A app worker --loglevel=info --concurrency=2
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  beat:
+    <<: *app
+    command: celery -A app beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  caddy_data:

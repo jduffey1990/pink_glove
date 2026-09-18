@@ -1,0 +1,30 @@
+# Build context is the REPOSITORY ROOT (docker build -t pink-glove .), so the
+# one image carries both the API and the frontend build. Kept small: the
+# builder stages copy only what they compile.
+.git
+.github
+deploy
+docs
+*.md
+
+# Secrets never enter the build context, let alone the image.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+**/__pycache__
+**/*.py[cod]
+app/.venv
+app/venv
+**/.pytest_cache
+**/.ruff_cache
+**/.coverage
+**/htmlcov
+app/staticfiles
+app/media
+
+# Node -- installed and built inside the image, for linux.
+ui/node_modules
+ui/dist
+ui/coverage

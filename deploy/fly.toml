@@ -1,0 +1,82 @@
+# Fly.io app configuration (ADR-027). One image, three process groups -- the
+# same shape as app/docker-compose.yml. Used for BOTH staging and production;
+# the app name is passed on the command line so this file cannot quietly
+# deploy to the wrong one:
+#
+#   fly deploy --config deploy/fly.toml --app pink-glove-staging
+#
+# Everything environment-specific (hosts, keys, database and Redis URLs,
+# bucket credentials) is a Fly secret on the app, never here. docs/DEPLOY.md
+# has the stand-up sequence.
+
+primary_region = "den"
+
+# Build from the repository root; the Dockerfile builds the frontend too.
+[build]
+  dockerfile = "../Dockerfile"
+
+# Runs to completion on a throwaway machine before any process group is
+# replaced -- the `migrate` service from compose. A failed migration stops the
+# deploy with the old release still serving.
+[deploy]
+  release_command = "python manage.py migrate --noinput"
+  strategy = "rolling"
+
+[env]
+  DJANGO_SETTINGS_MODULE = "app.settings.production"
+  # Exactly one proxy we do not control the far side of: Fly's, which appends
+  # the client's address to X-Forwarded-For. This is what the sign-in
+  # throttles key on. Put a CDN in front and this becomes 2.
+  NUM_PROXIES = "1"
+  # Fly redirects to HTTPS at the edge (force_https below); redirecting again
+  # in the app is how loops happen.
+  SECURE_SSL_REDIRECT = "False"
+  # Photographs of people's homes go to a private bucket, read through
+  # expiring signed URLs. `fly storage create` sets BUCKET_NAME and the AWS_*
+  # credentials as secrets; settings read those names.
+  MEDIA_BACKEND = "s3"
+  # Two sync workers with two threads each fit the 512MB web machine below.
+  GUNICORN_WORKERS = "2"
+  GUNICORN_THREADS = "2"
+  LOG_LEVEL = "INFO"
+
+[processes]
+  web = "gunicorn --config gunicorn_conf.py app.wsgi:application"
+  worker = "celery -A app worker --loglevel=info --concurrency=2"
+  # Exactly one beat, ever. Two schedulers fire every task twice.
+  beat = "celery -A app beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Sessions live in the database and throttles in Redis, so a stopped web
+  # machine loses nothing -- but a cold start is a slow first page, and Stripe
+  # (4b) expects webhooks answered promptly. Kept running.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["web"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 80
+
+  # Readiness, not liveness: a deploy waits for the database and Redis to be
+  # reachable from the new machine before traffic moves to it.
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "15s"
+    timeout = "5s"
+    method = "GET"
+    path = "/health/ready/"
+
+[[vm]]
+  processes = ["web"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[vm]]
+  processes = ["worker", "beat"]
+  size = "shared-cpu-1x"
+  memory = "256mb"
