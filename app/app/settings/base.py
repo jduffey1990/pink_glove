@@ -92,7 +92,8 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
+    # Whitenoise, taught the shape of Vite's hashed asset names (ADR-027).
+    "app.middleware.static_files.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -246,8 +247,14 @@ SESSION_COOKIE_DOMAIN = _cookie_domain or None
 
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SAMESITE = "None"
-SESSION_COOKIE_SAMESITE = "None"
+# SameSite=None is what a cross-origin SPA needs, and it is also the setting
+# that lets any site the browser visits carry our cookie on a request here. The
+# deployed shape is single-origin (ADR-027): the SPA is served by this process,
+# so there is no cross-origin caller and the cookie can stay Lax. Only when an
+# origin is actually allowed to call with credentials does the cookie loosen to
+# match -- one setting decides both, so they cannot disagree.
+CSRF_COOKIE_SAMESITE = "None" if CORS_ALLOWED_ORIGINS else "Lax"
+SESSION_COOKIE_SAMESITE = CSRF_COOKIE_SAMESITE
 SESSION_COOKIE_HTTPONLY = True
 # The SPA reads the CSRF token from its cookie, so this one cannot be HttpOnly.
 CSRF_COOKIE_HTTPONLY = False
@@ -275,9 +282,38 @@ USE_TZ = True
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+# Only read with MEDIA_BACKEND=filesystem. The default is inside the image and
+# so is lost on every deploy; production.py refuses it unless MEDIA_ROOT is set
+# explicitly, which is how a mounted volume says it is one.
+MEDIA_ROOT = Path(config("MEDIA_ROOT", default=str(BASE_DIR / "media")))
+
+# The built frontend (ADR-027). Vite's output directory: `index.html` plus
+# `assets/` full of content-hashed files. Whitenoise serves the files from
+# here at the root URL; app.spa answers every SPA route with the index. Empty
+# means "not served" -- the Vite dev server is the frontend in development,
+# and the compose file sets it empty so a stale build baked into the image
+# does not sit beside the live one. The image copies the build to /ui/dist,
+# which is also where a host checkout's `ui/dist` lands relative to app/.
+UI_DIST_DIR = config("UI_DIST_DIR", default=str(BASE_DIR.parent / "ui" / "dist"))
+if UI_DIST_DIR and not Path(UI_DIST_DIR).is_dir():
+    UI_DIST_DIR = ""
+
+# Whitenoise serves the SPA's files at the root URL (/assets/..., /favicon.ico)
+# alongside Django's own static under /static/. Vite names every file under
+# assets/ with a content hash, so those may be cached forever -- the middleware
+# subclass in app.middleware.static_files knows that shape. Everything else
+# (index.html, favicon) keeps whitenoise's short default.
+WHITENOISE_ROOT = UI_DIST_DIR or None
 
 _media_backend = config("MEDIA_BACKEND", default="filesystem")
+
+# One bucket name for either cloud backend. `fly storage create` (Tigris) sets
+# BUCKET_NAME on the app, so that is the fallback; credentials and, for S3,
+# the endpoint and region follow the AWS SDK's own environment variables
+# (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL_S3, AWS_REGION),
+# which boto3 reads on its own. They are passed through explicitly all the same
+# so a signed URL is built from the same values the upload used.
+MEDIA_BUCKET = config("MEDIA_BUCKET", default="") or config("BUCKET_NAME", default="")
 
 # Media here is photographs of the inside of people's homes. Whatever the
 # bucket's own policy says, objects are written private and read only through
@@ -291,6 +327,17 @@ _MEDIA_BACKENDS = {
     "s3": {
         "BACKEND": "storages.backends.s3.S3Storage",
         "OPTIONS": {
+            "bucket_name": MEDIA_BUCKET,
+            # None lets boto3 fall back to its own environment and config;
+            # Tigris and MinIO need the explicit endpoint, AWS itself does not.
+            "endpoint_url": config("AWS_ENDPOINT_URL_S3", default=None),
+            "region_name": config("AWS_REGION", default=None),
+            "access_key": config("AWS_ACCESS_KEY_ID", default=None),
+            "secret_key": config("AWS_SECRET_ACCESS_KEY", default=None),
+            # Tigris and MinIO sign path-style URLs; virtual-hosted style
+            # is the AWS default and fails on both.
+            "addressing_style": config("AWS_S3_ADDRESSING_STYLE", default="path"),
+            "signature_version": "s3v4",
             "default_acl": "private",
             "querystring_auth": True,
             "querystring_expire": MEDIA_URL_TTL_SECONDS,
@@ -300,6 +347,7 @@ _MEDIA_BACKENDS = {
     "gcs": {
         "BACKEND": "storages.backends.gcloud.GoogleCloudStorage",
         "OPTIONS": {
+            "bucket_name": MEDIA_BUCKET,
             # None, not "private": buckets with uniform bucket-level access
             # (the default for new ones) reject any per-object ACL.
             "default_acl": None,
@@ -322,7 +370,10 @@ STORAGES = {
 # Email
 # --------------------------------------------------------------------------
 
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+# Env-selectable so a rehearsal of the production image can print mail (and
+# the 2FA codes in it) to the worker log instead of needing a mail key.
+# local.py and test.py override it regardless.
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = config("EMAIL_HOST", default="smtp.sendgrid.net")
 EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="apikey")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")

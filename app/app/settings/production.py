@@ -9,7 +9,16 @@ should come back clean.
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403
-from .base import ALLOWED_HOSTS, CORS_ALLOWED_ORIGINS, FIELD_ENCRYPTION_KEY, SECRET_KEY
+from .base import (
+    ALLOWED_HOSTS,
+    BASE_DIR,
+    FIELD_ENCRYPTION_KEY,
+    MEDIA_BUCKET,
+    MEDIA_ROOT,
+    SECRET_KEY,
+    UI_DIST_DIR,
+    config,
+)
 
 DEBUG = False
 LOCAL = False
@@ -19,7 +28,11 @@ _missing = [
     for name, value in [
         ("SECRET_KEY", SECRET_KEY),
         ("ALLOWED_HOSTS", ALLOWED_HOSTS),
-        ("CORS_ALLOWED_ORIGINS", CORS_ALLOWED_ORIGINS),
+        # CORS_ALLOWED_ORIGINS is not in this list any more: the deployed shape
+        # is single-origin (ADR-027), where nothing cross-origin calls the API
+        # and the cookies stay SameSite=Lax. Setting it is how a separately
+        # hosted frontend opts back in.
+        #
         # Without this, every read of an encrypted column raises at runtime
         # rather than at startup. Fail now instead.
         ("FIELD_ENCRYPTION_KEY", FIELD_ENCRYPTION_KEY),
@@ -33,6 +46,37 @@ if _missing:
 
 if "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS must not contain '*' in production.")
+
+# --------------------------------------------------------------------------
+# Media
+# --------------------------------------------------------------------------
+# Photographs of the inside of people's homes, so where they land is checked
+# at startup rather than discovered on the first upload.
+
+_media_backend = config("MEDIA_BACKEND", default="filesystem")
+if _media_backend == "filesystem":
+    # The image's own filesystem is thrown away on every deploy. A mounted
+    # volume is fine, and setting MEDIA_ROOT explicitly is how you say so.
+    if MEDIA_ROOT == BASE_DIR / "media":
+        raise ImproperlyConfigured(
+            "MEDIA_BACKEND=filesystem writes uploads inside the container, where the "
+            "next deploy loses them. Set MEDIA_BACKEND to s3 or gcs, or set MEDIA_ROOT "
+            "to a mounted volume."
+        )
+elif not MEDIA_BUCKET:
+    raise ImproperlyConfigured(
+        f"MEDIA_BACKEND={_media_backend} needs a bucket: set MEDIA_BUCKET (or BUCKET_NAME)."
+    )
+
+# The build is served from this process (ADR-027). Refusing to start without
+# it is what turns "the image was built from the wrong directory" into a
+# deploy failure rather than a blank page. A separately hosted frontend sets
+# UI_DIST_DIR to an explicit empty value to say so.
+if not UI_DIST_DIR and config("UI_DIST_DIR", default=None) != "":
+    raise ImproperlyConfigured(
+        "The frontend build was not found (UI_DIST_DIR). Build the image from the "
+        "repository root, or set UI_DIST_DIR= (empty) if the frontend is hosted elsewhere."
+    )
 
 # --------------------------------------------------------------------------
 # Transport security

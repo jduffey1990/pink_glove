@@ -14,7 +14,14 @@
 import type { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import axios from 'axios'
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+/**
+ * Where the API is. A production build is served BY the API (ADR-027), so it
+ * calls back to its own origin with relative URLs; the dev server runs on a
+ * different port and needs the address. VITE_API_BASE_URL overrides both,
+ * for a frontend hosted somewhere other than the API.
+ */
+export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL
+  ?? (import.meta.env.DEV ? 'http://localhost:8000' : '')
 
 const CSRF_COOKIE = 'csrftoken'
 const UNSAFE_METHODS = new Set(['post', 'put', 'patch', 'delete'])

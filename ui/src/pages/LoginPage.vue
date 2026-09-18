@@ -47,6 +47,10 @@
       case null: {
         // No response at all: the request never reached the API, or CORS
         // refused it. Commonest cause is a dev server on an unexpected port.
+        if (!API_BASE_URL) {
+          // Served by the API itself (ADR-027): there is no other origin to name.
+          return 'Could not reach the API. Check your connection and try again.'
+        }
         return `Could not reach the API at ${API_BASE_URL}. Check it is running, `
           + 'and that this page is served from an origin the API allows.'
       }

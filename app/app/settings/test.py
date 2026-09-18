@@ -7,7 +7,7 @@ DEBUG = False
 
 # Whitenoise isn't under test and warns on every request about a missing
 # STATIC_ROOT that only exists after collectstatic.
-MIDDLEWARE = [m for m in MIDDLEWARE if "whitenoise" not in m]
+MIDDLEWARE = [m for m in MIDDLEWARE if "whitenoise" not in m.lower()]
 ENV = "test"
 LOCAL = False
 
