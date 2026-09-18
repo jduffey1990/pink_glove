@@ -788,8 +788,16 @@ production Jordan's alone, and a workflow that could reach it is one bad merge
 from doing so.
 
 **Consequences.** `docker build` runs from the repository root, and the
-compose file's build context is `..`. The frontend build is refused rather
-than skipped when missing. A staff sign-in in a rehearsal is read from the web
-log (`EMAIL_BACKEND` is env-selectable for that). The `FIELD_ENCRYPTION_KEY`
-backup rule in `.env.example` becomes operational: `docs/DEPLOY.md` says where
-it must live.
+compose file's build context is `..` -- so a development `docker compose
+build` runs the Node stage too and then sets `UI_DIST_DIR` empty, discarding
+what it built; the price of one image. The frontend build is refused rather
+than skipped when missing. `index.html` is never served as a file: whitenoise
+skips it so it always goes through the view, with `no-cache` and the
+clickjacking header, and `XFrameOptionsMiddleware` moved above whitenoise so
+the files whitenoise does serve carry the header too. `MEDIA_BACKEND=filesystem`
+is refused in production outright -- nothing serves `/media/` outside `DEBUG`,
+so a volume would not have helped. `FRONTEND_BASE_URL` is required and must
+be https, because a customer's sign-in token travels in it. A staff sign-in
+in a rehearsal is read from the web log (`EMAIL_BACKEND` is env-selectable
+for that). The `FIELD_ENCRYPTION_KEY` backup rule in `.env.example` becomes
+operational: `docs/DEPLOY.md` says where it must live.

@@ -101,17 +101,10 @@ REDIS_URL=redis://localhost:6379/0 \
 # Lint / format
 .venv/bin/ruff check . && .venv/bin/ruff format .
 
-# Deploy audit -- must come back clean. It needs a real-looking SECRET_KEY (a
-# short one is itself a warning) and SECURE_SSL_REDIRECT, which production.py
-# leaves off by default because Fly redirects at the edge. Production settings
-# also refuse to import without a media bucket and a frontend build (ADR-027);
-# UI_DIST_DIR= (empty) is the explicit "not here" that lets the audit run
-# without one. CI runs this same command.
-SECRET_KEY=$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(64))") \
-SECURE_SSL_REDIRECT=True ALLOWED_HOSTS=example.com \
-FIELD_ENCRYPTION_KEY=audit-only-not-a-key \
-MEDIA_BACKEND=s3 MEDIA_BUCKET=audit-only UI_DIST_DIR= \
-  .venv/bin/python manage.py check --deploy --fail-level WARNING --settings=app.settings.production
+# Deploy audit -- must come back clean. The script carries the placeholder
+# values production settings need to import at all (ADR-027); a new required
+# production variable is added there, once, and CI runs the same script.
+bin/deploy-audit.sh
 
 # The production image, from the REPOSITORY ROOT (the Dockerfile builds ui/
 # too). Then the rehearsal: the image under production settings behind one
@@ -304,16 +297,30 @@ fresh session can read what was checked and what was left.
      `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`;
    - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`
      -- in development only. Deployed, the build is served by gunicorn from
-     the API's own origin (ADR-027): the SPA catch-all in `app/urls.py` must
-     exclude every top-level prefix the API owns (`api/`, `admin/`,
-     `health/`, `static/`, `media/`), so a new top-level prefix is added
-     there too or the SPA swallows its 404s; `ui/src/api/client.ts` calls a
-     relative URL in a production build; and the cookies' `SameSite` follows
+     the API's own origin (ADR-027): the SPA catch-all in `app/urls.py` is
+     fenced off from every top-level prefix *derived from the patterns above
+     it* (plus `STATIC_URL`/`MEDIA_URL`), and a test walks them, so a new
+     top-level route needs nothing but its `path()` -- as long as it is
+     declared before the catch-all; `ui/src/api/client.ts` calls a relative
+     URL in a production build; and the cookies' `SameSite` follows
      `CORS_ALLOWED_ORIGINS` (Lax when empty, None when set);
    - the Node version appears three times and must agree: `ui/.nvmrc`, the
-     `ui` compose service, and the Node stage of the root `Dockerfile`;
+     `ui` compose service, and the Node stage of the root `Dockerfile`. The
+     Python version likewise: `pyproject.toml`, the `Dockerfile` and
+     `.github/workflows/ci.yml`;
+   - the built frontend's path is agreed by construction, not by reference:
+     the `Dockerfile` copies it to `/ui/dist`, `settings/base.py` defaults
+     `UI_DIST_DIR` to `../ui/dist` from `app/`, and `gunicorn_conf.py`
+     chdirs to `/code`. Move one and move all three;
+   - the three process commands (gunicorn, celery worker, celery beat) are
+     spelled out in `app/docker-compose.yml`, `deploy/fly.toml` and
+     `deploy/docker-compose.rehearsal.yml`; Fly needs its own `[processes]`
+     and compose cannot import. A flag change is a three-file change;
    - `deploy/fly.toml` sets `NUM_PROXIES=1` because Fly's proxy is the one
-     hop. A CDN in front makes it 2 -- change the toml, not the settings;
+     hop. A CDN in front makes it 2 -- change the toml, not the settings.
+     Its `dockerfile = "../Dockerfile"` is relative to the toml while the
+     build context is the working directory, so `fly deploy` runs from the
+     repository root, as `docs/DEPLOY.md` and CI do;
    - the job state machine lives on the server: `Job.next_statuses` and
      `is_terminal` say what the caller may do, and a 409's `allowed` list
      corrects a stale page. A new status touches the backend enum, the

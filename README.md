@@ -86,36 +86,19 @@ build, which gunicorn serves from the same origin as the API:
 docker build -t pink-glove .
 ```
 
-Everything host-specific is an environment variable:
-
-- `DATABASE_URL` — any managed Postgres
-- `REDIS_URL` — any managed Redis. Also holds the throttle counters, so it is
-  required, not optional
-- `MEDIA_BACKEND` — `s3` (installed in the image; Tigris on Fly, or AWS) or
-  `gcs`. `filesystem` is refused in production unless `MEDIA_ROOT` names a
-  mounted volume. Objects are written private and read through URLs that
-  expire after `MEDIA_URL_TTL_SECONDS` (default 300)
-- `MEDIA_BUCKET` — or `BUCKET_NAME`, which `fly storage create` sets
-- `UI_DIST_DIR` — where the frontend build is; the image's default is right.
-  Set it empty only to host the frontend elsewhere, and then also set
-  `CORS_ALLOWED_ORIGINS`, which loosens the cookies to `SameSite=None`
-- `NUM_PROXIES` — how many proxies you control sit in front of the app
-  (1 on Fly, the default in production). The sign-in throttles key on the
-  client IP, and this is how it is found: too low and every client shares
-  the proxy's bucket, too high and `X-Forwarded-For` is spoofable
-- `SECURE_SSL_REDIRECT` — leave off where the platform already redirects at
-  the edge (Fly does); turn on for a bare VPS
-- Static files are served by whitenoise from inside the container, so no
-  object storage is needed for them
+Everything host-specific is an environment variable, and `app/.env.example`
+documents each one where it is set: any managed Postgres and Redis (Redis
+also holds the throttle counters, so it is required), private object storage
+for photographs read through expiring URLs, the proxy depth the sign-in
+throttles rely on, and static files served by whitenoise from inside the
+container so no object storage is needed for them. Production settings refuse
+to import when one of these is wrong, rather than failing on the first
+upload.
 
 Before deploying anywhere, this must come back clean:
 
 ```bash
-SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(64))") \
-SECURE_SSL_REDIRECT=True ALLOWED_HOSTS=example.com \
-FIELD_ENCRYPTION_KEY=audit-only-not-a-key \
-MEDIA_BACKEND=s3 MEDIA_BUCKET=audit-only UI_DIST_DIR= \
-  python manage.py check --deploy --fail-level WARNING --settings=app.settings.production
+cd app && bin/deploy-audit.sh
 ```
 
 The image runs as a non-root user and bakes static files at build time, so the

@@ -29,7 +29,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **862 passing** in `app/`, and **118** in `ui/` (`cd ui && npm test`).
+Expect **890 passing** in `app/`, and **121** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -1145,7 +1145,8 @@ failing test before it was fixed. Backend 466 → 552 tests, frontend 65 → 77.
   request; counters sat in per-process memory (x4 workers, reset on recycle).
   `NUM_PROXIES` is explicit (0; 1 in production; env-overridable), counters are
   in Redis, login has a per-account throttle. First tests that a 429 can
-  happen. **Set `NUM_PROXIES` to the real proxy depth when ADR-006 is decided.**
+  happen. ~~Set `NUM_PROXIES` to the real proxy depth when ADR-006 is
+  decided.~~ Done in Phase D: `1` in `deploy/fly.toml` (ADR-027).
 - **2FA attempts were counted on the instance**, so a stale copy wrote its own
   count back: parallel guesses cost one attempt. Conditional `UPDATE`s now, for
   attempts, code consumption and magic-link consumption.
@@ -1398,8 +1399,8 @@ cleaner's 403 with no Billing link at all.
 
 ## Phase D as built
 
-Branch `phase-d-deploy`, on top of `phase-4-billing`. Backend 818 → 862,
-frontend 118 (unchanged). What the spec asked for, and what each turned into:
+Branch `phase-d-deploy`, on top of `phase-4-billing`. Backend 818 → 890,
+frontend 118 → 121. What the spec asked for, and what each turned into:
 
 **Decide the target → Fly.io, ADR-027.** One `deploy/fly.toml` with `web`,
 `worker` and `beat` as process groups of one image and the migration as the
@@ -1444,10 +1445,12 @@ storage options now carry the bucket, endpoint, region and credentials from
 the environment (the names `fly storage create` sets), path-style addressing
 and SigV4 for Tigris and MinIO, private ACL, expiring signed URLs, no
 overwrite. The image installs the `s3` extra. Production refuses
-`MEDIA_BACKEND=filesystem` unless `MEDIA_ROOT` names a volume, a cloud
-backend without a bucket, and a missing frontend build unless `UI_DIST_DIR`
-is set empty on purpose. Twenty-two tests import the production module under
-controlled environments and pin each refusal.
+`MEDIA_BACKEND=filesystem` outright (nothing serves `/media/` outside
+`DEBUG`), a cloud backend without a bucket, a missing frontend build unless
+`UI_DIST_DIR` is set empty on purpose, and a `FRONTEND_BASE_URL` that is
+missing or not https. Thirty-four tests import the production module under
+controlled environments, isolated from any developer's `app/.env`, and pin
+each refusal.
 
 **GitHub Actions → `.github/workflows/ci.yml`.** On every push and pull
 request: backend (ruff, ruff format, pytest against a Postgres service, the
@@ -1472,3 +1475,98 @@ mail backend is now env-selectable so a rehearsal can print it at all.
 GitHub environment, variable or secret; a `FIELD_ENCRYPTION_KEY` rotation
 path (noted in the runbook as not built); a production Postgres topology
 beyond the recommendation in the runbook.
+
+### Phase gate — Phase D (2026-09-17)
+
+Three reviewers ran in parallel (coverage; DRY/modularity/orthogonality;
+authentication, authorization and deploy hardening), plus `/security-review`
+on the phase diff. Everything below marked fixed was reproduced first.
+
+**1. Test coverage.** Backend 818 → 890, frontend 118 → 121. Fixed after
+review: the production-settings tests could pass or fail on a developer's
+`app/.env` (python-decouple falls through to it for anything a test leaves
+unset) — the fixture now installs an empty repository per load, and a test
+plants a contrary `.env` to prove it; `API_BASE_URL`'s three cases (relative
+in a production build, the dev-server port under Vite, the override) have a
+spec; the `EMAIL_BACKEND` override, the GCS bucket fallback and GCS options,
+the HSTS knobs and the https requirement on `FRONTEND_BASE_URL` are each
+pinned; the fence has a test that walks every top-level route in
+`urlpatterns` and asserts none resolves to the SPA, plus the bare prefixes,
+the look-alikes (`/apifoo` is a page), and `/api/schema/` and `/api/docs/`;
+the whitenoise hash regex is pinned to Vite's exact eight characters with
+five near-misses; a missed index read is no longer cached for the process
+life, and a test shows a build appearing later is served. *Gap left open:*
+no page component has a vitest spec, so `LoginPage.vue`'s origin-free copy
+when `API_BASE_URL` is empty is untested — same gap as 4a, same reason. The
+SameSite-follows-CORS rule is exercised only through the production reload,
+since `test.py` and `local.py` pin `Lax`.
+
+**2. DRY.** The deploy audit was the same command written by hand in
+`CLAUDE.md`, `README.md` and `ci.yml`; it is `app/bin/deploy-audit.sh` now
+and all three call it. CI re-implemented `app/bin/check-schema.sh`; the script
+takes `PYTHON` and CI calls it. The SPA fence was a hand-kept list of prefixes
+in `urls.py` mirrored by a hand-kept list in the test and in `CLAUDE.md`; it
+is derived from `urlpatterns` plus `STATIC_URL`/`MEDIA_URL` now, and the test
+walks the real routes. Three stale ADR-006 references corrected. `README`'s
+restated env semantics replaced by a pointer to `.env.example`.
+*Accepted:* the three process commands in three orchestrators, the
+Postgres/Redis healthchecks in both compose files, the Python version in
+three places, and `/ui/dist` agreed by construction — all now in `CLAUDE.md`'s
+coupling list. CI's `schema.d.ts` diff step restates one line of
+`npm run api:types`; left inline. `pip install ".[dev]"` has no lockfile, so
+a drf-spectacular release could fail the schema diff for a reason unrelated
+to the change; noted, not addressed.
+
+**3. Modularity.** `app/app/spa.py` and `app/app/middleware/static_files.py`
+are root-URL concerns with no domain semantics and sit in the project
+package beside `urls.py` and the tenant middleware; settings import no app.
+`docs/DEPLOY.md` is the one home of operator steps; `README` and `CLAUDE.md`
+point at it.
+
+**4. Orthogonality.** New couplings recorded in `CLAUDE.md`: the derived
+fence (a new top-level route needs only its `path()`, declared before the
+catch-all), the Python version in three files, the built frontend's path
+agreed by construction across the Dockerfile, settings and gunicorn, the
+process commands in three orchestrators, and `fly.toml`'s dockerfile path
+being relative to the toml while the build context is the working directory.
+The cookie `SameSite` rule is now documented beside `CORS_ALLOWED_ORIGINS` in
+`.env.example`, where the operator reads it.
+
+**5. Security.** No HIGH findings. Two MEDIUM, both fixed:
+
+- **`/index.html` was served by whitenoise, which runs no middleware below
+  it** — so the SPA's own document went out without `X-Frame-Options` and
+  with a sixty-second cache. Whitenoise now skips `index.html` (it always
+  goes through `spa_index`: `no-cache`, and the clickjacking header), and
+  `XFrameOptionsMiddleware` moved above whitenoise so the files it does
+  serve carry the header too. Tested both ways. Exploitable only in the
+  opt-in cross-origin configuration (Lax cookies make a cross-site frame
+  anonymous), which is why `/security-review` scored it LOW.
+- **The staging deploy job used a mutable `@master` ref with the deploy
+  token in scope**, and interpolated a repository variable into the shell
+  line. Pinned to a commit (tag 1.6); the variable now arrives through `env`.
+
+LOW, fixed: the fence matched string prefixes, so `/api` and `/admin` without
+a slash were pages (now segments: `(?:/|$)`); the hash regex accepted eight
+*or more* characters; `FRONTEND_BASE_URL` was not required and defaulted to
+the dev server, so a forgotten secret would have mailed a customer's sign-in
+token in a plain-http localhost link (required, and must be https); HSTS
+`includeSubDomains`/`preload` were hardcoded (env-controlled, default on,
+and `DEPLOY.md` says to use a subdomain of its own); filesystem media with a
+volume passed the import check but nothing serves `/media/` outside `DEBUG`
+(refused outright); the rehearsal published its ports on every interface
+(loopback now); workflow-level `cancel-in-progress` could cut off a running
+`flyctl deploy` after the release command had migrated (per-job for the
+checks only). *Accepted and noted:* `gunicorn_conf.py`'s
+`forwarded_allow_ips="*"` — gunicorn is reachable only through Fly's proxy
+(or the rehearsal's Caddy), and `force_https` at the edge makes a forged
+`X-Forwarded-Proto` worthless. Nothing is `AllowAny` that was not already;
+`spa_index` is a plain Django view, deliberately public, and is the one
+addition. Deploy audit clean via the shared script. The rehearsal was rebuilt
+and re-probed after every fix above.
+
+**6. Branch and production guard.** All of Phase D is on `phase-d-deploy`,
+branched from `phase-4-billing`. Nothing was committed to `main`, nothing
+was pushed, nothing was run against Fly or GitHub settings, and there is no
+production or staging yet — both are Jordan's to stand up from
+`docs/DEPLOY.md`.

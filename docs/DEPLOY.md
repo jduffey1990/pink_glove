@@ -31,6 +31,8 @@ browser ──https──▶ Fly proxy ──http──▶ web (gunicorn)  ─�
 - **Exactly one `beat` machine.** Two schedulers fire every job twice.
 - **Media is private.** Photographs go to a Tigris bucket with no public
   access; the API hands out URLs that expire after `MEDIA_URL_TTL_SECONDS`.
+  Filesystem media is development only: production refuses it, since nothing
+  serves `/media/` outside `DEBUG` and the machine's disk is ephemeral.
 - **`NUM_PROXIES=1`.** Fly's proxy appends the client address to
   `X-Forwarded-For` and the sign-in throttles key on it. If a CDN is ever put
   in front of Fly, this becomes `2`, in `deploy/fly.toml`.
@@ -173,10 +175,14 @@ Production is **not** deployed by CI.
 
 The same steps with `pink-glove` in place of `pink-glove-staging`, and:
 
-- your own hostname: `fly certs add app.yourdomain --app pink-glove`, then
-  `ALLOWED_HOSTS` and `FRONTEND_BASE_URL` to match, then `COOKIE_DOMAIN` if
-  the API will ever be reached on more than one hostname (leave it blank
-  otherwise);
+- your own hostname, **on its own subdomain** (`app.yourdomain`, not the
+  apex): `fly certs add app.yourdomain --app pink-glove`, then
+  `ALLOWED_HOSTS` and `FRONTEND_BASE_URL` (https) to match, then
+  `COOKIE_DOMAIN` if the API will ever be reached on more than one hostname
+  (leave it blank otherwise). The HSTS header includes subdomains and asks
+  for preload by default, which is right for a subdomain of its own; on an
+  apex it would commit every subdomain of the company to https, so there set
+  `SECURE_HSTS_INCLUDE_SUBDOMAINS=False` and `SECURE_HSTS_PRELOAD=False`;
 - a managed or 2-node Postgres with snapshots (step 2);
 - a **different** `FIELD_ENCRYPTION_KEY`, `SECRET_KEY` and SendGrid key from
   staging;
