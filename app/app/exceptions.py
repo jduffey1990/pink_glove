@@ -34,10 +34,25 @@ class ConflictError(Exception):
         self.payload = payload or {}
 
 
+class ServiceUnavailableError(Exception):
+    """
+    A dependency this request needs is not configured or not reachable.
+
+    `billing.connect` raises it when Stripe is not enabled on the server
+    (ADR-024: optional). Rendered as a 503 so a client can tell "not here"
+    from "you may not" (403) and "no such thing" (404).
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.detail = detail
+
+
 def exception_handler(exc, context):
     """
-    Translate Django's ValidationError into DRF's, so it renders as a 400, and
-    a service's `ConflictError` into a 409.
+    Translate Django's ValidationError into DRF's, so it renders as a 400, a
+    service's `ConflictError` into a 409, and `ServiceUnavailableError` into
+    a 503.
 
     DRF only understands its own exception type; a Django ValidationError
     raised from `Model.save()` or `Model.clean()` would otherwise escape as an
@@ -53,6 +68,9 @@ def exception_handler(exc, context):
         # The payload is merged into the body rather than nested, so a client
         # reads `detail` and `allowed` off the same object it already handles.
         exc = ConflictJSON({"detail": exc.detail, **exc.payload})
+
+    elif isinstance(exc, ServiceUnavailableError):
+        exc = ServiceUnavailableJSON({"detail": exc.detail})
 
     return drf_exception_handler(exc, context)
 
@@ -79,3 +97,9 @@ class ConflictJSON(APIException):
     status_code = 409
     default_detail = "Conflict"
     default_code = "conflict"
+
+
+class ServiceUnavailableJSON(APIException):
+    status_code = 503
+    default_detail = "Service Unavailable"
+    default_code = "service_unavailable"
