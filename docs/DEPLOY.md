@@ -200,6 +200,64 @@ From then on every push to `main` that passes the backend, frontend and image
 jobs deploys to staging. Until the variable is set the job is skipped.
 Production is **not** deployed by CI.
 
+### 9. Stripe Connect (Phase 4b)
+
+Optional, and the app runs without it: with no `STRIPE_SECRET_KEY` there is
+no connect button, no pay link, and the pay and webhook endpoints answer
+503. Do this once there is a Stripe account to connect.
+
+1. **A Stripe account for the platform**, in test mode for staging. Enable
+   **Connect** (Settings → Connect) and choose the option for platforms
+   whose connected accounts use the full Stripe dashboard (Standard). The
+   tenants' accounts are created from the app; nothing is set up per
+   tenant here.
+2. **Register the Connect webhook.** Developers → Webhooks → Add endpoint:
+   - URL `https://pink-glove-staging.fly.dev/api/billing/stripe/webhook/`
+   - **Listen to: events on Connected accounts** -- not "your account".
+     This is the one setting that is easy to get wrong and impossible to
+     see from the app; a platform-account endpoint delivers nothing.
+   - Events: `checkout.session.completed`, `charge.refunded`,
+     `charge.dispute.created`, `charge.dispute.closed`, `account.updated`.
+     Nothing else is handled; anything else sent is ledgered and ignored.
+   - Copy the signing secret (`whsec_…`) it shows once.
+3. **Set the two secrets** (the app refuses to start with the key and not
+   the secret):
+
+   ```bash
+   fly secrets set --app pink-glove-staging \
+       STRIPE_SECRET_KEY='sk_test_…' \
+       STRIPE_CONNECT_WEBHOOK_SECRET='whsec_…'
+   ```
+
+   `STRIPE_APPLICATION_FEE_PERCENT` stays unset (0) unless a platform fee
+   is decided on; it is a percentage, `2.9` not `0.029`.
+4. **Try it end to end** as the seeded owner: Billing → Billing settings →
+   Connect with Stripe, and complete the test-mode onboarding (Stripe
+   accepts made-up details in test mode; use `000-000-0000` for the phone
+   and `000 00 0000` for the tax id when asked). Back on the settings page
+   it should say connected. Open the seeded overdue invoice, Email it,
+   open the pay link from the log (or Copy pay link), and pay with
+   `4242 4242 4242 4242`, any future date, any CVC. Within seconds the
+   invoice shows paid, with the fee beside the payment. Refund it from the
+   *connected account's* dashboard (test mode) and watch the payment go
+   void and the balance come back.
+5. **Production** is the same with the account in live mode, the endpoint
+   on the production hostname, and its own signing secret. Staging and
+   production endpoints have different secrets even on the same Stripe
+   account.
+
+Locally, the Stripe CLI forwards Connect events to the dev server:
+
+```bash
+stripe listen --forward-connect-to localhost:8000/api/billing/stripe/webhook/
+# prints a whsec_… for THIS session; put it in app/.env as STRIPE_CONNECT_WEBHOOK_SECRET
+```
+
+Failed events are in Django admin under Billing → Stripe events, with the
+error; fix the cause, then re-run the task
+(`process_stripe_event.delay(organization_id, event_row_id)` from a shell)
+-- the payload is on the row, so Stripe need not resend.
+
 ---
 
 ## Production

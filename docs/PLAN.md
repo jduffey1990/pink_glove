@@ -29,7 +29,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **895 passing** in `app/`, and **121** in `ui/` (`cd ui && npm test`).
+Expect **1027 passing** in `app/`, and **131** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -52,7 +52,7 @@ testing gotchas that will otherwise cost you an hour each.
 | 3b | Frontend slice (`ui/`), built against 3a | **Done** |
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
 | D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
-| 4b | Stripe Connect: tenants take card payments | **In progress** on `phase-4b-stripe-connect`; spec below |
+| 4b | Stripe Connect: tenants take card payments | **Done** on `phase-4b-stripe-connect`, gated; waiting to be merged |
 | 4c | Platform subscription: tenants pay for pink_glove | Not started |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
@@ -1855,3 +1855,183 @@ normal) and the recovery table reads the check's reply before guessing.
 Also from the same session: the seed guaranteed only three finished visits
 on a Monday or Tuesday, so CI's seed test failed on the first push to
 `main`; it starts three weeks back now.
+
+---
+
+## Phase 4b as built
+
+Branch `phase-4b-stripe-connect`, on top of `main` after Phase D and the
+first staging deploy. Backend 895 → 1027, frontend 121 → 131. What the spec
+asked for, and what each turned into:
+
+**Standard accounts, spelled in Stripe's controller form.** `stripe.Account`
+`type="standard"` is the legacy spelling; the SDK's current form is
+`controller: {stripe_dashboard: full, fees: payer account, losses: payments
+stripe, requirement_collection: stripe}`, which is the same account. Every
+one of those is the ADR-024 choice (the tenant's dashboard, the tenant's
+fees, the tenant's losses), so `connect.py` says them out loud rather than
+relying on a default.
+
+**Stripe optional on the server.** `STRIPE_ENABLED = bool(STRIPE_SECRET_KEY)`;
+production refuses a key without `STRIPE_CONNECT_WEBHOOK_SECRET`; every
+entry point without a key is a 503 through a new `ServiceUnavailableError`
+in `app/exceptions.py`, rendered beside `ConflictError`. The `stripe`
+package is imported inside `connect.client()` and inside the webhook view,
+nowhere at module level, so a deployment without a key never loads it.
+Staging deployed on this branch's parent without a key and still does.
+
+**The pay link is `django.core.signing`, salt `billing.pay`, 120 days.** It
+carries the invoice id and nothing else. A token for a deleted invoice is a
+404; a token under another salt or past its age is a 404; the public
+serializer sends the organization name, number, dates, lines and totals --
+no email, no address, no ids -- and `payable_reason`, the server's own
+sentence for why the button is absent.
+
+**The webhook is a plain Django view, not DRF.** `request.body` reaches
+`construct_event` untouched; the verified raw body (`json.loads` of the
+same bytes) is what the ledger stores, not the SDK's object model. The
+secret is read per request. Ledger, resolve the account to its
+organization, mark IGNORED what nobody owns or handles, enqueue ids only,
+200. The task runs the handler and the PROCESSED mark in one transaction
+and marks FAILED outside it before re-raising for Celery's three retries.
+Replaying a FAILED event is `process_stripe_event.delay(org_id, row_id)`
+from a shell -- the admin "replay" action the spec mentioned is not built;
+the admin lists FAILED rows read-only and the shell is one line. Open.
+
+**Overpayment is recorded as it happened.** `record_provider_payment` has
+no balance check and is idempotent on `(provider, provider_reference)`
+including void rows; `overpaid_cents` is published and the invoice page
+says "refund from your Stripe dashboard". A partial refund voids the
+original and writes the net under `pi:refunded-<cumulative>`, so a replay
+repeats the reference and a further refund changes it; the handler skips
+itself when the replacement already exists.
+
+**`can_void` on a payment.** The spec said the void action "stays hidden
+for `provider != ''`"; hiding is not a permission, so the server publishes
+`can_void` and `PaymentViewSet.void` refuses a provider payment with a 409
+(`services.assert_voidable_by_hand`). The page draws the button from the
+field.
+
+**Dates on the pay page.** The spec had the serializer formatting dates in
+the organization's zone; `issued_on`/`due_on` are already organization-local
+`DateField`s, so they go out as plain dates and the page formats them with
+`formatDayLabel`, which takes an ISO date and no zone. Nothing to convert.
+
+**What is not built, on purpose:** the application-fee display on the
+settings card (the fee ships at 0 and the card would say "0%" to everyone);
+tips on card payments; `checkout.session.async_payment_succeeded` (bank
+debits) -- a paid session is `payment_status: paid` or it is ignored;
+disconnecting a Stripe account; the admin replay action (above).
+
+**Changed by the gate (below), and worth knowing before touching this:**
+the settings card switches on `stripe.state`, a word the server publishes
+(`Organization.stripe_state`), not on the flags; Checkout is pinned to
+`payment_method_types: ["card"]` because a bank debit settles through an
+event that is not handled; and `charge.refunded` applies only a cumulative
+refund larger than the one already on the ledger, because Stripe does not
+promise order.
+
+### Phase gate — Phase 4b (2026-09-22)
+
+Three reviewers ran in parallel (coverage; DRY/modularity/orthogonality;
+authentication, authorization and money), plus `/security-review` on the
+phase diff. Everything below marked fixed was reproduced first.
+
+**1. Test coverage.** Backend 895 → 1027, frontend 121 → 131. Every new
+model, service, endpoint, handler and task has direct tests; cross-tenant
+is covered at the webhook's resolve step, in the checkout handler, and --
+added by the gate -- for the refund and dispute handlers (org B's account
+reporting org A's PaymentIntent touches nothing). Fixed after review:
+`StripeRefreshView` had no owner, anonymous or 503 case; the throttle test
+asserted only the scope string (now proves `ScopedRateThrottle` is on both
+views and the rate resolves in the running settings); the rollback test
+failed before anything was written (now fails at the fee read, after the
+payment row, and proves no row survives); the deleted-invoice test used a
+hard delete (now a soft delete, which is what the default manager must
+hide); the Celery task body was never invoked (now `.apply()`ed once);
+`can_void` for an already-void payment, a platform event at the endpoint,
+`session.isOwner`, and `connect.client()` on the pinned version were each
+untested. *Gaps left open:* no page component has a spec (same as every
+phase): `refreshAfterReturn`, `copyPayLink`, `settleAfterReturn` and the
+pay page's 409 reload are exercised only by hand; `StripeEventAdmin`'s
+refusals are untested, like every other admin.
+
+**2. DRY.** `pay_url`-if-payable was computed in the serializer and again
+in the email context: one `connect.pay_url_if_payable` now. The `stripe`
+block was built by hand beside a serializer whose fields had no `source`:
+`StripeStatusSerializer` reads the model directly and both the organization
+payload and the refresh view use it. The three Stripe test modules each
+defined `stripe_on` and `connected`: both live in `billing/tests/conftest.py`
+now, opted into with `usefixtures`, and `ACCOUNT_ID` is the one name for
+the fixture account. The pinned API version was a second literal in a test
+fixture (reads `settings.STRIPE_API_VERSION`); "No handler for this event
+type" was spelled twice; a `Q` import was lazily inside a function for no
+reason. *Accepted:* `create_checkout_session` checks `enabled()` and then
+`payable()` checks it again -- deliberate, 503 before 409; the
+`overpaid` copy names Stripe while `Payment.provider` is generic -- right
+while there is one provider, becomes `overpaid_reason` on the server if a
+second arrives.
+
+**3. Modularity.** `billing/views.py` serialized the whole organization to
+pluck `["stripe"]`: it imports `StripeStatusSerializer` alone now, a one-way
+reach that is recorded in `CLAUDE.md`. The Connect views stay in `billing`
+so `organizations` never imports `billing`. `stripe` is imported in
+`billing/connect.py` and `billing/webhook.py` only, both lazily. Nothing
+under `app/*/` imports `billing` except `seed_demo`, which predates the
+phase and is a command, not an app module -- `CLAUDE.md` now says so.
+
+**4. Orthogonality.** Recorded in `CLAUDE.md`: `isOwner` in the mirrored
+role tiers; `STRIPE_API_VERSION` beside the SDK pin; the throttle scopes in
+three settings modules (`local.py` was missing them -- the pay page 500'd
+in development, found by the security reviewer); the `/pay/<token>` and
+`/billing/settings` paths *and their query keys* (`?stripe=return|refresh`,
+`?paid=1`, `?cancelled=1`) shared between `connect.py` and the router; the
+five handled event types in `HANDLERS` and the runbook. ADR-023: the
+settings card re-derived its three states from the flags -- the server
+publishes `state` now and the page switches on it; the pay page had one
+sentence of its own copy for the paid state -- it renders the server's
+`payable_reason` instead.
+
+**5. Security.** `/security-review`: no HIGH or MEDIUM findings. The gate
+reviewer found two MEDIUM, both fixed and both about money agreeing with
+the bank:
+
+- **Out-of-order `charge.refunded` events could put money back.** Two
+  partial refunds delivered later-first left the ledger at the smaller
+  cumulative refund, under-billing the customer. The handler now reads the
+  cumulative amount already applied off the live replacement's reference
+  and ignores any event that refunds no more than that. Tested with the
+  events reversed.
+- **A non-card method the tenant enables in their own dashboard would
+  complete a session `unpaid`** and settle days later through
+  `checkout.session.async_payment_succeeded`, which is not handled: the
+  money would move and the ledger never hear. Checkout is pinned to
+  `payment_method_types: ["card"]`; widening it means handling that event
+  first, and the comment says so.
+
+LOW, fixed: a validly signed body with no `id` or `type` was a 500 (Stripe
+retries a 500 for days) -- a 400 now, nothing ledgered. Documented rather
+than changed: the pay token is a 120-day bearer credential that lands in
+access logs and cannot be revoked short of voiding the invoice, and
+rotating `SECRET_KEY` kills every outstanding link (the comment beside
+`PAY_TOKEN_MAX_AGE` says so; `SECRET_KEY_FALLBACKS` is the answer if it
+matters); a signed-in staff member with no CSRF cookie gets a 403 from the
+checkout POST rather than a broken page (comment on the view).
+*Accepted:* `start_onboarding` holds the organization's row lock across
+two Stripe calls, and the checkout handler reads the fee inside the
+PROCESSED transaction -- a slow Stripe response blocks that one tenant's
+settings PATCH for its duration; availability, one tenant, and the lock is
+what makes "create the account once" true. `AllowAny`, deliberate and
+listed: `PayInvoiceView` (GET) and `PayInvoiceCheckoutView` (POST), both
+throttled; `StripeWebhookView` is a plain Django view, `csrf_exempt`,
+POST-only, signature-verified. Invariant 1's one exception, `StripeEvent`,
+is served by no API (`ui/openapi.yaml` has no reference) and read-only in
+the 2FA-gated admin. Deploy audit clean. No secrets in git or the bundle;
+`.env.example` has placeholders only.
+
+**6. Branch and production guard.** All of Phase 4b is on
+`phase-4b-stripe-connect`, branched from `main` after the staging fixes.
+Nothing was committed to `main` and nothing was pushed by an agent.
+Staging exists and was not touched: no `fly` command was run, no secret
+set, and the Stripe secrets are not set there -- staging runs this branch
+with Stripe off until Jordan follows `docs/DEPLOY.md` step 9.

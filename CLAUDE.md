@@ -30,7 +30,8 @@ pink_glove/
 │   ├── catalog/            # Service + pricing models
 │   ├── audit/              # AccessReveal, the end-of-day evaluator
 │   ├── scheduling/         # RecurringPlan, Job, assignments, time, notes, photos
-│   ├── billing/            # Invoice, InvoiceLine, Payment, InvoiceSequence
+│   ├── billing/            # Invoice, InvoiceLine, Payment, InvoiceSequence;
+│   │                       # connect.py + webhook.py are the only Stripe callers
 │   ├── health/             # liveness + readiness
 │   └── ...                 # organizations, two_factor; notifications by phase
 ├── ui/                     # Vue 3 + Vuetify 4 + TypeScript SPA (ADR-018)
@@ -52,7 +53,11 @@ quiet edit.
 
 1. **Tenant data is scoped at the chokepoint.** Models holding tenant data
    inherit `TenantModel`; views over them inherit `TenantViewSetMixin`. Never
-   auto-filter a default manager from request context — see ADR-002.
+   auto-filter a default manager from request context — see ADR-002. One
+   recorded exception: `billing.StripeEvent` is a `Base` model with a
+   nullable `organization`, because a webhook event for an account no
+   tenant owns must be ledgered and dropped (ADR-024); it is admin-only and
+   no API serves it.
 2. **`organization` is stamped from the resolved tenant, never read from request
    data.**
 3. **Celery tasks take `organization_id` explicitly.** No implicit tenant
@@ -326,17 +331,32 @@ fresh session can read what was checked and what was left.
      corrects a stale page. A new status touches the backend enum, the
      transitions, the schema and its label in `ui/src/lib/jobStatus.ts` --
      never a client-side table of moves;
-   - role tiers are mirrored in `ui/`: `DISPATCHER_ROLES` in
-     `src/stores/session.ts`, the route tiers in `src/router/index.ts`,
-     `canEdit` in `ServicesPage.vue`, and the customer filter in
-     `listAssignableStaff`. Changing a tier in `users/enums.py` means all four;
+   - role tiers are mirrored in `ui/`: `DISPATCHER_ROLES`, `ADMIN_ROLES` and
+     `isOwner` in `src/stores/session.ts`, the route tiers in
+     `src/router/index.ts`, `canEdit` in `ServicesPage.vue`, and the
+     customer filter in `listAssignableStaff`. Changing a tier in
+     `users/enums.py` means all of them;
+   - Stripe (4b): `STRIPE_API_VERSION` in `settings/base.py` is pinned
+     beside the SDK pin in `pyproject.toml` -- bump both together; the
+     `pay_page`/`pay_checkout` throttle scopes are listed in
+     `settings/base.py`, `settings/local.py` and `settings/test.py` (each
+     replaces the table whole); the pay page's path (`/pay/<token>`) and the
+     settings page's (`/billing/settings`), with their query keys
+     (`?stripe=return|refresh`, `?paid=1`, `?cancelled=1`), appear in
+     `ui/src/router/index.ts` and the two pages and in `billing/connect.py`,
+     which builds the URLs Stripe and the email send people to; and the
+     five handled event types are `billing/webhook.py`'s `HANDLERS` and
+     the list the operator registers in Stripe (`docs/DEPLOY.md`);
    - `scheduling/serializers.py` picks the field for a pricing 400 by reading
      the text of the `ValueError` from `catalog.models.Service.quote_cents`;
    - `customers/views.py` lazy-imports `scheduling.permissions`, because
      `scheduling` already imports `customers.models`;
-   - `billing` imports `scheduling.models` and `catalog.enums` and nothing
-     imports `billing`, so the dependency runs one way only. Keep it that way:
-     a scheduling import of `billing` would close the cycle.
+   - `billing` imports `scheduling.models`, `catalog.enums`,
+     `organizations.models` and (narrowly, for the Connect views)
+     `organizations.serializers.StripeStatusSerializer`; no app module
+     imports `billing` -- only the `seed_demo` command does -- so the
+     dependency runs one way only. Keep it that way: a scheduling or
+     organizations import of `billing` would close the cycle;
 5. **Security (authentication and authorization).**
    - Every new model holding tenant data inherits `TenantModel`, and every
      view over it inherits `TenantViewSetMixin` (invariant 1).
