@@ -15,6 +15,8 @@ from .base import (
     FRONTEND_BASE_URL,
     MEDIA_BUCKET,
     SECRET_KEY,
+    STRIPE_CONNECT_WEBHOOK_SECRET,
+    STRIPE_ENABLED,
     UI_DIST_DIR,
     config,
 )
@@ -51,6 +53,14 @@ if "*" in ALLOWED_HOSTS:
 # A customer's sign-in token travels in this URL, in an email.
 if not FRONTEND_BASE_URL.startswith("https://"):
     raise ImproperlyConfigured("FRONTEND_BASE_URL must be an https:// URL in production.")
+
+# Stripe is optional (ADR-024), but half of it is not: a key with no webhook
+# secret would open Checkout to customers and never hear that they paid.
+if STRIPE_ENABLED and not STRIPE_CONNECT_WEBHOOK_SECRET:
+    raise ImproperlyConfigured(
+        "STRIPE_SECRET_KEY is set but STRIPE_CONNECT_WEBHOOK_SECRET is not. Register the "
+        "Connect webhook endpoint (docs/DEPLOY.md) and set its signing secret, or unset the key."
+    )
 
 # --------------------------------------------------------------------------
 # Media

@@ -260,5 +260,37 @@ class TestProxies:
         assert production.SECURE_PROXY_SSL_HEADER == ("HTTP_X_FORWARDED_PROTO", "https")
 
 
+class TestStripe:
+    """Optional as a whole (ADR-024), but not half-configured."""
+
+    def test_is_off_when_no_key_is_set(self, load):
+        production = load(unset=("STRIPE_SECRET_KEY", "STRIPE_CONNECT_WEBHOOK_SECRET"))
+
+        assert production.STRIPE_ENABLED is False
+        assert production.STRIPE_APPLICATION_FEE_PERCENT == 0
+
+    def test_a_key_without_the_webhook_secret_fails_the_start(self, load):
+        """A key alone takes payments the ledger never hears about."""
+        with pytest.raises(ImproperlyConfigured, match="STRIPE_CONNECT_WEBHOOK_SECRET"):
+            load(STRIPE_SECRET_KEY="sk_test_x", unset=("STRIPE_CONNECT_WEBHOOK_SECRET",))
+
+    def test_a_key_and_a_secret_turn_it_on(self, load):
+        production = load(STRIPE_SECRET_KEY="sk_test_x", STRIPE_CONNECT_WEBHOOK_SECRET="whsec_x")
+
+        assert production.STRIPE_ENABLED is True
+        assert production.STRIPE_API_VERSION  # pinned, never the SDK's default
+
+    def test_the_fee_is_a_decimal_percentage(self, load):
+        from decimal import Decimal
+
+        production = load(
+            STRIPE_SECRET_KEY="sk_test_x",
+            STRIPE_CONNECT_WEBHOOK_SECRET="whsec_x",
+            STRIPE_APPLICATION_FEE_PERCENT="2.9",
+        )
+
+        assert production.STRIPE_APPLICATION_FEE_PERCENT == Decimal("2.9")
+
+
 def test_the_suite_itself_is_not_running_on_production_settings():
     assert os.environ["DJANGO_SETTINGS_MODULE"] == "app.settings.test"

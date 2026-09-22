@@ -7,6 +7,7 @@ hostname -- those come from the environment. See .env.example.
 """
 
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import dj_database_url
@@ -442,6 +443,29 @@ CACHES = {
 # the API's own origin (ADR-027); production.py requires it and requires https,
 # because a customer's sign-in token travels in it.
 FRONTEND_BASE_URL = config("FRONTEND_BASE_URL", default="http://localhost:3000")
+
+# --------------------------------------------------------------------------
+# Stripe Connect (Phase 4b, ADR-024)
+# --------------------------------------------------------------------------
+# All optional. With no secret key the product is exactly Phase 4a: the
+# connect button is absent, the pay and webhook endpoints answer 503, and
+# nothing imports the `stripe` package at startup. Staging deployed before
+# there was a Stripe account and production must be able to as well.
+# production.py refuses a key without the webhook secret.
+
+STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="")
+STRIPE_CONNECT_WEBHOOK_SECRET = config("STRIPE_CONNECT_WEBHOOK_SECRET", default="")
+STRIPE_ENABLED = bool(STRIPE_SECRET_KEY)
+
+# Platform fee on each card payment, as a percentage of the amount. Ships at
+# 0 -- revenue is the subscription -- and turning one on is configuration,
+# not a release (ADR-024). Decimal, like every rate here (ADR-009).
+STRIPE_APPLICATION_FEE_PERCENT = config("STRIPE_APPLICATION_FEE_PERCENT", default="0", cast=Decimal)
+
+# Pinned, and set on every client, so a dashboard-side API upgrade cannot
+# change payload shapes underneath the handlers. Bump it here, deliberately,
+# together with the SDK.
+STRIPE_API_VERSION = "2026-08-26.dahlia"
 
 # --------------------------------------------------------------------------
 # Logging

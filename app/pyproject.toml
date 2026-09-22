@@ -33,6 +33,7 @@ dependencies = [
     "cryptography>=46.0,<47",        # base.fields.EncryptedTextField
     "python-dateutil>=2.9,<3",       # RRULE expansion; imported directly, so declared
     "drf-spectacular>=0.28,<1",      # OpenAPI schema -- the frontend contract, ADR-019
+    "stripe>=15.6,<16",              # Phase 4b: Connect; imported only by billing/connect.py and webhook.py
 ]
 
 [project.optional-dependencies]
