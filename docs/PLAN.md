@@ -8,11 +8,11 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 ## Start here
 
 Everything through Phase D is on `main`, tests green — see "Phase 4a as
-built" and "Phase D as built" at the end of this file. Staging is being
-stood up by Jordan from `docs/DEPLOY.md`; "Found on the first staging
-deploy" at the very end records what that turned up. Next work is **4b**
-(Stripe Connect), once staging answers, so there is a public URL for the
-webhook. Work on a branch, never on `main`; run the
+built" and "Phase D as built" at the end of this file. **Staging is up**
+at `https://pink-glove-staging.fly.dev` (2026-09-22) and CI deploys `main`
+to it; "Found on the first staging deploy" at the very end records what
+standing it up turned up. Current work is **4b** (Stripe Connect) on
+`phase-4b-stripe-connect`, spec under "Phase 4 — Billing". Work on a branch, never on `main`; run the
 phase gate in `CLAUDE.md` at the end of each phase. Read "Phase 3b as built"
 before touching `ui/`, and "Phase gate — baseline": it records what was fixed
 and decided before Phase 4, and a backlog to fold in as files are touched.
@@ -52,7 +52,7 @@ testing gotchas that will otherwise cost you an hour each.
 | 3b | Frontend slice (`ui/`), built against 3a | **Done** |
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
 | D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
-| 4b | Stripe Connect: tenants take card payments | **Next**, once staging is up |
+| 4b | Stripe Connect: tenants take card payments | **In progress** on `phase-4b-stripe-connect`; spec below |
 | 4c | Platform subscription: tenants pay for pink_glove | Not started |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
@@ -1030,17 +1030,278 @@ add a GitHub Actions workflow running pytest, ruff and the three `ui/` checks
 on every push — today pre-commit is the only gate and it depends on each
 checkout having installed it. Production remains Jordan's alone (`CLAUDE.md`).
 
-### 4b — Stripe Connect (outline; spec it when 4a is built)
+### 4b — Stripe Connect
 
-`Organization.stripe_account_id` and onboarding status; Stripe-hosted
-onboarding from the settings page; a pay link on the invoice email and a
-hosted payment page (direct charge on the connected account, application fee
-from a platform setting that ships at 0%); the Connect webhook through the
-source repo's pipeline — verify, resolve `account` to an organization, enqueue
-with `organization_id`, `StripeEvent` ledger keyed on (event id, account),
-dispatch — writing a `Payment` with `provider="stripe"`. Refunds and disputes
-arrive as events and void or annotate the payment; they are never initiated
-from here in 4b. Read actual fees from balance transactions, never a constant.
+Decided in ADR-024 (Connect, direct charges, Stripe-hosted onboarding, an
+application fee that ships at 0%) and ADR-025 (a Stripe payment is a
+`Payment` row a webhook wrote). Do not re-open them here. Staging is up
+(2026-09-22, `https://pink-glove-staging.fly.dev`), so the webhook has a
+public URL. Same rules as 4a: checkpoints in order, suite green and schema
+regenerated at each, tests before the API, a cross-tenant test and a test
+per role on each side of every permission line.
+
+**Stripe account type: Standard.** The tenant owns a real Stripe account
+with its own dashboard, its own payouts and Stripe's own support; the
+platform holds an OAuth-style link to it and nothing else. This is what
+"the tenant's own Stripe dashboard" in ADR-024 means, and it is the only
+type on which a direct charge leaves the platform out of the chargeback.
+Express would look smoother and put every dispute back on the platform.
+
+**Stripe is optional on the server as well as per tenant.** With
+`STRIPE_SECRET_KEY` unset the product is exactly 4a: the connect button is
+absent, the pay endpoints answer 503, the webhook answers 503, and nothing
+imports the `stripe` package at startup. Staging deployed before there was
+a Stripe account, and production must be able to as well.
+
+#### 4b.0 — Prep
+
+1. Dependency `stripe` (pin the current major -- the source repo is on 11
+   and the legacy `stripe.error.*` namespace; use the modern
+   `stripe.SignatureVerificationError`; `STRIPE_API_VERSION` pinned in
+   settings and set on the client, so a Stripe dashboard upgrade cannot
+   change payload shapes underneath us). Settings, all from env, none
+   required: `STRIPE_SECRET_KEY`, `STRIPE_CONNECT_WEBHOOK_SECRET`,
+   `STRIPE_APPLICATION_FEE_PERCENT` (Decimal, default 0), and the derived
+   `STRIPE_ENABLED = bool(STRIPE_SECRET_KEY)`. Document all four in
+   `.env.example`. Production refuses to start with a key but no webhook
+   secret -- a half-configured Stripe accepts payments it never hears about.
+2. `billing/connect.py` -- the one module that talks to Stripe (accounts,
+   account links, checkout sessions, balance transactions), every call taking
+   `stripe_account=` explicitly. `billing/webhook.py` -- the endpoint, the
+   ledger write, and the dispatch table. Nothing else imports `stripe`.
+   (Not `billing/stripe.py`: it would shadow the package.) The dependency
+   direction holds -- `billing` still imports `organizations` and
+   `scheduling`, nothing imports `billing`.
+3. Test fixtures in `billing/tests/stripe_fixtures.py`: event payloads
+   built from Stripe's documented shapes, and a `signed(payload, secret)`
+   helper that computes the `Stripe-Signature` header the way the SDK
+   does. Tests never reach the network: `stripe` is patched at the
+   `billing.connect` boundary and the webhook is fed signed bytes.
+
+#### 4b.1 — Models
+
+```
+Organization
+    stripe_account_id         CharField(64), blank, unique where != ""
+    stripe_charges_enabled    BooleanField, default False   # mirrors Account.charges_enabled
+    stripe_details_submitted  BooleanField, default False   # mirrors Account.details_submitted
+    stripe_connected_at       DateTimeField, null
+    # Written only by billing.connect and the account.updated handler --
+    # never from request data. On OrganizationSerializer read-only, as one
+    # nested `stripe: {connected, charges_enabled, details_submitted}` so the
+    # settings page has one thing to look at.
+
+StripeEvent(Base)                       # NOT TenantModel -- see below
+    event_id        CharField(255)
+    account         CharField(64), blank  # "" for a platform event (4c)
+    type            CharField(100), db_index
+    organization    FK Organization, null, PROTECT
+    payload         JSONField
+    status          StripeEventStatus: RECEIVED | PROCESSED | IGNORED | FAILED
+    error           TextField, blank
+    processed_at    DateTimeField, null
+    unique (event_id, account); index (organization, type)
+
+Payment (additions)
+    fee_cents       PositiveIntegerField, null   # from the balance transaction; null until known
+    disputed_at     DateTimeField, null
+    dispute_status  CharField(32), blank         # Stripe's word: needs_response, won, lost, ...
+```
+
+`StripeEvent` is the one model in the phase that is not a `TenantModel`,
+deliberately: an event for an account no organization owns must be ledgered
+and dropped (ADR-024), so `organization` is nullable. It is never served by
+an API -- admin only, read-only -- so there is no view to scope. Record it
+in the gate as the invariant-1 exception it is.
+
+The `Payment` unique constraint on `(provider, provider_reference)` from 4a
+is the webhook's idempotency for money; the `StripeEvent` unique constraint
+is the idempotency for events. Both are needed: Stripe retries an event
+under the same id, and a `payment_intent.succeeded` and a
+`checkout.session.completed` can each describe the same PaymentIntent.
+
+#### 4b.2 — Connect services (`billing/connect.py`)
+
+- `start_onboarding(organization, *, actor) -> str` -- creates the Standard
+  account on first call (`stripe.Account.create(type="standard",
+  email=organization.email, metadata={organization_id})`) and stores
+  `stripe_account_id`; every call returns a fresh Account Link URL
+  (`type="account_onboarding"`, `refresh_url` and `return_url` under
+  `FRONTEND_BASE_URL/billing/settings`). Refused (409) when charges are
+  already enabled. Owner only: connecting binds the business to Stripe's
+  terms, which an admin does not sign.
+- `refresh_account(organization) -> Organization` -- fetches the Account
+  and copies `charges_enabled` / `details_submitted`; stamps
+  `stripe_connected_at` the first time charges are enabled. Called on
+  return from onboarding and by the `account.updated` handler, so the
+  status is right whether the webhook or the browser arrives first.
+- `pay_token(invoice) -> str` / `invoice_from_pay_token(token) -> Invoice`
+  -- `django.core.signing` with its own salt and a 120-day `max_age`
+  (terms are 14 to 30 days; the link in an email must outlive a slow
+  payer). Carries the invoice id only; everything else is looked up. The
+  invoice is the customer's own, and the amounts on it are what the email
+  already said, so a token in an email is no wider a disclosure than the
+  email.
+- `payable(invoice) -> str | None` -- why an invoice cannot be paid by
+  card right now, or `None`: Stripe not enabled on the server, the
+  organization not charges-enabled, invoice not issued, balance zero. The
+  pay page shows the reason; the email omits the button on any of them.
+- `create_checkout_session(invoice) -> str` -- on the connected account
+  (`stripe_account=`), `mode="payment"`, one line item named
+  "Invoice {number} from {organization}", `unit_amount` = the balance at
+  this moment, `currency="usd"`, `customer_email` = bill-to, `expires_at`
+  30 minutes out (the shortest Stripe allows), `client_reference_id` =
+  invoice id, `metadata={organization_id, invoice_id}`,
+  `payment_intent_data.metadata` the same (the PaymentIntent is what the
+  refund and dispute events name, and it does not inherit the session's
+  metadata), `application_fee_amount` from
+  `STRIPE_APPLICATION_FEE_PERCENT` rounded half up and omitted at 0,
+  `success_url` / `cancel_url` back to the pay page with `?paid=1` /
+  `?cancelled=1`. Returns the session URL. Never stored: a session is
+  30 minutes of intent, not a record, and the webhook carries everything.
+- `fee_cents_for(payment_intent_id, *, stripe_account) -> int | None` --
+  the charge's balance transaction's `fee`, read from Stripe; never
+  computed from a published rate (the outline's rule).
+
+Test each with `stripe` patched: the account is created once and never
+twice; the token round-trips and a tampered or expired one is refused;
+`payable` returns each reason; the session carries the metadata on both
+objects and the fee is absent at 0% and rounded at 2.9%.
+
+#### 4b.3 — The webhook (`billing/webhook.py`, `billing/tasks.py`)
+
+The source repo's pipeline was read before this was written
+(`app/billing/tasks.py` and `views.py` there, uncommitted): the shape to
+keep is *verify, enqueue, 200, everything else in the worker*. The rest is
+not to be copied -- its ledger has no migration, ships the whole payload
+over Redis, marks an event processed before handling it (so a handler
+failure plus a retry is a permanent silent drop), reads the secret at
+import time, and has no tests, no Connect and no refund handling.
+
+`POST /api/billing/stripe/webhook/` -- a plain Django `View`, CSRF-exempt,
+outside DRF and the schema (nothing in `ui/` calls it; list it in the gate
+as the deliberate public route it is), so `request.body` reaches
+`stripe.Webhook.construct_event` as the raw bytes that were signed. The
+secret is read from settings inside the request, never at import, so a
+test can override it and 4c can add a second endpoint with its own. A bad
+signature is a 400, logged without the body. Then, in the request and in
+one transaction:
+
+1. Insert the `StripeEvent` on `(event_id, account)`; if it already exists,
+   answer 200 and stop -- Stripe is retrying, and the first delivery owns
+   it.
+2. Resolve `event.account` to the organization with that
+   `stripe_account_id`. None: status `IGNORED`, 200, stop. Never guessed at.
+3. A type with no handler: `IGNORED`, 200, stop. (Register only what is
+   handled; Stripe sends dozens of types.)
+4. `process_stripe_event.delay(organization_id, stripe_event.id)`; 200.
+
+Everything after the 200 happens in the task, so Stripe's 30-second
+timeout is never near. The task takes `organization_id` (invariant 3),
+loads the event scoped by it, dispatches on `type`, and writes
+`PROCESSED` or `FAILED` with the error text. A `FAILED` event is retried by
+Celery three times with backoff, then left `FAILED` for a person -- the
+admin list is the queue. Handlers, each idempotent because both ledgers
+are:
+
+| Event | Effect |
+|---|---|
+| `checkout.session.completed` (payment_status `paid`) | `record_payment(method=CARD, provider="stripe", provider_reference=payment_intent, amount=amount_total, received_on=organization.today(), reference=charge id)`, then `fee_cents` from the balance transaction. A second event for the same PaymentIntent hits the unique constraint and is a no-op. |
+| `charge.refunded` | Fully refunded: `void_payment(reason="Refunded in Stripe: {refund id}")`. Partially: void it and record a new payment for the net amount with `provider_reference="{pi}:{refund id}"` -- the ledger cannot shrink a row (ADR-025) and must not lie about the balance. |
+| `charge.dispute.created` | `disputed_at`, `dispute_status`. Nothing else: the money is held by Stripe, not gone. |
+| `charge.dispute.closed` | `dispute_status`; lost → `void_payment(reason="Dispute lost: {dispute id}")`. |
+| `account.updated` | `refresh_account`, which re-fetches the Account. Not from the event's object: Stripe does not promise order, and a stale `account.updated` applied last would switch charges off after they came on. |
+
+A `FAILED` event is re-run from the admin (a "replay" action that re-queues
+the task); the ledger row and its payload are what make replay possible,
+which is why the payload is stored in the request and never shipped over
+the broker. The task is handed ids only.
+
+**Overpayment by card is possible and is recorded as it happened.** The
+session charged the balance at creation; a check recorded in the thirty
+minutes after makes the card an overpayment. `record_payment`'s balance
+check is for people typing amounts. The provider path takes what Stripe
+says was paid, `balance_cents` already floors at zero, and the invoice
+gains `overpaid_cents` so the page can say "overpaid by $40 -- refund from
+your Stripe dashboard". Refusing the row would be a ledger that disagrees
+with the bank.
+
+Test the pipeline end to end with signed bytes: replayed event → one
+payment; unknown account → `IGNORED`, no payment, 200; bad signature →
+400, no ledger row; an event whose account belongs to organization B never
+touches organization A's invoice even when the metadata claims it (the
+organization comes from `account`, the invoice is then looked up *within*
+it, and a mismatch is `FAILED` with a clear error); each handler's effect;
+`FAILED` leaves the event for retry and the payment unwritten.
+
+#### 4b.4 — API and the email
+
+- `POST /api/billing/stripe/connect/` (owner) → `{url}` from
+  `start_onboarding`. `POST /api/billing/stripe/refresh/` (admin+) →
+  the organization's `stripe` block after `refresh_account`.
+- `GET /api/billing/pay/{token}/` (`AllowAny`, throttled as the magic-link
+  endpoints are) → `PublicInvoiceSerializer`: organization name, number,
+  issued/due dates, lines, subtotal, tax, total, paid, balance,
+  `payable_reason`. Nothing about the customer beyond the bill-to name.
+  `POST /api/billing/pay/{token}/checkout/` → `{url}`; 409 with the
+  reason when not payable.
+- `InvoiceSerializer` gains `pay_url` (staff copy it into a text message)
+  and `overpaid_cents`; `PaymentSerializer` gains `fee_cents`,
+  `disputed_at`, `dispute_status`. `available_actions` is unchanged: a
+  Stripe payment is voided by a refund event, not a button, so the void
+  action stays hidden for `provider != ""` -- the server owns that rule.
+- The invoice email gains a "Pay online" button when `payable(invoice)` is
+  `None`, linking to `FRONTEND_BASE_URL/pay/{token}`. Otherwise the email
+  is byte-for-byte 4a's.
+- Every new `@action` carries `@extend_schema`; regenerate the contract.
+
+#### 4b.5 — Frontend
+
+- **Billing settings** gains a "Card payments" card: not connected →
+  "Connect with Stripe" (owner only; others see who can); connected but
+  not charges-enabled → "Finish setting up with Stripe" (same call, new
+  link); enabled → "Connected", the application fee if non-zero, and a
+  link to `dashboard.stripe.com`. On return from Stripe (`?stripe=return`)
+  the page calls refresh once and shows the result. Owner-only is one more
+  place the role tiers are mirrored; add it to the coupling list.
+- **Invoice detail**: "Copy pay link"; the payments list marks a card
+  payment with its fee and a dispute chip; an overpaid invoice says so.
+- **`/pay/:token`** -- `PayInvoicePage.vue`, `access: 'public'`, no
+  session, no organization header. Shows the public serializer's summary
+  and one button, "Pay {balance} by card", which posts for a session and
+  sets `window.location`. Back with `?paid=1` it polls the GET every two
+  seconds for up to thirty, because the webhook races the redirect, and
+  then says "Payment received" or "Your payment is processing -- you will
+  get a receipt from Stripe". `?cancelled=1` just shows the invoice again.
+  Money through `src/lib/money.ts`; dates through `datetime.ts` -- but the
+  public page has no session, so the serializer sends the dates already
+  formatted in the organization's zone rather than the page guessing.
+- Vitest for the poll (stops on paid, stops at thirty seconds) and for the
+  settings card's three states.
+
+#### 4b.6 — Deploy, seed, docs, gate
+
+- `docs/DEPLOY.md` gains a Stripe section: create the platform account,
+  turn on Connect, register the webhook endpoint
+  (`https://<app>.fly.dev/api/billing/stripe/webhook/`, **"events on
+  connected accounts"**, the five types above), set the two secrets with
+  `fly secrets set`, and test with `4242 4242 4242 4242` against the
+  seeded overdue invoice. Staging and production are different Stripe
+  accounts (test mode and live mode of the same one is acceptable) with
+  different webhook secrets. Locally: `stripe listen
+  --forward-connect-to localhost:8000/api/billing/stripe/webhook/`.
+- `seed_demo` changes nothing: there is no Stripe account to seed, and a
+  fake `stripe_account_id` would make the settings page lie.
+- `CLAUDE.md`: `billing/connect.py` and `webhook.py` in the layout; the
+  owner-only tier in the coupling list; the `StripeEvent` exception under
+  invariant 1. Write "Phase 4b as built", run the gate, record it.
+
+**4b exit criteria:** on staging, a dispatcher issues and emails an invoice;
+the customer opens the email, pays with the test card, and within seconds
+the dispatcher's page shows it paid with the real Stripe fee beside the
+payment; a refund from the tenant's Stripe dashboard puts the balance back;
+and the other organization, which never connected Stripe, sees no button,
+no link, and no payment.
 
 ### 4c — Platform subscription (outline)
 
