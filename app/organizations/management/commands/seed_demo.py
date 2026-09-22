@@ -286,9 +286,12 @@ class Command(BaseCommand):
         something in it without anyone clicking Assign.
         """
         today = organization.today()
-        # A fortnight back, so the seeded board has recent history as well as a
-        # future. A calendar that starts empty behind today looks broken.
-        monday = today - dt.timedelta(days=today.weekday() + 14)
+        # Three weeks back, so the seeded board has recent history as well as a
+        # future. A calendar that starts empty behind today looks broken. Three
+        # and not two: `_billing` needs four finished visits on any day of the
+        # week, and a fortnight of a Tuesday plan and a fortnightly Thursday one
+        # is only sure of three until Tuesday evening has passed.
+        monday = today - dt.timedelta(days=today.weekday() + 21)
 
         specs = [
             {
