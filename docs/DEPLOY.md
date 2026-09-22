@@ -222,7 +222,9 @@ that must be undone is a new migration.
 ## Local rehearsal
 
 Runs the production image under production settings behind Caddy (TLS,
-one proxy deep), with MinIO standing in for the bucket.
+one proxy deep), with MinIO standing in for the bucket. Every command in
+this section runs from the **repository root**; the compose path is
+relative to it.
 
 ```bash
 docker build -t pink-glove:rehearsal .
@@ -237,15 +239,39 @@ Then:
 
 - `curl -k https://localhost/health/ready/` → both checks `ok`
 - `curl -kI https://localhost/schedule` → `200`, `cache-control: no-cache`
-- `curl -kI https://localhost/assets/<any file in ui/dist/assets>` →
-  `cache-control: max-age=315360000, public, immutable`
+- an asset, named from the *image*, not from a local `ui/dist` that may have
+  been built from a different tree (a name that is not in the image falls
+  through to the SPA page, `text/html` and `no-cache`, which looks like a
+  failure and is not one):
+
+  ```bash
+  ASSET=$(docker compose -f deploy/docker-compose.rehearsal.yml exec web sh -c 'ls /ui/dist/assets/*.js | head -1 | xargs basename')
+  curl -kI "https://localhost/assets/$ASSET"
+  # cache-control: max-age=315360000, public, immutable
+  ```
 - `curl -k https://localhost/api/no-such-thing/` → Django's 404, not the page
 - `curl -I http://localhost/` → `301` to https
-- open `https://localhost/`, accept Caddy's self-signed certificate, and
-  sign in as one of the seeded users. Mail is printed rather than sent here;
-  the sign-in code is sent from the request, so it is in the web log:
+- open `https://localhost/` and sign in as one of the seeded users. Mail is
+  printed rather than sent here; the sign-in code is sent from the request,
+  so it is in the web log:
   `docker compose -f deploy/docker-compose.rehearsal.yml logs web`
   (an emailed invoice, sent by Celery, shows up under `logs worker`).
+
+The certificate is signed by Caddy's own internal CA, so the browser will
+object. Chrome sometimes shows no "Proceed" link for `localhost`; typing
+`thisisunsafe` on the interstitial (no input box appears -- just type it)
+gets past it for the session. To stop the warning for good, trust that CA
+once in the login keychain, then quit and reopen the browser:
+
+```bash
+docker compose -f deploy/docker-compose.rehearsal.yml exec proxy \
+    cat /data/caddy/pki/authorities/local/root.crt > /tmp/caddy-root.crt
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db /tmp/caddy-root.crt
+```
+
+The CA lives in the `caddy_data` volume, so it survives `down` but is
+regenerated after `down -v`, and the trust has to be redone then. (Staging
+and production use real certificates from Fly and none of this applies.)
 
 The MinIO console is at `http://localhost:9001` (`rehearsal` /
 `rehearsal-secret`): uploaded photos appear in the `pink-glove-media` bucket
