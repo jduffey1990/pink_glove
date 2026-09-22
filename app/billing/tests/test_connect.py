@@ -60,6 +60,61 @@ class TestClient:
         assert params["payment_method_types"] == ["card"]
 
 
+class TestStripeRefusals:
+    """
+    Stripe's refusal is the one thing the person needs to read -- "complete
+    your platform profile" -- so it is a 503 with that sentence, never a 500
+    that hides it in a log they cannot see. Found on staging.
+    """
+
+    def refusal(self, message):
+        import stripe
+
+        return stripe.InvalidRequestError(message, None, code="platform_profile_incomplete")
+
+    def test_creating_the_account(self, api):
+        api.v1.accounts.create.side_effect = self.refusal("Please complete your platform profile.")
+        organization = OrganizationFactory()
+
+        with pytest.raises(ServiceUnavailableError) as raised:
+            connect.start_onboarding(organization)
+
+        assert "complete your platform profile" in raised.value.detail
+        organization.refresh_from_db()
+        assert organization.stripe_account_id == ""  # nothing was written
+
+    def test_opening_onboarding(self, api):
+        api.v1.account_links.create.side_effect = self.refusal("No such account.")
+
+        with pytest.raises(ServiceUnavailableError, match="No such account"):
+            connect.start_onboarding(OrganizationFactory(stripe_account_id=ACCOUNT_ID))
+
+    def test_reading_the_account(self, api, connected):
+        api.v1.accounts.retrieve.side_effect = self.refusal("No such account.")
+
+        with pytest.raises(ServiceUnavailableError, match="read the account"):
+            connect.refresh_account(connected)
+
+    def test_opening_checkout(self, api, connected):
+        api.v1.checkout.sessions.create.side_effect = self.refusal("Charges are not enabled.")
+
+        with pytest.raises(ServiceUnavailableError, match="Charges are not enabled"):
+            connect.create_checkout_session(IssuedInvoiceFactory(organization=connected))
+
+    def test_reaches_the_owner_as_a_503_with_the_sentence(
+        self, api, api_client, make_member, organization
+    ):
+        from users.enums import Role
+
+        api.v1.accounts.create.side_effect = self.refusal("Please complete your platform profile.")
+        api_client.force_login(make_member(organization, Role.OWNER))
+
+        response = api_client.post("/api/billing/stripe/connect/")
+
+        assert response.status_code == 503
+        assert "complete your platform profile" in response.data["detail"]
+
+
 class TestDisabled:
     def test_every_entry_point_is_a_503_without_a_key(self, settings):
         settings.STRIPE_ENABLED = False

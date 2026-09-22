@@ -16,6 +16,7 @@ Tests patch `client()` -- nothing below reaches the network.
 
 import datetime as dt
 import logging
+from contextlib import contextmanager
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.conf import settings
@@ -84,6 +85,26 @@ def _on(organization: Organization) -> dict:
     return {"stripe_account": organization.stripe_account_id}
 
 
+@contextmanager
+def stripe_errors(doing: str):
+    """
+    Turn a Stripe refusal into a readable 503 rather than a bare 500.
+
+    Stripe's message is the one thing the person needs: "complete your
+    platform profile", "this account cannot accept charges yet". A 500 hides
+    it in a log they cannot see. The exception class and message are logged
+    too; the body of the request is not.
+    """
+    import stripe
+
+    try:
+        yield
+    except stripe.StripeError as exc:
+        message = getattr(exc, "user_message", None) or str(exc)
+        logger.warning("Stripe refused %s: %s: %s", doing, type(exc).__name__, message)
+        raise ServiceUnavailableError(f"Stripe could not {doing}: {message}") from exc
+
+
 # ---------------------------------------------------------------------------
 # Onboarding
 # ---------------------------------------------------------------------------
@@ -110,25 +131,26 @@ def start_onboarding(organization: Organization, *, actor=None) -> str:
         raise ConflictError("Stripe is already connected and taking payments.")
 
     if not locked.stripe_account_id:
-        account = api.v1.accounts.create(
-            {
-                # The Standard account, spelled the way Stripe now asks for it:
-                # the tenant sees the full dashboard, pays Stripe's fees
-                # itself, and carries its own disputes and negative balance.
-                # Stripe collects the onboarding requirements. Every one of
-                # these is the choice ADR-024 made; Express would put the
-                # losses on the platform.
-                "controller": {
-                    "stripe_dashboard": {"type": "full"},
-                    "fees": {"payer": "account"},
-                    "losses": {"payments": "stripe"},
-                    "requirement_collection": "stripe",
-                },
-                "email": locked.email or None,
-                "business_profile": {"name": locked.name},
-                "metadata": {"organization_id": str(locked.pk)},
-            }
-        )
+        with stripe_errors("create the Stripe account"):
+            account = api.v1.accounts.create(
+                {
+                    # The Standard account, spelled the way Stripe now asks for it:
+                    # the tenant sees the full dashboard, pays Stripe's fees
+                    # itself, and carries its own disputes and negative balance.
+                    # Stripe collects the onboarding requirements. Every one of
+                    # these is the choice ADR-024 made; Express would put the
+                    # losses on the platform.
+                    "controller": {
+                        "stripe_dashboard": {"type": "full"},
+                        "fees": {"payer": "account"},
+                        "losses": {"payments": "stripe"},
+                        "requirement_collection": "stripe",
+                    },
+                    "email": locked.email or None,
+                    "business_profile": {"name": locked.name},
+                    "metadata": {"organization_id": str(locked.pk)},
+                }
+            )
         locked.stripe_account_id = account.id
         locked.save(update_fields=["stripe_account_id", "updated_at"])
         organization.stripe_account_id = account.id
@@ -139,14 +161,15 @@ def start_onboarding(organization: Organization, *, actor=None) -> str:
             getattr(actor, "pk", None),
         )
 
-    link = api.v1.account_links.create(
-        {
-            "account": locked.stripe_account_id,
-            "refresh_url": _settings_url("refresh"),
-            "return_url": _settings_url("return"),
-            "type": "account_onboarding",
-        }
-    )
+    with stripe_errors("open its onboarding"):
+        link = api.v1.account_links.create(
+            {
+                "account": locked.stripe_account_id,
+                "refresh_url": _settings_url("refresh"),
+                "return_url": _settings_url("return"),
+                "type": "account_onboarding",
+            }
+        )
     return link.url
 
 
@@ -162,7 +185,8 @@ def refresh_account(organization: Organization) -> Organization:
     if not organization.stripe_account_id:
         return organization
 
-    account = client().v1.accounts.retrieve(organization.stripe_account_id)
+    with stripe_errors("read the account"):
+        account = client().v1.accounts.retrieve(organization.stripe_account_id)
 
     organization.stripe_charges_enabled = bool(account.charges_enabled)
     organization.stripe_details_submitted = bool(account.details_submitted)
@@ -307,7 +331,8 @@ def create_checkout_session(invoice: Invoice) -> str:
     if invoice.bill_to_email:
         params["customer_email"] = invoice.bill_to_email
 
-    session = client().v1.checkout.sessions.create(params, options=_on(organization))
+    with stripe_errors("open a payment page"):
+        session = client().v1.checkout.sessions.create(params, options=_on(organization))
     return session.url
 
 
