@@ -674,6 +674,25 @@ def overpaid_cents(invoice: Invoice) -> int:
     return max(paid_cents(invoice) - invoice.total_cents, 0)
 
 
+def can_void_by_hand(payment: Payment) -> bool:
+    """
+    Whether a person may void this payment from the API.
+
+    A provider's payment is reversed by a refund at the provider, which
+    arrives as an event and voids the row here; voiding it by hand would
+    say the money went back when it did not. Published as `can_void`.
+    """
+    return not payment.is_void and not payment.provider
+
+
+def assert_voidable_by_hand(payment: Payment) -> None:
+    if payment.provider:
+        raise ConflictError(
+            f"A {payment.provider} payment is reversed by a refund from your {payment.provider} "
+            "dashboard, which is recorded here automatically."
+        )
+
+
 @transaction.atomic
 def void_payment(payment: Payment, *, actor=None, reason: str) -> Payment:
     """
@@ -770,11 +789,16 @@ def invoice_email_context(invoice: Invoice) -> dict:
     in the email is what the invoice says (ADR-026). The balance is the one
     live number, because payments arrive after the invoice goes out.
     """
+    # Lazy: `connect` imports this module.
+    from billing import connect
+
     balance = balance_cents(invoice)
 
     return {
         "organization": invoice.organization,
         "invoice": invoice,
+        # The pay-by-card button, only when the server would honour it.
+        "pay_url": connect.pay_url(invoice) if connect.payable(invoice) is None else "",
         "lines": [
             {"description": line.description, "amount": format_cents(line.amount_cents)}
             for line in invoice.lines.all()

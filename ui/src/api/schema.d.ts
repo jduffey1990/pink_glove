@@ -376,6 +376,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/billing/pay/{token}/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The invoice, as its customer sees it */
+        get: operations["billing_pay_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/pay/{token}/checkout/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open a Stripe Checkout session for the balance */
+        post: operations["billing_pay_checkout_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/billing/payments/": {
         parameters: {
             query?: never;
@@ -436,6 +470,49 @@ export interface paths {
          *     (ADR-025).
          */
         post: operations["billing_payments_void_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/stripe/connect/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start or resume Stripe onboarding
+         * @description Begin, or resume, connecting the organization's Stripe account.
+         *
+         *     Owner only: connecting binds the business to Stripe's terms, which an
+         *     admin does not sign. The browser is sent to the returned URL.
+         */
+        post: operations["billing_stripe_connect_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/stripe/refresh/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh the organization's Stripe status
+         * @description Re-read the account from Stripe; the settings page calls it on return.
+         */
+        post: operations["billing_stripe_refresh_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1586,8 +1663,10 @@ export interface components {
             readonly payments: components["schemas"]["Payment"][];
             readonly payment_state: components["schemas"]["PaymentStateEnum"];
             readonly balance_cents: number;
+            readonly overpaid_cents: number;
             readonly is_overdue: boolean;
             readonly available_actions: components["schemas"]["AvailableActionsEnum"][];
+            readonly pay_url: string | null;
             /** Format: date-time */
             readonly sent_at: string | null;
             readonly created_by_name: string;
@@ -2500,7 +2579,13 @@ export interface components {
             readonly provider: string;
             /** @default  */
             readonly provider_reference: string;
+            readonly fee_cents: number | null;
+            /** Format: date-time */
+            readonly disputed_at: string | null;
+            /** @description Stripe's word: needs_response, won, lost. */
+            readonly dispute_status: string;
             readonly is_void: boolean;
+            readonly can_void: boolean;
             /** Format: date-time */
             readonly voided_at: string | null;
             readonly void_reason: string;
@@ -2542,6 +2627,40 @@ export interface components {
          * @enum {string}
          */
         PricingModelEnum: "flat" | "hourly" | "per_sqft";
+        /**
+         * @description The invoice as its customer sees it on the pay page (Phase 4b).
+         *
+         *     Reached by a signed token, not a session, so it says what the invoice
+         *     email said and nothing more: no customer record, no address book, no
+         *     ids of anything else. `payable_reason` is the server's own sentence for
+         *     why the button is absent (ADR-023).
+         */
+        PublicInvoice: {
+            organization_name: string;
+            number: string;
+            status: string;
+            /** Format: date */
+            issued_on: string | null;
+            /** Format: date */
+            due_on: string | null;
+            bill_to_name: string;
+            lines: components["schemas"]["PublicInvoiceLine"][];
+            subtotal_cents: number;
+            /** Format: decimal */
+            tax_rate_percent: string;
+            tax_cents: number;
+            total_cents: number;
+            paid_cents: number;
+            balance_cents: number;
+            payment_state: components["schemas"]["PaymentStateEnum"];
+            notes: string;
+            footer: string;
+            payable_reason: string | null;
+        };
+        PublicInvoiceLine: {
+            description: string;
+            amount_cents: number;
+        };
         /** @description Inputs for `POST /api/catalog/services/{id}/quote/`. */
         QuoteRequest: {
             square_feet?: number;
@@ -2936,6 +3055,11 @@ export interface components {
             readonly duration_minutes: number | null;
             /** Format: date-time */
             readonly created_at: string;
+        };
+        /** @description Somewhere to send the browser: Stripe onboarding, or Checkout. */
+        Url: {
+            /** Format: uri */
+            url: string;
         };
         VerifyRequest: {
             code: string;
@@ -3634,6 +3758,80 @@ export interface operations {
             };
         };
     };
+    billing_pay_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicInvoice"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_pay_checkout_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Url"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
     billing_payments_list: {
         parameters: {
             query?: {
@@ -3771,6 +3969,68 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_stripe_connect_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Url"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_stripe_refresh_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StripeStatus"];
+                };
+            };
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

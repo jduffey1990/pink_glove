@@ -16,15 +16,18 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.generics import get_object_or_404
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
-from base.permissions import IsDispatcherOrHigher
+from base.permissions import IsAdminOrHigher, IsDispatcherOrHigher, IsOwner
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
-from billing import services
+from billing import connect, services
 from billing.enums import LineKind
 from billing.filters import InvoiceFilterSet, PaymentFilterSet
 from billing.models import Invoice, InvoiceLine, Payment
@@ -34,10 +37,13 @@ from billing.serializers import (
     InvoiceLineSerializer,
     InvoiceSerializer,
     PaymentSerializer,
+    PublicInvoiceSerializer,
     ReasonSerializer,
     RecordPaymentSerializer,
+    UrlSerializer,
 )
 from customers.models import Customer
+from organizations.serializers import OrganizationSerializer, StripeStatusSerializer
 
 
 class InvoiceViewSet(TenantViewSetMixin, ModelViewSet):
@@ -319,7 +325,99 @@ class PaymentViewSet(TenantViewSetMixin, ModelViewSet):
         body = ReasonSerializer(data=request.data)
         body.is_valid(raise_exception=True)
 
+        payment = self.get_object()
+        # A card payment is reversed by a refund in Stripe, which arrives as
+        # an event; voiding it here would say the money went back when it
+        # did not (Phase 4b).
+        services.assert_voidable_by_hand(payment)
         payment = services.void_payment(
-            self.get_object(), actor=request.user, reason=body.validated_data["reason"]
+            payment, actor=request.user, reason=body.validated_data["reason"]
         )
         return Response(PaymentSerializer(payment, context=self.get_serializer_context()).data)
+
+
+# ---------------------------------------------------------------------------
+# Stripe Connect (Phase 4b, ADR-024)
+# ---------------------------------------------------------------------------
+
+
+class StripeConnectView(APIView):
+    """
+    Begin, or resume, connecting the organization's Stripe account.
+
+    Owner only: connecting binds the business to Stripe's terms, which an
+    admin does not sign. The browser is sent to the returned URL.
+    """
+
+    permission_classes = [IsOwner]
+
+    @extend_schema(
+        request=None,
+        responses={200: UrlSerializer, 409: DetailSerializer, 503: DetailSerializer},
+        summary="Start or resume Stripe onboarding",
+    )
+    def post(self, request):
+        url = connect.start_onboarding(request.organization, actor=request.user)
+        return Response({"url": url})
+
+
+class StripeRefreshView(APIView):
+    """Re-read the account from Stripe; the settings page calls it on return."""
+
+    permission_classes = [IsAdminOrHigher]
+
+    @extend_schema(
+        request=None,
+        responses={200: StripeStatusSerializer, 503: DetailSerializer},
+        summary="Refresh the organization's Stripe status",
+    )
+    def post(self, request):
+        organization = connect.refresh_account(request.organization)
+        return Response(OrganizationSerializer(organization).data["stripe"])
+
+
+# ---------------------------------------------------------------------------
+# The pay page (public, by signed token)
+# ---------------------------------------------------------------------------
+# Deliberately AllowAny: the customer has no account (that is Phase 5). The
+# token in the invoice email is the credential, and both views are throttled.
+
+
+def _invoice_from(token: str) -> Invoice:
+    invoice = connect.invoice_from_pay_token(token)
+    if invoice is None:
+        raise NotFound("That link is not valid, or has expired.")
+    return invoice
+
+
+class PayInvoiceView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "pay_page"
+
+    @extend_schema(
+        responses={200: PublicInvoiceSerializer, 404: DetailSerializer},
+        summary="The invoice, as its customer sees it",
+    )
+    def get(self, request, token: str):
+        return Response(PublicInvoiceSerializer.from_invoice(_invoice_from(token)).data)
+
+
+class PayInvoiceCheckoutView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "pay_checkout"
+
+    @extend_schema(
+        request=None,
+        responses={
+            200: UrlSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+            503: DetailSerializer,
+        },
+        summary="Open a Stripe Checkout session for the balance",
+    )
+    def post(self, request, token: str):
+        url = connect.create_checkout_session(_invoice_from(token))
+        return Response({"url": url})

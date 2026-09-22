@@ -13,7 +13,7 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from base.viewsets import TenantModelSerializer
-from billing import services
+from billing import connect, services
 from billing.enums import LineKind, PaymentMethod, PaymentState
 from billing.models import Invoice, InvoiceLine, Payment
 from customers.serializers import CustomerSummarySerializer
@@ -95,6 +95,9 @@ class PaymentSerializer(TenantModelSerializer):
 
     recorded_by_name = serializers.CharField(source="recorded_by.full_name", read_only=True)
     is_void = serializers.BooleanField(read_only=True)
+    #: Server-owned: a card payment is reversed by a refund in Stripe, which
+    #: arrives as an event, so the void button is never offered for one.
+    can_void = serializers.SerializerMethodField()
 
     class Meta(TenantModelSerializer.Meta):
         model = Payment
@@ -111,7 +114,11 @@ class PaymentSerializer(TenantModelSerializer):
             "recorded_by_name",
             "provider",
             "provider_reference",
+            "fee_cents",
+            "disputed_at",
+            "dispute_status",
             "is_void",
+            "can_void",
             "voided_at",
             "void_reason",
             "created_at",
@@ -123,12 +130,19 @@ class PaymentSerializer(TenantModelSerializer):
             "recorded_by_name",
             "provider",
             "provider_reference",
+            "fee_cents",
+            "disputed_at",
+            "dispute_status",
             "is_void",
+            "can_void",
             "voided_at",
             "void_reason",
             "created_at",
         )
         extra_kwargs = {"tip_cents": {"required": False}}
+
+    def get_can_void(self, obj) -> bool:
+        return services.can_void_by_hand(obj)
 
 
 class InvoiceSerializer(TenantModelSerializer):
@@ -153,8 +167,13 @@ class InvoiceSerializer(TenantModelSerializer):
 
     payment_state = serializers.SerializerMethodField()
     balance_cents = serializers.SerializerMethodField()
+    overpaid_cents = serializers.SerializerMethodField()
     is_overdue = serializers.SerializerMethodField()
     available_actions = serializers.SerializerMethodField()
+    #: The customer's pay-by-card link, when there is one to give (Phase 4b):
+    #: Stripe enabled, the organization taking cards, the invoice open with a
+    #: balance. Null otherwise -- the server decides, not the page.
+    pay_url = serializers.SerializerMethodField()
 
     class Meta(TenantModelSerializer.Meta):
         model = Invoice
@@ -179,8 +198,10 @@ class InvoiceSerializer(TenantModelSerializer):
             "payments",
             "payment_state",
             "balance_cents",
+            "overpaid_cents",
             "is_overdue",
             "available_actions",
+            "pay_url",
             "sent_at",
             "created_by_name",
             "issued_by_name",
@@ -223,8 +244,14 @@ class InvoiceSerializer(TenantModelSerializer):
     def get_balance_cents(self, obj) -> int:
         return services.balance_cents(obj)
 
+    def get_overpaid_cents(self, obj) -> int:
+        return services.overpaid_cents(obj)
+
     def get_is_overdue(self, obj) -> bool:
         return services.is_overdue(obj)
+
+    def get_pay_url(self, obj) -> str | None:
+        return connect.pay_url(obj) if connect.payable(obj) is None else None
 
     @extend_schema_field(
         serializers.ListField(
@@ -264,6 +291,74 @@ class RecordPaymentSerializer(serializers.Serializer):
     tip_cents = serializers.IntegerField(min_value=0, required=False, default=0)
     received_on = serializers.DateField()
     reference = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+
+
+class UrlSerializer(serializers.Serializer):
+    """Somewhere to send the browser: Stripe onboarding, or Checkout."""
+
+    url = serializers.URLField()
+
+
+class PublicInvoiceLineSerializer(serializers.Serializer):
+    description = serializers.CharField()
+    amount_cents = serializers.IntegerField()
+
+
+class PublicInvoiceSerializer(serializers.Serializer):
+    """
+    The invoice as its customer sees it on the pay page (Phase 4b).
+
+    Reached by a signed token, not a session, so it says what the invoice
+    email said and nothing more: no customer record, no address book, no
+    ids of anything else. `payable_reason` is the server's own sentence for
+    why the button is absent (ADR-023).
+    """
+
+    organization_name = serializers.CharField()
+    number = serializers.CharField()
+    status = serializers.CharField()
+    issued_on = serializers.DateField(allow_null=True)
+    due_on = serializers.DateField(allow_null=True)
+    bill_to_name = serializers.CharField(allow_blank=True)
+    lines = PublicInvoiceLineSerializer(many=True)
+    subtotal_cents = serializers.IntegerField()
+    tax_rate_percent = serializers.DecimalField(max_digits=6, decimal_places=3)
+    tax_cents = serializers.IntegerField()
+    total_cents = serializers.IntegerField()
+    paid_cents = serializers.IntegerField()
+    balance_cents = serializers.IntegerField()
+    payment_state = serializers.ChoiceField(choices=PaymentState.choices)
+    notes = serializers.CharField(allow_blank=True)
+    footer = serializers.CharField(allow_blank=True)
+    payable_reason = serializers.CharField(allow_null=True)
+
+    @classmethod
+    def from_invoice(cls, invoice: Invoice) -> "PublicInvoiceSerializer":
+        organization = invoice.organization
+        return cls(
+            {
+                "organization_name": organization.name,
+                "number": invoice.number,
+                "status": invoice.status,
+                "issued_on": invoice.issued_on,
+                "due_on": invoice.due_on,
+                "bill_to_name": invoice.bill_to_name,
+                "lines": [
+                    {"description": line.description, "amount_cents": line.amount_cents}
+                    for line in invoice.lines.all()
+                ],
+                "subtotal_cents": invoice.subtotal_cents,
+                "tax_rate_percent": invoice.tax_rate_percent,
+                "tax_cents": invoice.tax_cents,
+                "total_cents": invoice.total_cents,
+                "paid_cents": services.paid_cents(invoice),
+                "balance_cents": services.balance_cents(invoice),
+                "payment_state": services.payment_state(invoice),
+                "notes": invoice.notes,
+                "footer": organization.invoice_footer,
+                "payable_reason": connect.payable(invoice),
+            }
+        )
 
 
 class BillableJobSerializer(serializers.Serializer):

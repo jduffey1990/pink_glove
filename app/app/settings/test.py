@@ -54,5 +54,7 @@ REST_FRAMEWORK = {  # noqa: F405
         "two_factor_verify": "10000/hour",
         "magic_link": "10000/hour",
         "login_account": "10000/hour",
+        "pay_page": "10000/hour",
+        "pay_checkout": "10000/hour",
     },
 }

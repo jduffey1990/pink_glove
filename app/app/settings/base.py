@@ -190,6 +190,11 @@ REST_FRAMEWORK = {
         # buckets above do nothing against a guesser who rotates addresses.
         # Looser than they are because it also counts the owner's own typos.
         "login_account": "20/hour",
+        # Phase 4b: the public pay page, reached by a signed token. The page
+        # polls for half a minute after a payment, so the read rate has room;
+        # opening Checkout sessions does not.
+        "pay_page": "120/hour",
+        "pay_checkout": "10/hour",
     },
     # How many proxies sit in front of the app, which is how DRF decides which
     # entry of X-Forwarded-For to believe. Left unset, DRF keys throttles on the

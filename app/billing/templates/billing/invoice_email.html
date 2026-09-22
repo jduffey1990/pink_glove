@@ -44,6 +44,15 @@
     <p>This invoice is paid in full. Thank you.</p>
   {% else %}
     <p>Payment is due by <strong>{{ invoice.due_on|date:"j F Y" }}</strong>.</p>
+    {% if pay_url %}
+      <p style="margin: 24px 0;">
+        <a href="{{ pay_url }}"
+           style="background: #333; color: #fff; padding: 12px 20px; border-radius: 6px;
+                  text-decoration: none; font-weight: 600; display: inline-block;">
+          Pay online
+        </a>
+      </p>
+    {% endif %}
   {% endif %}
 
   {% if invoice.notes %}<p>{{ invoice.notes|linebreaksbr }}</p>{% endif %}

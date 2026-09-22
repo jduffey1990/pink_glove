@@ -891,6 +891,74 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaginatedBillableJobList'
           description: ''
+  /api/billing/pay/{token}/:
+    get:
+      operationId: billing_pay_retrieve
+      summary: The invoice, as its customer sees it
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicInvoice'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/pay/{token}/checkout/:
+    post:
+      operationId: billing_pay_checkout_create
+      summary: Open a Stripe Checkout session for the balance
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Url'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
   /api/billing/payments/:
     get:
       operationId: billing_payments_list
@@ -1079,6 +1147,61 @@ paths:
                 $ref: '#/components/schemas/Detail'
           description: ''
         '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/stripe/connect/:
+    post:
+      operationId: billing_stripe_connect_create
+      description: |-
+        Begin, or resume, connecting the organization's Stripe account.
+
+        Owner only: connecting binds the business to Stripe's terms, which an
+        admin does not sign. The browser is sent to the returned URL.
+      summary: Start or resume Stripe onboarding
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Url'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/stripe/refresh/:
+    post:
+      operationId: billing_stripe_refresh_create
+      description: Re-read the account from Stripe; the settings page calls it on
+        return.
+      summary: Refresh the organization's Stripe status
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StripeStatus'
+          description: ''
+        '503':
           content:
             application/json:
               schema:
@@ -3866,6 +3989,9 @@ components:
         balance_cents:
           type: integer
           readOnly: true
+        overpaid_cents:
+          type: integer
+          readOnly: true
         is_overdue:
           type: boolean
           readOnly: true
@@ -3873,6 +3999,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AvailableActionsEnum'
+          readOnly: true
+        pay_url:
+          type: string
+          nullable: true
           readOnly: true
         sent_at:
           type: string
@@ -3919,6 +4049,8 @@ components:
       - lines
       - number
       - organization
+      - overpaid_cents
+      - pay_url
       - payment_state
       - payments
       - sent_at
@@ -5615,7 +5747,23 @@ components:
           type: string
           readOnly: true
           default: ''
+        fee_cents:
+          type: integer
+          readOnly: true
+          nullable: true
+        disputed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        dispute_status:
+          type: string
+          readOnly: true
+          description: 'Stripe''s word: needs_response, won, lost.'
         is_void:
+          type: boolean
+          readOnly: true
+        can_void:
           type: boolean
           readOnly: true
         voided_at:
@@ -5632,7 +5780,11 @@ components:
           readOnly: true
       required:
       - amount_cents
+      - can_void
       - created_at
+      - dispute_status
+      - disputed_at
+      - fee_cents
       - id
       - invoice
       - is_void
@@ -5703,6 +5855,87 @@ components:
         * `flat` - Flat rate
         * `hourly` - Hourly
         * `per_sqft` - Per square foot
+    PublicInvoice:
+      type: object
+      description: |-
+        The invoice as its customer sees it on the pay page (Phase 4b).
+
+        Reached by a signed token, not a session, so it says what the invoice
+        email said and nothing more: no customer record, no address book, no
+        ids of anything else. `payable_reason` is the server's own sentence for
+        why the button is absent (ADR-023).
+      properties:
+        organization_name:
+          type: string
+        number:
+          type: string
+        status:
+          type: string
+        issued_on:
+          type: string
+          format: date
+          nullable: true
+        due_on:
+          type: string
+          format: date
+          nullable: true
+        bill_to_name:
+          type: string
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicInvoiceLine'
+        subtotal_cents:
+          type: integer
+        tax_rate_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,3})?$
+        tax_cents:
+          type: integer
+        total_cents:
+          type: integer
+        paid_cents:
+          type: integer
+        balance_cents:
+          type: integer
+        payment_state:
+          $ref: '#/components/schemas/PaymentStateEnum'
+        notes:
+          type: string
+        footer:
+          type: string
+        payable_reason:
+          type: string
+          nullable: true
+      required:
+      - balance_cents
+      - bill_to_name
+      - due_on
+      - footer
+      - issued_on
+      - lines
+      - notes
+      - number
+      - organization_name
+      - paid_cents
+      - payable_reason
+      - payment_state
+      - status
+      - subtotal_cents
+      - tax_cents
+      - tax_rate_percent
+      - total_cents
+    PublicInvoiceLine:
+      type: object
+      properties:
+        description:
+          type: string
+        amount_cents:
+          type: integer
+      required:
+      - amount_cents
+      - description
     QuoteRequest:
       type: object
       description: Inputs for `POST /api/catalog/services/{id}/quote/`.
@@ -6489,6 +6722,15 @@ components:
       - job
       - user
       - user_name
+    Url:
+      type: object
+      description: 'Somewhere to send the browser: Stripe onboarding, or Checkout.'
+      properties:
+        url:
+          type: string
+          format: uri
+      required:
+      - url
     VerifyRequest:
       type: object
       properties:
