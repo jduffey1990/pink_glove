@@ -153,14 +153,16 @@ class TestNestedSummaries:
         self, cleaner_client, assigned_job, location
     ):
         """Codes come only from the audited reveal action (ADR-016)."""
-        location.gate_code = "1234"
-        location.alarm_code = "9999"
+        # Letters outside a-f: a plain "1234" turns up by chance inside the
+        # UUIDs and timestamps of any payload, and the test went red on that.
+        location.gate_code = "GATE-ZQ71"
+        location.alarm_code = "ALARM-XK93"
         location.save()
 
         body = cleaner_client.get(detail(assigned_job)).content.decode()
 
-        assert "1234" not in body
-        assert "9999" not in body
+        assert "GATE-ZQ71" not in body
+        assert "ALARM-XK93" not in body
 
     def test_open_time_entry_is_the_callers_own(
         self, cleaner_client, dispatcher_client, assigned_job
