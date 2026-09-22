@@ -251,7 +251,7 @@ class InvoiceSerializer(TenantModelSerializer):
         return services.is_overdue(obj)
 
     def get_pay_url(self, obj) -> str | None:
-        return connect.pay_url(obj) if connect.payable(obj) is None else None
+        return connect.pay_url_if_payable(obj)
 
     @extend_schema_field(
         serializers.ListField(

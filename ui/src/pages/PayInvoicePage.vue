@@ -161,9 +161,7 @@
             </tbody>
           </v-table>
 
-          <p v-if="paid" class="mt-4">This invoice is paid in full. Thank you.</p>
-
-          <p v-else-if="invoice.due_on" class="mt-4">
+          <p v-if="!paid && invoice.due_on" class="mt-4">
             Payment is due by <strong>{{ formatDayLabel(invoice.due_on) }}</strong>.
           </p>
 
@@ -175,7 +173,9 @@
         </template>
       </v-card-text>
 
-      <v-card-actions v-if="invoice && !paid">
+      <!-- The button, or the server's own sentence for why there is none
+           (including "This invoice is paid."). Never local copy (ADR-023). -->
+      <v-card-actions v-if="invoice">
         <v-spacer />
 
         <v-btn

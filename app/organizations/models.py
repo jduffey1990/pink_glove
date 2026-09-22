@@ -10,7 +10,7 @@ from django.utils.text import slugify
 
 from base.models import Base
 from base.validators import MaxFileSize
-from organizations.enums import NoAccessFeeType
+from organizations.enums import NoAccessFeeType, StripeState
 
 #: ISO weekday numbers, the convention `datetime.isoweekday()` returns.
 MONDAY, SUNDAY = 1, 7
@@ -180,6 +180,14 @@ class Organization(Base):
     @property
     def stripe_connected(self) -> bool:
         return bool(self.stripe_account_id)
+
+    @property
+    def stripe_state(self) -> str:
+        if self.stripe_charges_enabled:
+            return StripeState.ENABLED
+        if self.stripe_account_id:
+            return StripeState.PENDING
+        return StripeState.NOT_CONNECTED
 
     def __str__(self):
         return self.name

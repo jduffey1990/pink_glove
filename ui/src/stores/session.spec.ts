@@ -253,11 +253,11 @@ describe('signing out', () => {
 
 describe('role helpers', () => {
   it.each([
-    ['owner', { staff: true, dispatcher: true, cleaner: false, customer: false }],
-    ['admin', { staff: true, dispatcher: true, cleaner: false, customer: false }],
-    ['dispatcher', { staff: true, dispatcher: true, cleaner: false, customer: false }],
-    ['cleaner', { staff: true, dispatcher: false, cleaner: true, customer: false }],
-    ['customer', { staff: false, dispatcher: false, cleaner: false, customer: true }],
+    ['owner', { staff: true, dispatcher: true, owner: true, cleaner: false, customer: false }],
+    ['admin', { staff: true, dispatcher: true, owner: false, cleaner: false, customer: false }],
+    ['dispatcher', { staff: true, dispatcher: true, owner: false, cleaner: false, customer: false }],
+    ['cleaner', { staff: true, dispatcher: false, owner: false, cleaner: true, customer: false }],
+    ['customer', { staff: false, dispatcher: false, owner: false, cleaner: false, customer: true }],
   ])('%s', async (role, expected) => {
     mock.onGet('/api/users/session/').reply(200, session({ current_role: role }))
     const store = useSessionStore()
@@ -266,6 +266,7 @@ describe('role helpers', () => {
 
     expect(store.isStaff).toBe(expected.staff)
     expect(store.isDispatcherOrHigher).toBe(expected.dispatcher)
+    expect(store.isOwner).toBe(expected.owner)
     expect(store.isCleaner).toBe(expected.cleaner)
     expect(store.isCustomer).toBe(expected.customer)
   })

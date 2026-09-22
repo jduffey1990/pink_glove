@@ -44,6 +44,8 @@ REST_FRAMEWORK = {
         "two_factor_verify": "1000/hour",
         "magic_link": "1000/hour",
         "login_account": "1000/hour",
+        "pay_page": "1000/hour",
+        "pay_checkout": "1000/hour",
     },
 }
 

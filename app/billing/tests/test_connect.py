@@ -18,28 +18,19 @@ from app.exceptions import ConflictError, ServiceUnavailableError
 from billing import connect
 from billing.enums import InvoiceStatus
 from billing.tests.factories import InvoiceFactory, IssuedInvoiceFactory, PaymentFactory
+from billing.tests.stripe_fixtures import ACCOUNT_ID
 from scheduling.tests.factories import OrganizationFactory
 
-pytestmark = pytest.mark.django_db
-
-ACCOUNT = "acct_1TestConnectedAcct"
-
-
-@pytest.fixture(autouse=True)
-def stripe_on(settings):
-    settings.STRIPE_ENABLED = True
-    settings.STRIPE_SECRET_KEY = "sk_test_x"
-    settings.STRIPE_APPLICATION_FEE_PERCENT = Decimal("0")
-    settings.FRONTEND_BASE_URL = "https://app.example.test"
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("stripe_on")]
 
 
 @pytest.fixture
 def api():
     """A fake StripeClient whose calls the tests inspect."""
     fake = mock.MagicMock(name="StripeClient")
-    fake.v1.accounts.create.return_value = SimpleNamespace(id=ACCOUNT)
+    fake.v1.accounts.create.return_value = SimpleNamespace(id=ACCOUNT_ID)
     fake.v1.accounts.retrieve.return_value = SimpleNamespace(
-        id=ACCOUNT, charges_enabled=False, details_submitted=False
+        id=ACCOUNT_ID, charges_enabled=False, details_submitted=False
     )
     fake.v1.account_links.create.return_value = SimpleNamespace(
         url="https://connect.stripe.com/setup/x"
@@ -51,9 +42,22 @@ def api():
         yield fake
 
 
-@pytest.fixture
-def connected():
-    return OrganizationFactory(stripe_account_id=ACCOUNT, stripe_charges_enabled=True)
+class TestClient:
+    def test_is_the_sdk_client_on_the_pinned_version(self, settings):
+        """Never patched anywhere else, so this is the one place the real thing is built."""
+        import stripe
+
+        api = connect.client()
+
+        assert isinstance(api, stripe.StripeClient)
+        assert api._requestor._options.stripe_version == settings.STRIPE_API_VERSION
+
+    def test_pins_cards_only(self, api, connected):
+        """A bank debit settles days later through an event that is not handled."""
+        connect.create_checkout_session(IssuedInvoiceFactory(organization=connected))
+
+        params = api.v1.checkout.sessions.create.call_args.args[0]
+        assert params["payment_method_types"] == ["card"]
 
 
 class TestDisabled:
@@ -83,7 +87,7 @@ class TestStartOnboarding:
         assert api.v1.accounts.create.call_count == 1
         assert api.v1.account_links.create.call_count == 2
         organization.refresh_from_db()
-        assert organization.stripe_account_id == ACCOUNT
+        assert organization.stripe_account_id == ACCOUNT_ID
 
     def test_the_account_is_a_standard_one_on_the_tenants_own_terms(self, api):
         connect.start_onboarding(OrganizationFactory(name="Sparkle Clean", email="o@s.test"))
@@ -99,7 +103,7 @@ class TestStartOnboarding:
         connect.start_onboarding(OrganizationFactory())
 
         params = api.v1.account_links.create.call_args.args[0]
-        assert params["account"] == ACCOUNT
+        assert params["account"] == ACCOUNT_ID
         assert params["type"] == "account_onboarding"
         assert params["return_url"] == "https://app.example.test/billing/settings?stripe=return"
         assert params["refresh_url"] == "https://app.example.test/billing/settings?stripe=refresh"
@@ -114,7 +118,7 @@ class TestStartOnboarding:
 
 class TestRefreshAccount:
     def test_copies_the_flags_and_stamps_connected_at_once(self, api):
-        organization = OrganizationFactory(stripe_account_id=ACCOUNT)
+        organization = OrganizationFactory(stripe_account_id=ACCOUNT_ID)
         api.v1.accounts.retrieve.return_value = SimpleNamespace(
             charges_enabled=True, details_submitted=True
         )
@@ -191,7 +195,7 @@ class TestPayable:
         assert connect.payable(IssuedInvoiceFactory(organization=connected)) is None
 
     def test_an_organization_not_taking_cards(self):
-        organization = OrganizationFactory(name="Rival Cleaners", stripe_account_id=ACCOUNT)
+        organization = OrganizationFactory(name="Rival Cleaners", stripe_account_id=ACCOUNT_ID)
 
         reason = connect.payable(IssuedInvoiceFactory(organization=organization))
 
@@ -221,7 +225,7 @@ class TestCheckoutSession:
         assert url == "https://checkout.stripe.com/c/pay/x"
         (params,) = api.v1.checkout.sessions.create.call_args.args
         options = api.v1.checkout.sessions.create.call_args.kwargs["options"]
-        assert options == {"stripe_account": ACCOUNT}
+        assert options == {"stripe_account": ACCOUNT_ID}
         assert params["mode"] == "payment"
         line = params["line_items"][0]["price_data"]
         assert line["unit_amount"] == 15000
@@ -286,7 +290,7 @@ class TestFee:
 
         assert connect.fee_cents_for("pi_1", organization=connected) == 317
         options = api.v1.payment_intents.retrieve.call_args.kwargs["options"]
-        assert options == {"stripe_account": ACCOUNT}
+        assert options == {"stripe_account": ACCOUNT_ID}
 
     def test_is_none_until_stripe_has_settled_it(self, api, connected):
         api.v1.payment_intents.retrieve.return_value = SimpleNamespace(latest_charge=None)

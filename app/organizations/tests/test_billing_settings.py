@@ -123,11 +123,24 @@ class TestApi:
         response = api_client.get("/api/organizations/current/")
 
         assert response.data["stripe"] == {
+            "state": "not_connected",
             "connected": False,
             "charges_enabled": False,
             "details_submitted": False,
             "connected_at": None,
         }
+
+    def test_the_stripe_state_is_the_servers_word(self, api_client, organization, make_member):
+        """The settings card switches on `state`; it never re-derives it (ADR-023)."""
+        api_client.force_login(make_member(organization, Role.DISPATCHER))
+
+        organization.stripe_account_id = "acct_x"
+        organization.save()
+        assert api_client.get("/api/organizations/current/").data["stripe"]["state"] == "pending"
+
+        organization.stripe_charges_enabled = True
+        organization.save()
+        assert api_client.get("/api/organizations/current/").data["stripe"]["state"] == "enabled"
 
     def test_the_stripe_block_cannot_be_written(self, api_client, organization, make_member):
         """

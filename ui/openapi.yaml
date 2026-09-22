@@ -6637,6 +6637,16 @@ components:
       - last_name
       - memberships
       - phone
+    StateEnum:
+      enum:
+      - not_connected
+      - pending
+      - enabled
+      type: string
+      description: |-
+        * `not_connected` - Not connected
+        * `pending` - Pending with Stripe
+        * `enabled` - Taking card payments
     StatusChangeRequest:
       type: object
       properties:
@@ -6653,29 +6663,29 @@ components:
         The organization's Stripe Connect state, as one thing to look at.
 
         Read-only by construction: the fields it reads are written only by
-        `billing.connect` and the webhook. `connected` is "there is an account";
-        `charges_enabled` is "Stripe will take a card" -- the pay link waits for
-        the second.
+        `billing.connect` and the webhook. `state` is the server's one-word
+        answer the settings page switches on (ADR-023); the flags are there for
+        the copy. `connected` is "there is an account"; `charges_enabled` is
+        "Stripe will take a card" -- the pay link waits for the second.
       properties:
+        state:
+          $ref: '#/components/schemas/StateEnum'
         connected:
           type: boolean
-          readOnly: true
         charges_enabled:
           type: boolean
-          readOnly: true
         details_submitted:
           type: boolean
-          readOnly: true
         connected_at:
           type: string
           format: date-time
-          readOnly: true
           nullable: true
       required:
       - charges_enabled
       - connected
       - connected_at
       - details_submitted
+      - state
     TimeEntry:
       type: object
       description: |-

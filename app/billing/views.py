@@ -43,7 +43,11 @@ from billing.serializers import (
     UrlSerializer,
 )
 from customers.models import Customer
-from organizations.serializers import OrganizationSerializer, StripeStatusSerializer
+
+# One-way, and narrow: the Stripe block describes Organization state that
+# `billing.connect` writes. The Connect views stay here so `organizations`
+# never imports `billing` (CLAUDE.md, dependency direction).
+from organizations.serializers import StripeStatusSerializer
 
 
 class InvoiceViewSet(TenantViewSetMixin, ModelViewSet):
@@ -373,7 +377,7 @@ class StripeRefreshView(APIView):
     )
     def post(self, request):
         organization = connect.refresh_account(request.organization)
-        return Response(OrganizationSerializer(organization).data["stripe"])
+        return Response(StripeStatusSerializer(organization).data)
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +408,10 @@ class PayInvoiceView(APIView):
 
 
 class PayInvoiceCheckoutView(APIView):
+    # An anonymous POST needs no CSRF token (there is no session to ride).
+    # A signed-in staff member opening the page still has one, and DRF's
+    # SessionAuthentication then requires the token the SPA already sends --
+    # a missing cookie reads as a 403 here, not as a broken pay page.
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "pay_checkout"

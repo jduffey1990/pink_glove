@@ -32,6 +32,7 @@ from collections.abc import Callable
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
@@ -52,6 +53,7 @@ from organizations.models import Organization
 logger = logging.getLogger(__name__)
 
 PROVIDER = "stripe"
+NO_HANDLER = "No handler for this event type."
 
 
 class HandlerError(Exception):
@@ -81,7 +83,7 @@ def receive(event: dict) -> StripeEvent | None:
     if organization is None:
         status, error = StripeEventStatus.IGNORED, f"No organization owns account {account!r}."
     elif not handled:
-        status, error = StripeEventStatus.IGNORED, "No handler for this event type."
+        status, error = StripeEventStatus.IGNORED, NO_HANDLER
     else:
         status, error = StripeEventStatus.RECEIVED, ""
 
@@ -132,7 +134,15 @@ class StripeWebhookView(View):
 
         # The bytes that were signed, as sent -- not the SDK's object model,
         # so the ledger holds exactly what Stripe delivered.
-        receive(json.loads(request.body))
+        event = json.loads(request.body)
+        if not isinstance(event.get("id"), str) or not isinstance(event.get("type"), str):
+            # Signed, but not an event. A 400 rather than a 500: Stripe would
+            # retry a 500 for days, and cannot usefully retry a body it could
+            # not form.
+            logger.warning("Stripe webhook rejected: no event id or type")
+            return HttpResponse(status=400)
+
+        receive(event)
         return HttpResponse(status=200)
 
 
@@ -160,7 +170,7 @@ def process(organization_id: str, stripe_event_id: str) -> str:
 
     handler = HANDLERS.get(row.type)
     if handler is None:
-        _finish(row, StripeEventStatus.IGNORED, "No handler for this event type.")
+        _finish(row, StripeEventStatus.IGNORED, NO_HANDLER)
         return row.status
 
     try:
@@ -190,14 +200,18 @@ def _stripe_payments_for(organization: Organization, payment_intent: str):
     The live rows this PaymentIntent has produced: the original, or the
     replacement a partial refund wrote (`pi_x:refunded-N`).
     """
-    from django.db.models import Q
-
     return Payment.objects.filter(
         organization=organization, provider=PROVIDER, voided_at__isnull=True
     ).filter(
         Q(provider_reference=payment_intent)
         | Q(provider_reference__startswith=f"{payment_intent}:")
     )
+
+
+def _refunded_in(provider_reference: str) -> int:
+    """The cumulative refund a replacement reference records; 0 for an original."""
+    _, sep, tail = provider_reference.partition(":refunded-")
+    return int(tail) if sep and tail.isdigit() else 0
 
 
 # --- checkout.session.completed ---------------------------------------------
@@ -268,10 +282,16 @@ def charge_refunded(row: StripeEvent) -> None:
     replacement = f"{intent}:refunded-{refunded}"
 
     live = list(_stripe_payments_for(organization, intent))
-    if any(p.provider_reference == replacement for p in live):
-        return  # this refund was already applied
     if not live:
         return  # nothing of ours to reverse
+
+    # Stripe does not promise order. The cumulative amount already applied
+    # is in the live replacement's reference; an event that refunds no more
+    # than that is a replay or a straggler, and applying it would put money
+    # back on the invoice that has already left.
+    applied = max((_refunded_in(p.provider_reference) for p in live), default=0)
+    if refunded <= applied:
+        return
 
     reason = f"Refunded in Stripe: {format_cents(refunded)} of {format_cents(charge['amount'])}"
     for payment in live:

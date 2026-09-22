@@ -3014,6 +3014,13 @@ export interface components {
             readonly current_organization: components["schemas"]["OrganizationSummary"] | null;
             readonly current_role: (components["schemas"]["RoleEnum"] | components["schemas"]["NullEnum"]) | null;
         };
+        /**
+         * @description * `not_connected` - Not connected
+         *     * `pending` - Pending with Stripe
+         *     * `enabled` - Taking card payments
+         * @enum {string}
+         */
+        StateEnum: "not_connected" | "pending" | "enabled";
         StatusChangeRequest: {
             status: components["schemas"]["JobStatusEnum"];
             /** @default  */
@@ -3023,16 +3030,18 @@ export interface components {
          * @description The organization's Stripe Connect state, as one thing to look at.
          *
          *     Read-only by construction: the fields it reads are written only by
-         *     `billing.connect` and the webhook. `connected` is "there is an account";
-         *     `charges_enabled` is "Stripe will take a card" -- the pay link waits for
-         *     the second.
+         *     `billing.connect` and the webhook. `state` is the server's one-word
+         *     answer the settings page switches on (ADR-023); the flags are there for
+         *     the copy. `connected` is "there is an account"; `charges_enabled` is
+         *     "Stripe will take a card" -- the pay link waits for the second.
          */
         StripeStatus: {
-            readonly connected: boolean;
-            readonly charges_enabled: boolean;
-            readonly details_submitted: boolean;
+            state: components["schemas"]["StateEnum"];
+            connected: boolean;
+            charges_enabled: boolean;
+            details_submitted: boolean;
             /** Format: date-time */
-            readonly connected_at: string | null;
+            connected_at: string | null;
         };
         /**
          * @description Base serializer for tenant-owned models.

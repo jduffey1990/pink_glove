@@ -38,6 +38,11 @@ CURRENCY = "usd"
 
 #: The pay link lives in an email. Terms are 14 to 30 days and a slow payer
 #: is the customer the link is for, so it outlives the terms by a wide margin.
+#: Signed with SECRET_KEY: rotating that key (docs/DEPLOY.md) invalidates
+#: every outstanding link, the same trade as sessions, unless the old key is
+#: kept in SECRET_KEY_FALLBACKS for a while. There is no per-link revocation;
+#: a link to the wrong address is answered by voiding the invoice, which the
+#: page then shows as not open for payment.
 PAY_TOKEN_MAX_AGE = dt.timedelta(days=120)
 PAY_TOKEN_SALT = "billing.pay"
 
@@ -208,6 +213,14 @@ def pay_url(invoice: Invoice) -> str:
     return f"{settings.FRONTEND_BASE_URL}/pay/{pay_token(invoice)}"
 
 
+def pay_url_if_payable(invoice: Invoice) -> str | None:
+    """
+    The link to hand out, or None when the server would refuse it. The one
+    rule behind both the API's `pay_url` and the email's button.
+    """
+    return pay_url(invoice) if payable(invoice) is None else None
+
+
 def payable(invoice: Invoice) -> str | None:
     """
     Why this invoice cannot be paid by card right now, or None if it can.
@@ -268,6 +281,12 @@ def create_checkout_session(invoice: Invoice) -> str:
 
     params: dict = {
         "mode": "payment",
+        # Cards only, whatever the tenant has switched on in their own
+        # dashboard. A bank debit completes the session `unpaid` and settles
+        # days later through `checkout.session.async_payment_succeeded`,
+        # which is not handled: the ledger would never hear the money moved.
+        # Handle that event before widening this list.
+        "payment_method_types": ["card"],
         "line_items": [
             {
                 "quantity": 1,

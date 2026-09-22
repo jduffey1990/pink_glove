@@ -4,6 +4,7 @@ import { stripeCard } from './stripeCard'
 
 function status (overrides: Partial<StripeStatus> = {}): StripeStatus {
   return {
+    state: 'not_connected',
     connected: false,
     charges_enabled: false,
     details_submitted: false,
@@ -27,14 +28,17 @@ describe('stripeCard', () => {
   })
 
   it('offers to finish an unfinished setup', () => {
-    const card = stripeCard(status({ connected: true }), true)
+    const card = stripeCard(status({ state: 'pending', connected: true }), true)
     expect(card.state).toBe('pending')
     expect(card.action).toBe('finish')
     expect(card.title).toBe('Setup not finished')
   })
 
   it('waits on Stripe once the details are in, with nothing to press', () => {
-    const card = stripeCard(status({ connected: true, details_submitted: true }), true)
+    const card = stripeCard(
+      status({ state: 'pending', connected: true, details_submitted: true }),
+      true,
+    )
     expect(card.state).toBe('pending')
     expect(card.action).toBeNull()
     expect(card.title).toContain('reviewing')
@@ -43,12 +47,18 @@ describe('stripeCard', () => {
   it('is connected once charges are enabled, whoever is looking', () => {
     for (const isOwner of [true, false]) {
       const card = stripeCard(
-        status({ connected: true, details_submitted: true, charges_enabled: true }),
+        status({ state: 'enabled', connected: true, details_submitted: true, charges_enabled: true }),
         isOwner,
       )
       expect(card.state).toBe('enabled')
       expect(card.action).toBeNull()
       expect(card.dashboardUrl).toMatch(/^https:\/\/dashboard\.stripe\.com/)
     }
+  })
+
+  it('takes the state from the server, not from the flags', () => {
+    // The server says enabled; the flags disagree. The server wins (ADR-023).
+    const card = stripeCard(status({ state: 'enabled' }), true)
+    expect(card.state).toBe('enabled')
   })
 })

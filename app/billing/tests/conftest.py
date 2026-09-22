@@ -11,10 +11,13 @@ several visits on different days, which a fixture cannot give them.
 """
 
 import datetime as dt
+from decimal import Decimal
 
 import pytest
 from django.utils import timezone
 
+from billing.tests.stripe_fixtures import ACCOUNT_ID as STRIPE_ACCOUNT_ID
+from billing.tests.stripe_fixtures import WEBHOOK_SECRET
 from scheduling.enums import JobStatus
 from scheduling.tests.factories import (
     CustomerFactory,
@@ -25,6 +28,31 @@ from scheduling.tests.factories import (
     UserFactory,
 )
 from users.enums import Role
+
+# --- Stripe Connect (Phase 4b) -----------------------------------------------
+# Not autouse: only the Stripe modules opt in, with
+# `pytest.mark.usefixtures("stripe_on")`, so the 4a tests still run the
+# product as it is without a key.
+
+
+@pytest.fixture
+def stripe_on(settings):
+    """Stripe enabled on the server, with no network behind it."""
+    settings.STRIPE_ENABLED = True
+    settings.STRIPE_SECRET_KEY = "sk_test_x"
+    settings.STRIPE_CONNECT_WEBHOOK_SECRET = WEBHOOK_SECRET
+    settings.STRIPE_APPLICATION_FEE_PERCENT = Decimal("0")
+    settings.FRONTEND_BASE_URL = "https://app.example.test"
+
+
+@pytest.fixture
+def connected(organization):
+    """The root organization, connected to Stripe and taking cards."""
+    organization.stripe_account_id = STRIPE_ACCOUNT_ID
+    organization.stripe_charges_enabled = True
+    organization.stripe_details_submitted = True
+    organization.save()
+    return organization
 
 
 @pytest.fixture

@@ -13,3 +13,16 @@ class NoAccessFeeType(TextChoices):
     NONE = "none", "No charge"
     FLAT = "flat", "Flat amount"
     PERCENT = "percent", "Percentage of the visit price"
+
+
+class StripeState(TextChoices):
+    """
+    Where the organization is with Stripe Connect (Phase 4b), as one word
+    the settings page switches on rather than re-deriving from the flags
+    (ADR-023).
+    """
+
+    NOT_CONNECTED = "not_connected", "Not connected"
+    #: An account exists; Stripe has not yet enabled charges on it.
+    PENDING = "pending", "Pending with Stripe"
+    ENABLED = "enabled", "Taking card payments"

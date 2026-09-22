@@ -6,7 +6,6 @@ payment serializers say about Stripe.
 line, the token, and the server-owned fields are what is under test.
 """
 
-from decimal import Decimal
 from unittest import mock
 
 import pytest
@@ -16,30 +15,11 @@ from app.exceptions import ConflictError
 from billing import connect, services
 from billing.tests.conftest import completed_job
 from billing.tests.factories import IssuedInvoiceFactory, PaymentFactory
+from billing.tests.stripe_fixtures import ACCOUNT_ID
 from scheduling.tests.factories import OrganizationFactory
 from users.enums import Role
 
-pytestmark = pytest.mark.django_db
-
-ACCOUNT = "acct_1TestConnectedAcct"
-
-
-@pytest.fixture(autouse=True)
-def stripe_on(settings):
-    settings.STRIPE_ENABLED = True
-    settings.STRIPE_SECRET_KEY = "sk_test_x"
-    settings.STRIPE_CONNECT_WEBHOOK_SECRET = "whsec_x"
-    settings.STRIPE_APPLICATION_FEE_PERCENT = Decimal("0")
-    settings.FRONTEND_BASE_URL = "https://app.example.test"
-
-
-@pytest.fixture
-def connected(organization):
-    organization.stripe_account_id = ACCOUNT
-    organization.stripe_charges_enabled = True
-    organization.stripe_details_submitted = True
-    organization.save()
-    return organization
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("stripe_on")]
 
 
 def as_role(api_client, make_member, organization, role):
@@ -109,11 +89,26 @@ class TestRefresh:
         assert response.data["charges_enabled"] is True
         refresh.assert_called_once_with(connected)
 
+    def test_the_owner_can_too(self, api_client, make_member, connected):
+        client = as_role(api_client, make_member, connected, Role.OWNER)
+
+        with mock.patch.object(connect, "refresh_account", side_effect=lambda o: o):
+            assert client.post(self.URL).status_code == 200
+
     @pytest.mark.parametrize("role", [Role.DISPATCHER, Role.CLEANER, Role.CUSTOMER])
     def test_below_admin_is_refused(self, api_client, make_member, organization, role):
         client = as_role(api_client, make_member, organization, role)
 
         assert client.post(self.URL).status_code == 403
+
+    def test_anonymous_is_refused(self, api_client):
+        assert api_client.post(self.URL).status_code in (401, 403)
+
+    def test_is_a_503_without_stripe(self, api_client, make_member, connected, settings):
+        settings.STRIPE_ENABLED = False
+        client = as_role(api_client, make_member, connected, Role.ADMIN)
+
+        assert client.post(self.URL).status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -174,17 +169,37 @@ class TestPayPage:
         assert api_client.get("/api/billing/pay/not-a-token/").status_code == 404
 
     def test_a_token_for_a_deleted_invoice_is_a_404(self, api_client, connected):
+        """
+        Soft-deleted: the default manager must hide it, and the token must not
+        see past. (An issued invoice refuses `.delete()`, so the row is
+        stamped directly -- the question is what the token does, not how.)
+        """
+        from django.utils import timezone
+
+        from billing.models import Invoice
+
         invoice = IssuedInvoiceFactory(organization=connected)
         token = connect.pay_token(invoice)
-        invoice.hard_delete()
+        Invoice.all_objects.filter(pk=invoice.pk).update(deleted_at=timezone.now())
 
         assert api_client.get(f"/api/billing/pay/{token}/").status_code == 404
 
-    def test_is_throttled(self):
+    def test_both_endpoints_are_throttled_with_a_rate_that_resolves(self):
+        """
+        The scope alone proves nothing: with `throttle_classes` removed the
+        attribute would still be there, and a scope with no rate in the
+        running settings raises on the first request (which is how the pay
+        page came to 500 under `settings.local`).
+        """
+        from rest_framework.throttling import ScopedRateThrottle
+
         from billing.views import PayInvoiceCheckoutView, PayInvoiceView
 
-        assert PayInvoiceView.throttle_scope == "pay_page"
-        assert PayInvoiceCheckoutView.throttle_scope == "pay_checkout"
+        for view in (PayInvoiceView, PayInvoiceCheckoutView):
+            assert ScopedRateThrottle in view.throttle_classes
+            throttle = ScopedRateThrottle()
+            throttle.scope = view.throttle_scope
+            assert throttle.get_rate()  # ImproperlyConfigured if the scope has no rate
 
 
 class TestCheckout:
@@ -297,6 +312,13 @@ class TestPaymentFields:
         assert body["can_void"] is True
         assert body["fee_cents"] is None
 
+    def test_but_not_twice(self, api_client, make_member, organization):
+        client = as_role(api_client, make_member, organization, Role.DISPATCHER)
+        payment = PaymentFactory(organization=organization)
+        services.void_payment(payment, reason="bounced")
+
+        assert client.get(f"/api/billing/payments/{payment.pk}/").data["can_void"] is False
+
     def test_voiding_a_card_payment_is_a_409(self, api_client, make_member, connected, card):
         client = as_role(api_client, make_member, connected, Role.DISPATCHER)
 
@@ -326,7 +348,7 @@ class TestEmailPayButton:
         return services.issue_invoice(services.draft_invoice(customer=customer, jobs=[job]))
 
     def test_carries_the_pay_link_when_the_organization_takes_cards(self, issued, org):
-        org.stripe_account_id = ACCOUNT
+        org.stripe_account_id = ACCOUNT_ID
         org.stripe_charges_enabled = True
         org.save()
         issued.refresh_from_db()
@@ -344,7 +366,7 @@ class TestEmailPayButton:
 
     def test_has_no_button_without_stripe_on_the_server(self, issued, org, settings):
         settings.STRIPE_ENABLED = False
-        org.stripe_account_id = ACCOUNT
+        org.stripe_account_id = ACCOUNT_ID
         org.stripe_charges_enabled = True
         org.save()
 

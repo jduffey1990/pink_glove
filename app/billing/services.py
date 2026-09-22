@@ -798,7 +798,7 @@ def invoice_email_context(invoice: Invoice) -> dict:
         "organization": invoice.organization,
         "invoice": invoice,
         # The pay-by-card button, only when the server would honour it.
-        "pay_url": connect.pay_url(invoice) if connect.payable(invoice) is None else "",
+        "pay_url": connect.pay_url_if_payable(invoice),
         "lines": [
             {"description": line.description, "amount": format_cents(line.amount_cents)}
             for line in invoice.lines.all()

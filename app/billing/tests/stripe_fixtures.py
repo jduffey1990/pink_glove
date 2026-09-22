@@ -16,6 +16,8 @@ import hmac
 import json
 import time
 
+from django.conf import settings
+
 #: The signing secret tests hand to the webhook. Not a real one.
 WEBHOOK_SECRET = "whsec_test_not_a_real_secret"
 
@@ -55,7 +57,7 @@ def event(
     envelope = {
         "id": event_id,
         "object": "event",
-        "api_version": "2026-08-26.dahlia",
+        "api_version": settings.STRIPE_API_VERSION,
         "created": int(time.time()) if created is None else created,
         "livemode": False,
         "type": type_,

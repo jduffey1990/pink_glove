@@ -7,7 +7,6 @@ processing side through `webhook.process` with the task's own arguments.
 tests chose, and `billing.connect` is patched where it would call out.
 """
 
-from decimal import Decimal
 from unittest import mock
 
 import pytest
@@ -17,20 +16,12 @@ from billing.enums import PaymentMethod, StripeEventStatus
 from billing.models import Payment, StripeEvent
 from billing.services import balance_cents, overpaid_cents, payment_state
 from billing.tests.factories import IssuedInvoiceFactory, PaymentFactory, StripeEventFactory
-from billing.tests.stripe_fixtures import ACCOUNT_ID, WEBHOOK_SECRET, event, signed
+from billing.tests.stripe_fixtures import ACCOUNT_ID, event, signed
 from scheduling.tests.factories import OrganizationFactory
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("stripe_on")]
 
 URL = "/api/billing/stripe/webhook/"
-
-
-@pytest.fixture(autouse=True)
-def stripe_on(settings):
-    settings.STRIPE_ENABLED = True
-    settings.STRIPE_SECRET_KEY = "sk_test_x"
-    settings.STRIPE_CONNECT_WEBHOOK_SECRET = WEBHOOK_SECRET
-    settings.STRIPE_APPLICATION_FEE_PERCENT = Decimal("0")
 
 
 @pytest.fixture
@@ -43,11 +34,6 @@ def enqueue():
 def no_fee():
     with mock.patch.object(connect, "fee_cents_for", return_value=None) as fee:
         yield fee
-
-
-@pytest.fixture
-def connected():
-    return OrganizationFactory(stripe_account_id=ACCOUNT_ID, stripe_charges_enabled=True)
 
 
 def post(client, body: bytes, header: str):
@@ -127,6 +113,29 @@ class TestTheEndpoint:
 
     def test_only_post(self, client):
         assert client.get(URL).status_code == 405
+
+    def test_a_signed_body_that_is_not_an_event_is_a_400_and_no_row(self, client, enqueue):
+        """Not a 500: Stripe would retry that for days, and cannot fix the body."""
+        for broken in ({"id": "evt_x"}, {"type": "account.updated"}, {"id": 5, "type": "x"}):
+            body, header = signed(broken)
+
+            assert post(client, body, header).status_code == 400
+
+        assert not StripeEvent.objects.exists()
+        enqueue.assert_not_called()
+
+    def test_a_platform_event_is_ledgered_ignored_with_no_organization(
+        self, client, enqueue, connected
+    ):
+        """No `account`: Phase 4c's endpoint, not this one. Kept, not applied."""
+        body, header = signed(event("invoice.paid", {"id": "in_1"}, account=None))
+
+        assert post(client, body, header).status_code == 200
+        row = StripeEvent.objects.get()
+        assert row.account == ""
+        assert row.status == StripeEventStatus.IGNORED
+        assert row.organization is None
+        enqueue.assert_not_called()
 
     def test_a_handled_event_for_a_known_account_is_ledgered_and_enqueued(
         self, client, enqueue, connected
@@ -242,6 +251,39 @@ class TestProcess:
         assert process_stripe_event.autoretry_for == (Exception,)
         assert process_stripe_event.retry_kwargs == {"max_retries": 3}
         assert process_stripe_event.retry_backoff is True
+
+    def test_the_task_itself_runs_the_event(self, connected, no_fee):
+        """Through Celery's own call path, not `process` directly."""
+        from billing.tasks import process_stripe_event
+
+        invoice = IssuedInvoiceFactory(organization=connected)
+        row = ledgered(invoice, session(invoice))
+
+        result = process_stripe_event.apply(args=[str(connected.pk), str(row.pk)])
+
+        assert result.successful()
+        assert result.get() == StripeEventStatus.PROCESSED
+        assert Payment.objects.count() == 1
+
+    def test_a_failure_after_the_payment_is_written_rolls_it_back(self, connected):
+        """
+        The handler and the PROCESSED mark share a transaction. The fee read
+        comes after the payment row, so a failure there is the case that
+        proves the rollback: no payment survives, the row is FAILED.
+        """
+        invoice = IssuedInvoiceFactory(organization=connected)
+        row = ledgered(invoice, session(invoice))
+
+        with (
+            mock.patch.object(connect, "fee_cents_for", side_effect=RuntimeError("stripe down")),
+            pytest.raises(RuntimeError),
+        ):
+            webhook.process(str(connected.pk), str(row.pk))
+
+        row.refresh_from_db()
+        assert row.status == StripeEventStatus.FAILED
+        assert "RuntimeError" in row.error
+        assert not Payment.objects.exists()
 
 
 class TestCheckoutSessionCompleted:
@@ -392,6 +434,41 @@ class TestChargeRefunded:
         assert webhook.process(str(connected.pk), str(row.pk)) == StripeEventStatus.PROCESSED
         assert not Payment.objects.exists()
 
+    def test_refunds_arriving_out_of_order_never_put_money_back(self, connected, paid):
+        """
+        Stripe does not promise order. Two partial refunds, the later one
+        delivered first: the ledger must end at the larger cumulative refund
+        and stay there when the earlier, smaller one arrives.
+        """
+        later = ledgered(paid, self.charge(refunded=12000), "charge.refunded", event_id="e2")
+        earlier = ledgered(paid, self.charge(refunded=5000), "charge.refunded", event_id="e1")
+
+        webhook.process(str(connected.pk), str(later.pk))
+        assert balance_cents(paid) == 12000
+
+        webhook.process(str(connected.pk), str(earlier.pk))
+
+        assert balance_cents(paid) == 12000
+        assert not Payment.objects.filter(provider_reference="pi_r:refunded-5000").exists()
+        assert not Payment.objects.get(provider_reference="pi_r:refunded-12000").is_void
+
+    def test_a_refund_on_another_tenants_account_touches_nothing_here(
+        self, connected, paid, no_fee
+    ):
+        """Org B's account reports a refund of a PaymentIntent that paid org A's invoice."""
+        rival = OrganizationFactory(stripe_account_id="acct_rival", stripe_charges_enabled=True)
+        row = StripeEventFactory(
+            organization=rival,
+            account="acct_rival",
+            type="charge.refunded",
+            payload=event("charge.refunded", self.charge(refunded=20000), account="acct_rival"),
+        )
+
+        webhook.process(str(rival.pk), str(row.pk))
+
+        assert not Payment.objects.get(provider_reference="pi_r").is_void
+        assert balance_cents(paid) == 0
+
 
 class TestDisputes:
     @pytest.fixture
@@ -437,6 +514,22 @@ class TestDisputes:
         assert payment.is_void
         assert payment.void_reason == "Dispute lost: dp_1"
         assert balance_cents(paid) == 20000
+
+    def test_a_dispute_on_another_tenants_account_touches_nothing_here(self, connected, paid):
+        rival = OrganizationFactory(stripe_account_id="acct_rival", stripe_charges_enabled=True)
+        row = StripeEventFactory(
+            organization=rival,
+            account="acct_rival",
+            type="charge.dispute.closed",
+            payload=event("charge.dispute.closed", self.dispute("lost"), account="acct_rival"),
+        )
+
+        webhook.process(str(rival.pk), str(row.pk))
+
+        payment = Payment.objects.get()
+        assert not payment.is_void
+        assert payment.dispute_status == ""
+        assert balance_cents(paid) == 0
 
 
 class TestAccountUpdated:
