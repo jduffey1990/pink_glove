@@ -66,3 +66,24 @@ def send_invoice_email(organization_id: str, invoice_id: str) -> bool:
     invoice.sent_at = timezone.now()
     invoice.save(update_fields=["sent_at", "updated_at"])
     return True
+
+
+@shared_task(
+    name="billing.process_stripe_event",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
+def process_stripe_event(self, organization_id: str, stripe_event_id: str) -> str:
+    """
+    Apply one ledgered Stripe event (Phase 4b, `billing.webhook`).
+
+    Handed ids only: the payload lives in the ledger row, which is what makes
+    a FAILED event replayable. A failure is marked on the row, then retried
+    three times with backoff, then left FAILED for a person -- the admin
+    list is the queue.
+    """
+    from billing.webhook import process
+
+    return process(organization_id, stripe_event_id)

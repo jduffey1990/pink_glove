@@ -26,7 +26,7 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from app.exceptions import ConflictError
-from billing.enums import InvoiceStatus, LineKind, PaymentState
+from billing.enums import InvoiceStatus, LineKind, PaymentMethod, PaymentState
 from billing.models import Invoice, InvoiceLine, InvoiceSequence, Payment
 from catalog.enums import PricingModel
 from organizations.enums import NoAccessFeeType
@@ -600,6 +600,78 @@ def record_payment(
         provider=provider,
         provider_reference=provider_reference,
     )
+
+
+@transaction.atomic
+def record_provider_payment(
+    invoice: Invoice,
+    *,
+    provider: str,
+    provider_reference: str,
+    amount_cents: int,
+    received_on: dt.date,
+    reference: str = "",
+    fee_cents: int | None = None,
+    method: str = PaymentMethod.CARD,
+) -> Payment:
+    """
+    Write a payment a provider's webhook reports (Phase 4b).
+
+    Differs from `record_payment` in two ways, both because the money has
+    already moved and the ledger's job is to agree with the bank:
+
+    * **No balance check.** The card was charged the balance at the moment
+      the session was created; a check recorded in the thirty minutes after
+      makes the card an overpayment. Refusing the row would be a ledger that
+      disagrees with the bank; `overpaid_cents` tells the page instead.
+    * **Idempotent on the provider's reference.** Stripe retries, and two
+      event types can describe one PaymentIntent. The existing row -- live
+      or void -- is returned, so a replay writes nothing.
+
+    A draft cannot have had a pay link, so the invoice is issued or void. A
+    payment against a void invoice is recorded and logged: it happened, and
+    a refund from the dashboard is how it is put right.
+    """
+    if invoice.status == InvoiceStatus.DRAFT:
+        raise ConflictError("A draft invoice cannot take a payment.", {"status": invoice.status})
+    if amount_cents <= 0:
+        raise ValidationError({"amount_cents": "A payment has to be for more than nothing."})
+
+    existing = Payment.all_objects.filter(
+        provider=provider, provider_reference=provider_reference
+    ).first()
+    if existing is not None:
+        return existing
+
+    if invoice.status == InvoiceStatus.VOID:
+        logger.warning(
+            "Provider payment %s recorded against void invoice %s", provider_reference, invoice.pk
+        )
+
+    return Payment.objects.create(
+        organization=invoice.organization,
+        invoice=invoice,
+        method=method,
+        amount_cents=amount_cents,
+        received_on=received_on,
+        reference=reference,
+        recorded_by=None,
+        provider=provider,
+        provider_reference=provider_reference,
+        fee_cents=fee_cents,
+    )
+
+
+def overpaid_cents(invoice: Invoice) -> int:
+    """
+    How much the live payments exceed the total, if they do.
+
+    Only a provider can bring this about (`record_payment` refuses it), so
+    a non-zero answer means "refund from your Stripe dashboard".
+    """
+    if invoice.status != InvoiceStatus.ISSUED:
+        return 0
+    return max(paid_cents(invoice) - invoice.total_cents, 0)
 
 
 @transaction.atomic

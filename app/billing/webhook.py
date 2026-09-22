@@ -1,0 +1,331 @@
+"""
+The Connect webhook: what Stripe tells us about a tenant's account.
+
+The shape is *verify, ledger, resolve, enqueue, 200* -- everything that can
+fail for a business reason happens in a worker, so Stripe's thirty-second
+clock is never near and a handler bug never turns into a retry storm at the
+edge. In the request, and in one transaction:
+
+1. The event is written to `StripeEvent` on (event id, account). If it is
+   already there, Stripe is retrying and the first delivery owns it: 200.
+2. `event.account` is resolved to the organization with that
+   `stripe_account_id` -- before anything is enqueued, so the task takes
+   `organization_id` like every other (invariant 3). No owner: the event is
+   ledgered IGNORED and dropped, never guessed at (ADR-024).
+3. A type with no handler is IGNORED too. Only what is handled is registered.
+4. The task is handed ids only. The payload stays in the ledger row, which is
+   what makes a FAILED event replayable without asking Stripe to resend.
+
+The view is a plain Django view, outside DRF and the schema: nothing in
+`ui/` calls it, and `request.body` has to reach `construct_event` as the
+bytes Stripe signed. The secret is read per request, never at import, so a
+test can override it and Phase 4c can add the platform endpoint with its own.
+
+Handlers are idempotent because both ledgers are: the event row refuses a
+second delivery, and `Payment`'s unique (provider, provider_reference) refuses
+a second row for one PaymentIntent.
+"""
+
+import json
+import logging
+from collections.abc import Callable
+
+from django.conf import settings
+from django.db import IntegrityError, transaction
+from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
+
+from billing import connect
+from billing.enums import StripeEventStatus
+from billing.models import Invoice, Payment, StripeEvent
+from billing.services import (
+    format_cents,
+    overpaid_cents,
+    record_provider_payment,
+    void_payment,
+)
+from organizations.models import Organization
+
+logger = logging.getLogger(__name__)
+
+PROVIDER = "stripe"
+
+
+class HandlerError(Exception):
+    """The event is well-formed but cannot be applied. The row goes FAILED."""
+
+
+# ---------------------------------------------------------------------------
+# Receiving
+# ---------------------------------------------------------------------------
+
+
+def receive(event: dict) -> StripeEvent | None:
+    """
+    Ledger one verified event and, if anything is to be done, enqueue it.
+
+    Returns the ledger row, or None when this delivery was a retry of one
+    already ledgered. Never raises for a business reason: an event nobody
+    owns or nobody handles is a 200 with an IGNORED row, because a non-200
+    would only make Stripe send it again.
+    """
+    account = event.get("account") or ""
+    organization = (
+        Organization.objects.filter(stripe_account_id=account).first() if account else None
+    )
+    handled = event["type"] in HANDLERS
+
+    if organization is None:
+        status, error = StripeEventStatus.IGNORED, f"No organization owns account {account!r}."
+    elif not handled:
+        status, error = StripeEventStatus.IGNORED, "No handler for this event type."
+    else:
+        status, error = StripeEventStatus.RECEIVED, ""
+
+    try:
+        with transaction.atomic():
+            row = StripeEvent.objects.create(
+                event_id=event["id"],
+                account=account,
+                type=event["type"],
+                organization=organization,
+                payload=event,
+                status=status,
+                error=error,
+            )
+    except IntegrityError:
+        logger.info("Stripe event %s for %s delivered again; ignored", event["id"], account)
+        return None
+
+    if status == StripeEventStatus.RECEIVED:
+        from billing.tasks import process_stripe_event
+
+        process_stripe_event.delay(str(organization.pk), str(row.pk))
+    else:
+        logger.info("Stripe event %s (%s) ignored: %s", event["id"], event["type"], error)
+    return row
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class StripeWebhookView(View):
+    http_method_names = ["post"]
+
+    def post(self, request: HttpRequest) -> HttpResponse:
+        secret = settings.STRIPE_CONNECT_WEBHOOK_SECRET
+        if not settings.STRIPE_ENABLED or not secret:
+            return JsonResponse({"detail": connect.NOT_ENABLED}, status=503)
+
+        import stripe
+
+        try:
+            stripe.Webhook.construct_event(
+                request.body, request.headers.get("Stripe-Signature", ""), secret
+            )
+        except (ValueError, stripe.SignatureVerificationError) as exc:
+            # The body is not logged: unverified, it is whatever the sender
+            # wanted us to write down.
+            logger.warning("Stripe webhook rejected: %s", type(exc).__name__)
+            return HttpResponse(status=400)
+
+        # The bytes that were signed, as sent -- not the SDK's object model,
+        # so the ledger holds exactly what Stripe delivered.
+        receive(json.loads(request.body))
+        return HttpResponse(status=200)
+
+
+# ---------------------------------------------------------------------------
+# Processing, in the worker
+# ---------------------------------------------------------------------------
+
+
+def process(organization_id: str, stripe_event_id: str) -> str:
+    """
+    Apply one ledgered event. Returns the status it ended in.
+
+    The handler and the PROCESSED mark share a transaction, so a failure
+    rolls back everything the handler wrote; the FAILED mark is written
+    after, outside it, and the exception is re-raised for the task's retry.
+    An event already PROCESSED or IGNORED is left alone -- a replay is a
+    no-op at this layer as well as in the handlers.
+    """
+    row = StripeEvent.objects.filter(pk=stripe_event_id, organization_id=organization_id).first()
+    if row is None:
+        logger.warning("Stripe event %s not in organization %s", stripe_event_id, organization_id)
+        return StripeEventStatus.IGNORED
+    if row.status not in (StripeEventStatus.RECEIVED, StripeEventStatus.FAILED):
+        return row.status
+
+    handler = HANDLERS.get(row.type)
+    if handler is None:
+        _finish(row, StripeEventStatus.IGNORED, "No handler for this event type.")
+        return row.status
+
+    try:
+        with transaction.atomic():
+            handler(row)
+            _finish(row, StripeEventStatus.PROCESSED)
+    except Exception as exc:
+        _finish(row, StripeEventStatus.FAILED, f"{type(exc).__name__}: {exc}"[:2000])
+        logger.exception("Stripe event %s (%s) failed", row.event_id, row.type)
+        raise
+    return row.status
+
+
+def _finish(row: StripeEvent, status: str, error: str = "") -> None:
+    row.status = status
+    row.error = error
+    row.processed_at = timezone.now()
+    row.save(update_fields=["status", "error", "processed_at", "updated_at"])
+
+
+def _object(row: StripeEvent) -> dict:
+    return row.payload["data"]["object"]
+
+
+def _stripe_payments_for(organization: Organization, payment_intent: str):
+    """
+    The live rows this PaymentIntent has produced: the original, or the
+    replacement a partial refund wrote (`pi_x:refunded-N`).
+    """
+    from django.db.models import Q
+
+    return Payment.objects.filter(
+        organization=organization, provider=PROVIDER, voided_at__isnull=True
+    ).filter(
+        Q(provider_reference=payment_intent)
+        | Q(provider_reference__startswith=f"{payment_intent}:")
+    )
+
+
+# --- checkout.session.completed ---------------------------------------------
+
+
+def checkout_session_completed(row: StripeEvent) -> None:
+    """
+    The customer paid. One `Payment`, provider reference the PaymentIntent.
+
+    The invoice is looked up *within* the organization the account resolved
+    to. Metadata naming another tenant's invoice -- forged or a bug -- is a
+    FAILED event, not a payment on somebody else's book.
+    """
+    session = _object(row)
+    if session.get("payment_status") != "paid":
+        # An asynchronous method still settling; nothing has been paid yet.
+        return
+
+    organization = row.organization
+    invoice_id = (session.get("metadata") or {}).get("invoice_id") or session.get(
+        "client_reference_id"
+    )
+    invoice = Invoice.objects.filter(pk=invoice_id, organization=organization).first()
+    if invoice is None:
+        raise HandlerError(f"Invoice {invoice_id!r} is not in organization {organization.pk}.")
+
+    intent = session.get("payment_intent")
+    if not intent:
+        raise HandlerError("The session names no PaymentIntent.")
+
+    payment = record_provider_payment(
+        invoice,
+        provider=PROVIDER,
+        provider_reference=intent,
+        amount_cents=int(session["amount_total"]),
+        received_on=organization.today(),
+        reference=session["id"],
+    )
+    if payment.fee_cents is None:
+        fee = connect.fee_cents_for(intent, organization=organization)
+        if fee is not None:
+            payment.fee_cents = fee
+            payment.save(update_fields=["fee_cents", "updated_at"])
+
+    over = overpaid_cents(invoice)
+    if over:
+        logger.warning("Invoice %s overpaid by %s cents by card", invoice.number, over)
+
+
+# --- charge.refunded -------------------------------------------------------
+
+
+def charge_refunded(row: StripeEvent) -> None:
+    """
+    Money went back. The ledger cannot shrink a row (ADR-025), so the
+    payment is voided with the reason and, for a partial refund, a new
+    payment for what remains is written under `pi:refunded-<cumulative>` --
+    a reference that repeats for a replay and changes for a further refund.
+    """
+    charge = _object(row)
+    intent = charge.get("payment_intent")
+    if not intent:
+        return
+    organization = row.organization
+
+    refunded = int(charge.get("amount_refunded") or 0)
+    net = int(charge["amount"]) - refunded
+    replacement = f"{intent}:refunded-{refunded}"
+
+    live = list(_stripe_payments_for(organization, intent))
+    if any(p.provider_reference == replacement for p in live):
+        return  # this refund was already applied
+    if not live:
+        return  # nothing of ours to reverse
+
+    reason = f"Refunded in Stripe: {format_cents(refunded)} of {format_cents(charge['amount'])}"
+    for payment in live:
+        void_payment(payment, reason=reason)
+
+    if net > 0:
+        original = live[0]
+        record_provider_payment(
+            original.invoice,
+            provider=PROVIDER,
+            provider_reference=replacement,
+            amount_cents=net,
+            received_on=original.received_on,
+            reference=charge["id"],
+            fee_cents=original.fee_cents,
+        )
+
+
+# --- charge.dispute.* ------------------------------------------------------
+
+
+def charge_dispute_created(row: StripeEvent) -> None:
+    """The money is held, not gone: annotate, and leave the balance alone."""
+    dispute = _object(row)
+    now = timezone.now()
+    for payment in _stripe_payments_for(row.organization, dispute.get("payment_intent") or ""):
+        if payment.disputed_at is None:
+            payment.disputed_at = now
+        payment.dispute_status = dispute.get("status") or ""
+        payment.save(update_fields=["disputed_at", "dispute_status", "updated_at"])
+
+
+def charge_dispute_closed(row: StripeEvent) -> None:
+    dispute = _object(row)
+    status = dispute.get("status") or ""
+    for payment in _stripe_payments_for(row.organization, dispute.get("payment_intent") or ""):
+        payment.dispute_status = status
+        payment.save(update_fields=["dispute_status", "updated_at"])
+        if status == "lost":
+            void_payment(payment, reason=f"Dispute lost: {dispute['id']}")
+
+
+# --- account.updated -------------------------------------------------------
+
+
+def account_updated(row: StripeEvent) -> None:
+    """Re-read, never copy: Stripe does not promise order."""
+    connect.refresh_account(row.organization)
+
+
+HANDLERS: dict[str, Callable[[StripeEvent], None]] = {
+    "checkout.session.completed": checkout_session_completed,
+    "charge.refunded": charge_refunded,
+    "charge.dispute.created": charge_dispute_created,
+    "charge.dispute.closed": charge_dispute_closed,
+    "account.updated": account_updated,
+}
