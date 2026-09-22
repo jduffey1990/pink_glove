@@ -76,7 +76,16 @@ primary_region = "dfw"
   size = "shared-cpu-1x"
   memory = "512mb"
 
+# A Celery child that has loaded Django and the Stripe SDK is ~85MB; two of
+# them plus the parent overran 256MB the first time a task touched Stripe,
+# and the kernel killed it mid-payment (staging, 2026-09-22). 512MB is the
+# floor for the worker; beat runs one process and stays small.
 [[vm]]
-  processes = ["worker", "beat"]
+  processes = ["worker"]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[vm]]
+  processes = ["beat"]
   size = "shared-cpu-1x"
   memory = "256mb"

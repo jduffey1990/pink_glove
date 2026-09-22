@@ -206,20 +206,36 @@ Optional, and the app runs without it: with no `STRIPE_SECRET_KEY` there is
 no connect button, no pay link, and the pay and webhook endpoints answer
 503. Do this once there is a Stripe account to connect.
 
-1. **A Stripe account for the platform**, in test mode for staging. Enable
-   **Connect** (Settings → Connect) and choose the option for platforms
-   whose connected accounts use the full Stripe dashboard (Standard). The
-   tenants' accounts are created from the app; nothing is set up per
-   tenant here.
-2. **Register the Connect webhook.** Developers → Webhooks → Add endpoint:
+1. **A Stripe account for the platform.** Its own account, not one shared
+   with another product: Connect is account-wide, and the account's name is
+   what tenants see when they onboard. Under an existing login, the account
+   switcher's *Create new account* → "in an organization" gives one
+   organization (the LLC) with separate accounts under it.
+
+   **Use one sandbox for everything, and only the sandbox.** Stripe has
+   both a "test mode" on the account and separate *sandboxes*, and they
+   share nothing -- keys, webhooks, connected accounts. The `sk_test_…` in
+   Fly, the webhook endpoint, the Stripe CLI login and the dashboard you
+   look at must all be the same sandbox; the switcher top-left must say
+   *sandbox*, not *Test mode*. (Staging spent an hour with the key in one
+   and the endpoint in the other: payments went through, nothing arrived.)
+
+   In that sandbox, enable **Connect** (the Connect page's *Get started*),
+   for platforms whose users take payments from their own customers with
+   the full Stripe dashboard (Standard). The tenants' accounts are created
+   from the app; nothing is set up per tenant here.
+2. **Register the Connect webhook**, in the dashboard, in the sandbox:
+   Developers → Webhooks → Add endpoint:
    - URL `https://pink-glove-staging.fly.dev/api/billing/stripe/webhook/`
    - **Listen to: events on Connected accounts** -- not "your account".
      This is the one setting that is easy to get wrong and impossible to
-     see from the app; a platform-account endpoint delivers nothing.
+     see from the app or the API (the endpoint object does not carry it);
+     a platform-account endpoint delivers nothing, with no error anywhere.
+     After saving, the endpoint's page header says which it is -- read it.
    - Events: `checkout.session.completed`, `charge.refunded`,
      `charge.dispute.created`, `charge.dispute.closed`, `account.updated`.
      Nothing else is handled; anything else sent is ledgered and ignored.
-   - Copy the signing secret (`whsec_…`) it shows once.
+   - **Reveal** and copy the signing secret (`whsec_…`).
 3. **Set the two secrets** (the app refuses to start with the key and not
    the secret):
 
@@ -246,17 +262,34 @@ no connect button, no pay link, and the pay and webhook endpoints answer
    production endpoints have different secrets even on the same Stripe
    account.
 
+**When a payment does not show up.** In order:
+
+1. Did the event happen? On the connected account:
+   `stripe events list --limit 5 --stripe-account acct_… --type checkout.session.completed`.
+2. Did Stripe deliver it? `fly logs --app … --no-tail | grep stripe/webhook`
+   should show `POST … 200`. No line at all with `pending_webhooks: 0` in
+   step 1 means no endpoint is subscribed for connected accounts (step 2
+   above). A `400` means the `whsec_` on Fly is not this endpoint's.
+3. Did the worker finish it? `/admin/` → Billing → Stripe events: the row's
+   status and error. RECEIVED with nothing in the worker log means the
+   worker died under it -- `fly logs … | grep <worker machine id>` will
+   show why (the first one was an out-of-memory kill; the worker VM is
+   512MB now, `deploy/fly.toml`).
+4. **Replay** by resending from Stripe; a resent event whose row is still
+   RECEIVED or FAILED is re-queued, so this is the replay button:
+   ```bash
+   stripe events resend evt_… --account acct_<connected> --webhook-endpoint we_…
+   ```
+   (`--account`, not `--stripe-account`: the endpoint is the platform's.)
+   Or from the dashboard: the event → Resend. Never pay again instead --
+   the second charge is real and the invoice ends up overpaid.
+
 Locally, the Stripe CLI forwards Connect events to the dev server:
 
 ```bash
 stripe listen --forward-connect-to localhost:8000/api/billing/stripe/webhook/
 # prints a whsec_… for THIS session; put it in app/.env as STRIPE_CONNECT_WEBHOOK_SECRET
 ```
-
-Failed events are in Django admin under Billing → Stripe events, with the
-error; fix the cause, then re-run the task
-(`process_stripe_event.delay(organization_id, event_row_id)` from a shell)
--- the payload is on the row, so Stripe need not resend.
 
 ---
 

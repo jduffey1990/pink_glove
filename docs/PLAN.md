@@ -29,7 +29,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **1027 passing** in `app/`, and **131** in `ui/` (`cd ui && npm test`).
+Expect **1035 passing** in `app/`, and **131** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -2035,3 +2035,30 @@ Nothing was committed to `main` and nothing was pushed by an agent.
 Staging exists and was not touched: no `fly` command was run, no secret
 set, and the Stripe secrets are not set there -- staging runs this branch
 with Stripe off until Jordan follows `docs/DEPLOY.md` step 9.
+
+### Found on the first Stripe payment on staging (2026-09-22)
+
+The exit test ran on staging the same day. The card was charged; the news
+of it was lost twice, for reasons the rehearsal cannot reach:
+
+- **Test mode and sandboxes are different worlds.** The `sk_test` key in
+  Fly came from the platform's sandbox; the webhook endpoint was first
+  created in the account's test mode. Every event fired with
+  `pending_webhooks: 0` and nothing arrived, with no error on either side.
+  The runbook now says: one sandbox, and the switcher must say *sandbox*.
+- **The worker VM was too small.** 256MB held Celery until a task touched
+  the Stripe SDK; the kernel killed the child mid-payment
+  (`WorkerLostError`, then `Out of memory: Killed process (celery)`). The
+  worker is its own 512MB `[[vm]]` now, beat stays at 256MB; the task is
+  `acks_late` and `reject_on_worker_lost`, safe because both ledgers make
+  a second run a no-op.
+- **Resend was refused as a duplicate.** The row from the killed task sat
+  in RECEIVED, and the unique constraint answered Stripe's Resend with a
+  200 and nothing. A resent event whose row is RECEIVED or FAILED is now
+  re-queued -- Resend is the replay button -- and the runbook's "when a
+  payment does not show up" walks the four checks in order.
+- A Stripe refusal from `accounts.create` was a bare 500 (Connect was not
+  yet enabled on the account); every call into Stripe now surfaces
+  Stripe's own sentence as a 503.
+
+Backend 1027 → 1035.

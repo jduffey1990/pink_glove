@@ -99,16 +99,40 @@ def receive(event: dict) -> StripeEvent | None:
                 error=error,
             )
     except IntegrityError:
-        logger.info("Stripe event %s for %s delivered again; ignored", event["id"], account)
-        return None
+        return _redeliver(event["id"], account)
 
     if status == StripeEventStatus.RECEIVED:
-        from billing.tasks import process_stripe_event
-
-        process_stripe_event.delay(str(organization.pk), str(row.pk))
+        _enqueue(row)
     else:
         logger.info("Stripe event %s (%s) ignored: %s", event["id"], event["type"], error)
     return row
+
+
+def _enqueue(row: StripeEvent) -> None:
+    from billing.tasks import process_stripe_event
+
+    process_stripe_event.delay(str(row.organization_id), str(row.pk))
+
+
+def _redeliver(event_id: str, account: str) -> None:
+    """
+    The same event again. Stripe retries on its own, and an operator can
+    press Resend; either way the first delivery owns the row. A row that is
+    PROCESSED or IGNORED is left alone. One still RECEIVED or FAILED is
+    re-queued -- that is what Resend is *for* after a worker died under the
+    task, and it is safe because both ledgers make a second run a no-op.
+    """
+    row = StripeEvent.objects.filter(event_id=event_id, account=account).first()
+    if (
+        row is not None
+        and row.organization_id is not None
+        and row.status in (StripeEventStatus.RECEIVED, StripeEventStatus.FAILED)
+    ):
+        logger.info("Stripe event %s delivered again while %s; re-queued", event_id, row.status)
+        _enqueue(row)
+    else:
+        logger.info("Stripe event %s for %s delivered again; ignored", event_id, account)
+    return None
 
 
 @method_decorator(csrf_exempt, name="dispatch")

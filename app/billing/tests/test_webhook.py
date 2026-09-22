@@ -173,14 +173,45 @@ class TestTheEndpoint:
         assert StripeEvent.objects.get().status == StripeEventStatus.IGNORED
         enqueue.assert_not_called()
 
-    def test_a_retry_of_the_same_event_is_a_200_and_a_no_op(self, client, enqueue, connected):
+    def test_a_retry_of_a_processed_event_is_a_200_and_a_no_op(self, client, enqueue, connected):
         body, header = signed(event("account.updated", {"id": ACCOUNT_ID}, event_id="evt_twice"))
-
         assert post(client, body, header).status_code == 200
+        StripeEvent.objects.filter(event_id="evt_twice").update(status=StripeEventStatus.PROCESSED)
+
         assert post(client, body, header).status_code == 200
 
         assert StripeEvent.objects.filter(event_id="evt_twice").count() == 1
         assert enqueue.call_count == 1
+
+    @pytest.mark.parametrize("stuck", [StripeEventStatus.RECEIVED, StripeEventStatus.FAILED])
+    def test_a_resend_of_a_stuck_event_re_queues_it(self, client, enqueue, connected, stuck):
+        """
+        The first staging payment was lost to a worker killed mid-task, and
+        Stripe's Resend was refused as a duplicate. Resend is the replay
+        button; a row that never finished is run again.
+        """
+        body, header = signed(event("account.updated", {"id": ACCOUNT_ID}, event_id="evt_stuck"))
+        assert post(client, body, header).status_code == 200
+        row = StripeEvent.objects.get(event_id="evt_stuck")
+        row.status = stuck
+        row.save()
+
+        assert post(client, body, header).status_code == 200
+
+        assert StripeEvent.objects.filter(event_id="evt_stuck").count() == 1
+        assert enqueue.call_count == 2
+        enqueue.assert_called_with(str(connected.pk), str(row.pk))
+
+    def test_a_resend_of_an_ignored_event_stays_ignored(self, client, enqueue):
+        body, header = signed(
+            event("account.updated", {"id": "acct_nobody"}, account="acct_nobody")
+        )
+
+        assert post(client, body, header).status_code == 200
+        assert post(client, body, header).status_code == 200
+
+        enqueue.assert_not_called()
+        assert StripeEvent.objects.get().status == StripeEventStatus.IGNORED
 
     def test_an_event_names_the_organization_by_account_not_by_metadata(
         self, client, enqueue, connected
@@ -251,6 +282,9 @@ class TestProcess:
         assert process_stripe_event.autoretry_for == (Exception,)
         assert process_stripe_event.retry_kwargs == {"max_retries": 3}
         assert process_stripe_event.retry_backoff is True
+        # Survives a worker killed under it (the first staging payment did not).
+        assert process_stripe_event.acks_late is True
+        assert process_stripe_event.reject_on_worker_lost is True
 
     def test_the_task_itself_runs_the_event(self, connected, no_fee):
         """Through Celery's own call path, not `process` directly."""

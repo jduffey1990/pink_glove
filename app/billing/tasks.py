@@ -74,6 +74,12 @@ def send_invoice_email(organization_id: str, invoice_id: str) -> bool:
     autoretry_for=(Exception,),
     retry_backoff=True,
     retry_kwargs={"max_retries": 3},
+    # Acknowledged after it runs, not when it is picked up, and put back on
+    # the queue if the worker dies under it: the first staging payment was
+    # lost to an out-of-memory kill mid-task. Safe because both ledgers make
+    # a second run a no-op.
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
 def process_stripe_event(self, organization_id: str, stripe_event_id: str) -> str:
     """
