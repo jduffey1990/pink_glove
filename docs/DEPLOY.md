@@ -148,14 +148,21 @@ fly deploy --config deploy/fly.toml --app pink-glove-staging
 Fly builds the image remotely from the repository root (the Dockerfile builds
 the frontend too), runs the migrations as the release command, then starts
 `web`, `worker` and `beat`. The first deploy creates one machine per process
-group. Confirm there is exactly one `beat`:
+group. Confirm all three are there and `web` passes its check:
 
 ```bash
 fly status --app pink-glove-staging
 ```
 
-If there is more than one machine in any group, `fly scale count
-web=1 worker=1 beat=1 --app pink-glove-staging`.
+Expect a `started` machine for each of `web`, `worker` and `beat`, and
+`web`'s check column showing `passing`. Fly also adds a **stopped standby**
+for `beat` (marked `†`); that is fine -- it starts only if the host dies,
+so there is still exactly one scheduler running. If `web` shows `critical`,
+`fly checks list --app pink-glove-staging` prints what the probe got back
+and `fly logs` says why; a deploy that stalls waiting on `web` may stop
+before creating `worker`, and the next deploy creates it. If a group has
+more than one *running* machine, `fly scale count web=1 worker=1 beat=1
+--app pink-glove-staging`.
 
 ### 7. Verify
 
@@ -294,4 +301,4 @@ docker compose -f deploy/docker-compose.rehearsal.yml down -v
 | Postgres credentials | `fly postgres users` / `fly secrets set DATABASE_URL=…`; machines restart on the new secret. |
 | Tigris credentials | `fly storage update` or the Tigris console; set the new `AWS_*` secrets. Signed URLs already issued stop working. |
 | A bad deploy | `fly releases --app …` then `fly deploy --image registry.fly.io/…:<previous tag>`. |
-| A machine stuck unhealthy | `fly machines restart <id>`. Readiness (`/health/ready/`) failing means Postgres or Redis is unreachable from it; liveness (`/health/live/`) failing means the process is wedged. |
+| A machine stuck unhealthy | `fly checks list` first: it shows the probe's actual reply. A `503` from readiness (`/health/ready/`) means Postgres or Redis is unreachable from it; `connection refused` or a timeout means the process is wedged, `fly machines restart <id>`. A `400` means the app rejected the probe's `Host` header (Fly probes by private IP; `app/middleware/health.py` exempts the two probes and nothing else). |

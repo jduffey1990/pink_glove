@@ -150,8 +150,11 @@ services:
         condition: service_completed_successfully
       minio-bucket:
         condition: service_completed_successfully
+    # The probe as Fly sends it: readiness, addressed to the machine's own
+    # private IP, which is not in ALLOWED_HOSTS and never can be. The first
+    # staging deploy hung because the rehearsal probed `localhost` instead.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live/"]
+      test: ["CMD", "curl", "-fsS", "-H", "Host: 172.19.0.2:8000", "http://localhost:8000/health/ready/"]
       interval: 10s
       timeout: 5s
       retries: 5

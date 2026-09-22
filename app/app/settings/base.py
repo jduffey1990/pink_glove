@@ -90,6 +90,9 @@ LOCAL_APPS = [
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 MIDDLEWARE = [
+    # First: an orchestrator probes a machine by its private address, which no
+    # ALLOWED_HOSTS can list, so the probes answer before the host is checked.
+    "app.middleware.health.HealthCheckMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     # Above whitenoise on purpose: whitenoise answers a file without running

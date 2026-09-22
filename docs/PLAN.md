@@ -7,12 +7,12 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 ## Start here
 
-Everything through Phase 3 is on `main`, tests green. **Phase 4a is built** on
-`phase-4-billing` and **Phase D is built** on `phase-d-deploy` (branched from
-4a, so merge 4a first), both waiting to be merged — see "Phase 4a as built"
-and "Phase D as built" at the end of this file. Next work is **4b** (Stripe
-Connect), once Jordan has stood up staging from `docs/DEPLOY.md` so there is
-a public URL for the webhook. Work on a branch, never on `main`; run the
+Everything through Phase D is on `main`, tests green — see "Phase 4a as
+built" and "Phase D as built" at the end of this file. Staging is being
+stood up by Jordan from `docs/DEPLOY.md`; "Found on the first staging
+deploy" at the very end records what that turned up. Next work is **4b**
+(Stripe Connect), once staging answers, so there is a public URL for the
+webhook. Work on a branch, never on `main`; run the
 phase gate in `CLAUDE.md` at the end of each phase. Read "Phase 3b as built"
 before touching `ui/`, and "Phase gate — baseline": it records what was fixed
 and decided before Phase 4, and a backlog to fold in as files are touched.
@@ -29,7 +29,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **890 passing** in `app/`, and **121** in `ui/` (`cd ui && npm test`).
+Expect **895 passing** in `app/`, and **121** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -1570,3 +1570,27 @@ branched from `phase-4-billing`. Nothing was committed to `main`, nothing
 was pushed, nothing was run against Fly or GitHub settings, and there is no
 production or staging yet — both are Jordan's to stand up from
 `docs/DEPLOY.md`.
+
+### Found on the first staging deploy (2026-09-22)
+
+Jordan stood staging up from the runbook on 2026-09-18. The deploy built,
+migrated and started `web` and `beat`, then hung: `web` never passed its
+check, so Fly's proxy routed nothing to it and the deploy stopped before
+creating `worker`. `fly checks list` showed why -- the probe got a `400`.
+**Fly probes a machine by its private IP** (`Host: 172.19.75.162:8000`),
+which differs per machine and can never be in `ALLOWED_HOSTS`, so
+`CommonMiddleware` refused every probe. The rehearsal had not caught it
+because Caddy forwards `Host: localhost` and the compose healthcheck called
+`localhost` too.
+
+Fixed on `fix-fly-health-probe`: `app/middleware/health.py` sits first in
+`MIDDLEWARE` and dispatches the two `health` routes before anything reads
+`Host`; nothing else is exempt, and a test walks `/`, an API path and two
+look-alikes to prove it. The rehearsal's healthcheck now probes the way Fly
+does (readiness, with a private-IP `Host`), so this class of bug fails
+there first. Backend 890 → 895. `docs/DEPLOY.md` step 6 now says what
+`fly status` should show (including `beat`'s stopped standby, which is
+normal) and the recovery table reads the check's reply before guessing.
+Also from the same session: the seed guaranteed only three finished visits
+on a Monday or Tuesday, so CI's seed test failed on the first push to
+`main`; it starts three weeks back now.
