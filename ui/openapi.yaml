@@ -4651,6 +4651,10 @@ components:
           type: string
           description: Printed at the foot of every invoice, e.g. "Make checks payable
             to ...".
+        stripe:
+          allOf:
+          - $ref: '#/components/schemas/StripeStatus'
+          readOnly: true
         is_active:
           type: boolean
           readOnly: true
@@ -4664,6 +4668,7 @@ components:
       - is_active
       - name
       - slug
+      - stripe
       - timezone
     OrganizationRequest:
       type: object
@@ -6409,6 +6414,35 @@ components:
           default: ''
       required:
       - status
+    StripeStatus:
+      type: object
+      description: |-
+        The organization's Stripe Connect state, as one thing to look at.
+
+        Read-only by construction: the fields it reads are written only by
+        `billing.connect` and the webhook. `connected` is "there is an account";
+        `charges_enabled` is "Stripe will take a card" -- the pay link waits for
+        the second.
+      properties:
+        connected:
+          type: boolean
+          readOnly: true
+        charges_enabled:
+          type: boolean
+          readOnly: true
+        details_submitted:
+          type: boolean
+          readOnly: true
+        connected_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - charges_enabled
+      - connected
+      - connected_at
+      - details_submitted
     TimeEntry:
       type: object
       description: |-

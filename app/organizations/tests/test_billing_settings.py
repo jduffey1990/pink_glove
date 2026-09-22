@@ -117,6 +117,42 @@ class TestApi:
         assert organization.no_access_fee_cents(20000) == 2500
         assert organization.invoice_terms_days == 30
 
+    def test_the_stripe_block_is_published(self, api_client, organization, make_member):
+        api_client.force_login(make_member(organization, Role.DISPATCHER))
+
+        response = api_client.get("/api/organizations/current/")
+
+        assert response.data["stripe"] == {
+            "connected": False,
+            "charges_enabled": False,
+            "details_submitted": False,
+            "connected_at": None,
+        }
+
+    def test_the_stripe_block_cannot_be_written(self, api_client, organization, make_member):
+        """
+        Only `billing.connect` and the webhook write these (4b.1). An owner
+        claiming an account id through the settings form would point another
+        tenant's payments at this one.
+        """
+        api_client.force_login(make_member(organization, Role.OWNER))
+
+        response = api_client.patch(
+            "/api/organizations/current/",
+            {
+                "stripe_account_id": "acct_forged",
+                "stripe_charges_enabled": True,
+                "stripe": {"connected": True, "charges_enabled": True},
+            },
+            format="json",
+        )
+
+        assert response.status_code == 200
+        organization.refresh_from_db()
+        assert organization.stripe_account_id == ""
+        assert organization.stripe_charges_enabled is False
+        assert response.data["stripe"]["connected"] is False
+
     def test_an_owner_can_too(self, api_client, organization, make_member):
         api_client.force_login(make_member(organization, Role.OWNER))
 

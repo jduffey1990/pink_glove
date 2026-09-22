@@ -82,3 +82,21 @@ class PaymentFactory(factory.django.DjangoModelFactory):
     amount_cents = 15000
     received_on = factory.LazyFunction(lambda: timezone.now().date())
     recorded_by = factory.SubFactory(UserFactory)
+
+
+class StripeEventFactory(factory.django.DjangoModelFactory):
+    """
+    A ledgered webhook event. `organization` is optional on purpose: an
+    event for an account nobody owns is ledgered with none (ADR-024).
+    """
+
+    class Meta:
+        model = "billing.StripeEvent"
+
+    event_id = factory.Sequence(lambda n: f"evt_test_{n:06d}")
+    account = "acct_1TestConnectedAcct"
+    type = "account.updated"
+    organization = None
+    payload = factory.LazyAttribute(
+        lambda e: {"id": e.event_id, "type": e.type, "account": e.account, "data": {"object": {}}}
+    )

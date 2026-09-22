@@ -1947,6 +1947,7 @@ export interface components {
             invoice_terms_days?: number;
             /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
             invoice_footer?: string;
+            readonly stripe: components["schemas"]["StripeStatus"];
             readonly is_active: boolean;
             /** Format: date-time */
             readonly created_at: string;
@@ -2898,6 +2899,21 @@ export interface components {
             status: components["schemas"]["JobStatusEnum"];
             /** @default  */
             reason: string;
+        };
+        /**
+         * @description The organization's Stripe Connect state, as one thing to look at.
+         *
+         *     Read-only by construction: the fields it reads are written only by
+         *     `billing.connect` and the webhook. `connected` is "there is an account";
+         *     `charges_enabled` is "Stripe will take a card" -- the pay link waits for
+         *     the second.
+         */
+        StripeStatus: {
+            readonly connected: boolean;
+            readonly charges_enabled: boolean;
+            readonly details_submitted: boolean;
+            /** Format: date-time */
+            readonly connected_at: string | null;
         };
         /**
          * @description Base serializer for tenant-owned models.

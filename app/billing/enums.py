@@ -49,3 +49,19 @@ class LineKind(TextChoices):
     VISIT = "visit", "Visit"
     NO_ACCESS_FEE = "no_access_fee", "No-access fee"
     ADJUSTMENT = "adjustment", "Adjustment"
+
+
+class StripeEventStatus(TextChoices):
+    """
+    Where a webhook event is in its life.
+
+    RECEIVED is written in the request, before the 200; a handler moves it
+    on from a worker. FAILED events are the queue a person looks at.
+    """
+
+    RECEIVED = "received", "Received"
+    PROCESSED = "processed", "Processed"
+    #: No handler for the type, or no organization owns the account. Kept,
+    #: because "we never got it" and "we ignored it" are different disputes.
+    IGNORED = "ignored", "Ignored"
+    FAILED = "failed", "Failed"

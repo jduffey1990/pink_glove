@@ -141,15 +141,45 @@ class Organization(Base):
         help_text='Printed at the foot of every invoice, e.g. "Make checks payable to ...".',
     )
 
-    # Parked for Phase 4 -- tenants paying for the software, as distinct from
-    # the tenant's own customers paying invoices. See ADR-007.
+    # Parked for Phase 4c -- tenants paying for the software, as distinct from
+    # the tenant's own customers paying invoices. See ADR-024.
     stripe_customer_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     stripe_subscription_id = models.CharField(max_length=255, blank=True, default="")
+
+    # --- Stripe Connect (Phase 4b, ADR-024) ---------------------------------
+    # The tenant's own Stripe account, on which its customers' card payments
+    # are charged directly. Written only by `billing.connect` and the
+    # `account.updated` webhook handler -- never from request data; the
+    # serializer publishes them read-only as one `stripe` block.
+
+    stripe_account_id = models.CharField(max_length=64, blank=True, default="")
+    #: Mirrors `Account.charges_enabled`: Stripe has finished its checks and
+    #: will accept a charge. The pay link appears only once this is true.
+    stripe_charges_enabled = models.BooleanField(default=False)
+    #: Mirrors `Account.details_submitted`: the owner finished the onboarding
+    #: form. True with charges still off means Stripe is reviewing.
+    stripe_details_submitted = models.BooleanField(default=False)
+    #: When charges first became enabled.
+    stripe_connected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta(Base.Meta):
         verbose_name = "Organization"
         verbose_name_plural = "Organizations"
         ordering = ("name",)
+        constraints = [
+            # A webhook resolves its `account` to exactly one tenant. Two
+            # organizations sharing a Stripe account would make every payment
+            # ambiguous, so the database refuses it.
+            models.UniqueConstraint(
+                fields=["stripe_account_id"],
+                condition=~models.Q(stripe_account_id="") & models.Q(deleted_at__isnull=True),
+                name="one_organization_per_stripe_account",
+            )
+        ]
+
+    @property
+    def stripe_connected(self) -> bool:
+        return bool(self.stripe_account_id)
 
     def __str__(self):
         return self.name

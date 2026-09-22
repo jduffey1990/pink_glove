@@ -1,6 +1,40 @@
 from django.contrib import admin
 
-from billing.models import Invoice, InvoiceLine, InvoiceSequence, Payment
+from billing.models import Invoice, InvoiceLine, InvoiceSequence, Payment, StripeEvent
+
+
+@admin.register(StripeEvent)
+class StripeEventAdmin(admin.ModelAdmin):
+    """
+    The webhook ledger, read-only. FAILED events are the queue: filter on
+    status, read the error, fix the cause, replay.
+    """
+
+    list_display = ("type", "event_id", "account", "organization", "status", "created_at")
+    list_filter = ("status", "type", "organization")
+    search_fields = ("event_id", "account")
+    readonly_fields = (
+        "event_id",
+        "account",
+        "type",
+        "organization",
+        "status",
+        "error",
+        "processed_at",
+        "payload",
+        "created_at",
+    )
+    ordering = ("-created_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 SNAPSHOT_FIELDS = (
     "number",

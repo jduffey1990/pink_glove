@@ -27,9 +27,10 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 
-from base.models import TenantModel
-from billing.enums import InvoiceStatus, LineKind, PaymentMethod
+from base.models import Base, TenantModel
+from billing.enums import InvoiceStatus, LineKind, PaymentMethod, StripeEventStatus
 from customers.models import Customer
+from organizations.models import Organization
 from scheduling.models import Job
 from users.models import CustomUser
 
@@ -240,6 +241,19 @@ class Payment(TenantModel):
     provider = models.CharField(max_length=32, blank=True, default="")
     provider_reference = models.CharField(max_length=255, blank=True, default="", db_index=True)
 
+    #: What the provider kept, read from its balance transaction after the
+    #: fact -- never computed from a published rate (Phase 4b). Null until
+    #: known, and always null for a payment a person recorded.
+    fee_cents = models.PositiveIntegerField(null=True, blank=True)
+
+    #: A dispute holds the money at the provider; it is not gone until the
+    #: dispute is lost, at which point the payment is voided. Until then the
+    #: invoice shows a warning and the balance is unchanged.
+    disputed_at = models.DateTimeField(null=True, blank=True)
+    dispute_status = models.CharField(
+        max_length=32, blank=True, default="", help_text="Stripe's word: needs_response, won, lost."
+    )
+
     voided_at = models.DateTimeField(null=True, blank=True)
     voided_by = models.ForeignKey(
         CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
@@ -289,6 +303,58 @@ class Payment(TenantModel):
 
     def hard_delete(self, *args, **kwargs):
         raise ValidationError({"detail": "A payment is voided with a reason, never deleted."})
+
+
+class StripeEvent(Base):
+    """
+    Every webhook event Stripe delivered, whether or not anything came of it.
+
+    Deliberately `Base` and not `TenantModel`, the one such model in billing:
+    an event for an account no organization owns must be ledgered and
+    dropped (ADR-024), so `organization` is nullable. It is never served by
+    an API -- the admin reads it -- so there is no view to scope.
+
+    Two things this row is for: idempotency (Stripe retries under the same
+    id, and the unique constraint below makes the first delivery the only one
+    that counts) and replay (the payload is kept, so a FAILED event can be
+    run again once the cause is fixed, without asking Stripe to resend).
+    """
+
+    event_id = models.CharField(max_length=255)
+    #: The connected account the event is about. Empty for a platform event
+    #: (Phase 4c), which is why the uniqueness is on the pair.
+    account = models.CharField(max_length=64, blank=True, default="")
+    type = models.CharField(max_length=100, db_index=True)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="stripe_events",
+    )
+    payload = models.JSONField()
+    status = models.CharField(
+        max_length=16,
+        choices=StripeEventStatus.choices,
+        default=StripeEventStatus.RECEIVED,
+        db_index=True,
+    )
+    error = models.TextField(blank=True, default="")
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(Base.Meta):
+        verbose_name = "Stripe event"
+        verbose_name_plural = "Stripe events"
+        ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event_id", "account"], name="one_stripe_event_per_id_and_account"
+            )
+        ]
+        indexes = [models.Index(fields=["organization", "type"])]
+
+    def __str__(self):
+        return f"{self.type} {self.event_id} ({self.status})"
 
 
 class InvoiceSequence(TenantModel):
