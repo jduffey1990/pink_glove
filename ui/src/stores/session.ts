@@ -105,6 +105,8 @@ export const useSessionStore = defineStore('session', () => {
   )
   const isCleaner = computed(() => role.value === 'cleaner')
   const isCustomer = computed(() => role.value === 'customer')
+  /** Mirrors base.permissions.IsOwner: connecting Stripe is the owner's alone. */
+  const isOwner = computed(() => role.value === 'owner')
 
   /**
    * The zone every date on every screen is reckoned in.
@@ -217,6 +219,7 @@ export const useSessionStore = defineStore('session', () => {
     isAdminOrHigher,
     isCleaner,
     isCustomer,
+    isOwner,
     timeZone,
     needsOrganizationChoice,
     boot,

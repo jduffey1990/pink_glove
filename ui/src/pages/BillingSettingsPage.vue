@@ -11,12 +11,21 @@
    */
   import type { Organization } from '@/api/types'
   import { computed, ref } from 'vue'
-  import { getCurrentOrganization, updateOrganization } from '@/api/endpoints'
+  import { useRoute, useRouter } from 'vue-router'
+  import {
+    getCurrentOrganization,
+    refreshStripeStatus,
+    startStripeOnboarding,
+    updateOrganization,
+  } from '@/api/endpoints'
   import { errorDetail } from '@/api/errors'
   import { noAccessFeeToApi, noAccessFeeToForm } from '@/lib/money'
+  import { stripeCard } from '@/lib/stripeCard'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
+  const route = useRoute()
+  const router = useRouter()
 
   const organization = ref<Organization | null>(null)
   const loading = ref(false)
@@ -26,6 +35,51 @@
 
   // The API enforces this independently; hiding the button is a courtesy.
   const canEdit = computed(() => session.isAdminOrHigher)
+
+  // --- Card payments (Stripe Connect, Phase 4b) -----------------------------
+
+  const stripeBusy = ref(false)
+  const stripeError = ref('')
+  const stripeNotice = ref('')
+
+  const card = computed(() =>
+    organization.value ? stripeCard(organization.value.stripe, session.isOwner) : null,
+  )
+
+  /** Both buttons are the same call: the account is created once, a link every time. */
+  async function connectStripe (): Promise<void> {
+    stripeBusy.value = true
+    stripeError.value = ''
+    try {
+      window.location.assign(await startStripeOnboarding())
+    } catch (error_) {
+      stripeError.value = errorDetail(error_) ?? 'Could not start Stripe onboarding.'
+      stripeBusy.value = false
+    }
+  }
+
+  /**
+   * Back from Stripe (`?stripe=return` or `?stripe=refresh`): re-read the
+   * account once, since the webhook may not have landed yet, then drop the
+   * query so a reload does not ask again.
+   */
+  async function refreshAfterReturn (): Promise<void> {
+    if (!route.query.stripe || !organization.value || !session.isAdminOrHigher) {
+      return
+    }
+    stripeBusy.value = true
+    try {
+      organization.value = { ...organization.value, stripe: await refreshStripeStatus() }
+      stripeNotice.value = organization.value.stripe.charges_enabled
+        ? 'Stripe is connected. Customers can now pay invoices by card.'
+        : 'Thanks -- Stripe is finishing up. This page will show when card payments are on.'
+    } catch (error_) {
+      stripeError.value = errorDetail(error_) ?? 'Could not check with Stripe.'
+    } finally {
+      stripeBusy.value = false
+      await router.replace({ query: {} })
+    }
+  }
 
   const FEE_TYPES = [
     { value: 'none', title: 'No charge' },
@@ -72,7 +126,7 @@
     }
   }
 
-  load()
+  load().then(refreshAfterReturn)
 
   async function save (): Promise<void> {
     saving.value = true
@@ -214,6 +268,55 @@
           text="Save"
           variant="flat"
           @click="save"
+        />
+      </v-card-actions>
+    </v-card>
+
+    <!-- Card payments: Stripe Connect. The server owns every state here. -->
+    <h2 class="text-subtitle-1 mt-6 mb-2">Card payments</h2>
+
+    <v-alert v-if="stripeError" class="mb-3" type="error" variant="tonal">
+      {{ stripeError }}
+    </v-alert>
+
+    <v-alert v-if="stripeNotice" class="mb-3" type="success" variant="tonal">
+      {{ stripeNotice }}
+    </v-alert>
+
+    <v-card v-if="card" border flat>
+      <v-card-item>
+        <template #prepend>
+          <v-icon
+            :color="card.state === 'enabled' ? 'success' : 'grey'"
+            :icon="card.state === 'enabled' ? 'mdi-check-circle' : 'mdi-credit-card-outline'"
+          />
+        </template>
+
+        <v-card-title class="text-subtitle-2">{{ card.title }}</v-card-title>
+      </v-card-item>
+
+      <v-card-text>{{ card.text }}</v-card-text>
+
+      <v-card-actions v-if="card.action || card.dashboardUrl">
+        <v-btn
+          v-if="card.dashboardUrl"
+          append-icon="mdi-open-in-new"
+          :href="card.dashboardUrl"
+          rel="noopener"
+          target="_blank"
+          text="Open Stripe dashboard"
+          variant="text"
+        />
+
+        <v-spacer />
+
+        <v-btn
+          v-if="card.action"
+          color="primary"
+          :loading="stripeBusy"
+          :text="card.actionLabel"
+          variant="flat"
+          @click="connectStripe"
         />
       </v-card-actions>
     </v-card>

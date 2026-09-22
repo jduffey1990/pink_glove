@@ -30,6 +30,7 @@ import type {
   Payment,
   PaymentState,
   PlanPreview,
+  PublicInvoice,
   RecordPaymentRequest,
   RecurringPlan,
   RecurringPlanRequest,
@@ -39,6 +40,7 @@ import type {
   ServiceLocation,
   ServiceLocationRequest,
   ServiceRequest,
+  StripeStatus,
   TimeEntry,
 } from './types'
 import { api } from './client'
@@ -494,4 +496,33 @@ export async function voidPayment (id: string, reason: string): Promise<Payment>
 export async function updateOrganization (payload: OrganizationRequest): Promise<Organization> {
   const { data } = await api.patch<Organization>('/api/organizations/current/', payload)
   return data
+}
+
+// --- Stripe Connect (Phase 4b) ---------------------------------------------
+
+/** Owner only. Returns where to send the browser: Stripe's hosted onboarding. */
+export async function startStripeOnboarding (): Promise<string> {
+  const { data } = await api.post<{ url: string }>('/api/billing/stripe/connect/')
+  return data.url
+}
+
+/** Re-read the account from Stripe; called once on return from onboarding. */
+export async function refreshStripeStatus (): Promise<StripeStatus> {
+  const { data } = await api.post<StripeStatus>('/api/billing/stripe/refresh/')
+  return data
+}
+
+/**
+ * The public pay page. No session: the signed token in the invoice email is
+ * the credential, and the server answers 404 for a bad or expired one.
+ */
+export async function getPublicInvoice (token: string): Promise<PublicInvoice> {
+  const { data } = await api.get<PublicInvoice>(`/api/billing/pay/${token}/`)
+  return data
+}
+
+/** Open a Checkout session for the balance. Returns Stripe's URL. */
+export async function openCheckout (token: string): Promise<string> {
+  const { data } = await api.post<{ url: string }>(`/api/billing/pay/${token}/checkout/`)
+  return data.url
 }

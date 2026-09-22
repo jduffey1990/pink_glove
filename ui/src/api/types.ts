@@ -40,6 +40,11 @@ export type PaymentMethod = Schemas['PaymentMethodEnum']
 export type PaymentState = Schemas['PaymentStateEnum']
 export type BillableJob = Schemas['BillableJob']
 
+/** Stripe Connect (Phase 4b). */
+export type StripeStatus = Schemas['StripeStatus']
+export type PublicInvoice = Schemas['PublicInvoice']
+export type PublicInvoiceLine = Schemas['PublicInvoiceLine']
+
 /**
  * What the server says this invoice will accept right now.
  *

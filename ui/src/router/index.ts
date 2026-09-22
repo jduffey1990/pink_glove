@@ -110,6 +110,14 @@ const routes: RouteRecordRaw[] = [
     meta: { access: 'dispatcher', title: 'Recurring plans' },
   },
   {
+    // The customer's pay page (Phase 4b). No session: the signed token in the
+    // invoice email is the credential, and the API decides what it opens.
+    path: '/pay/:token',
+    name: 'pay',
+    component: () => import('@/pages/PayInvoicePage.vue'),
+    meta: { access: 'public', title: 'Pay invoice' },
+  },
+  {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
     component: () => import('@/pages/NotFoundPage.vue'),

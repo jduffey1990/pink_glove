@@ -117,6 +117,24 @@
 
   // --- actions -------------------------------------------------------------
 
+  /**
+   * The customer's pay-by-card link, for a text message or a phone call.
+   * Present only when the server would honour it (`pay_url` is null
+   * otherwise), so the button never offers a link that leads to a refusal.
+   */
+  async function copyPayLink (): Promise<void> {
+    const url = invoice.value?.pay_url
+    if (!url) {
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(url)
+      notice.value = 'Pay link copied.'
+    } catch {
+      error.value = `Could not copy. The link is ${url}`
+    }
+  }
+
   async function saveNotes (): Promise<void> {
     if (invoice.value === null) {
       return
@@ -396,6 +414,15 @@
         />
 
         <v-btn
+          v-if="invoice.pay_url"
+          prepend-icon="mdi-link-variant"
+          size="small"
+          text="Copy pay link"
+          variant="tonal"
+          @click="copyPayLink"
+        />
+
+        <v-btn
           v-if="may('void')"
           color="error"
           size="small"
@@ -507,6 +534,19 @@
                 <span>Balance</span>
                 <span>{{ formatCents(invoice.balance_cents) }}</span>
               </div>
+
+              <!-- Only a card payment can do this; a refund from Stripe puts it right. -->
+              <v-alert
+                v-if="invoice.overpaid_cents > 0"
+                class="mt-3"
+                density="compact"
+                type="warning"
+                variant="tonal"
+              >
+                Overpaid by {{ formatCents(invoice.overpaid_cents) }}. Refund the
+                difference from your Stripe dashboard; it will show here once Stripe
+                confirms it.
+              </v-alert>
             </v-card-text>
           </v-card>
 
@@ -522,18 +562,44 @@
                   <span v-if="(entry.tip_cents ?? 0) > 0" class="text-medium-emphasis">
                     (+ {{ formatCents(entry.tip_cents) }} tip)
                   </span>
+
+                  <v-chip
+                    v-if="entry.provider"
+                    class="ml-1"
+                    size="x-small"
+                    variant="tonal"
+                  >
+                    via {{ entry.provider }}
+                  </v-chip>
+
+                  <v-chip
+                    v-if="entry.dispute_status && !entry.is_void"
+                    class="ml-1"
+                    color="warning"
+                    size="x-small"
+                    variant="tonal"
+                  >
+                    disputed: {{ entry.dispute_status }}
+                  </v-chip>
                 </v-list-item-title>
 
                 <v-list-item-subtitle>
                   {{ formatDayLabel(entry.received_on) }}
                   <template v-if="entry.reference"> · {{ entry.reference }}</template>
                   <template v-if="entry.recorded_by_name"> · {{ entry.recorded_by_name }}</template>
+
+                  <template v-if="entry.fee_cents != null">
+                    · fee {{ formatCents(entry.fee_cents) }}
+                  </template>
+
                   <template v-if="entry.is_void"> · voided: {{ entry.void_reason }}</template>
                 </v-list-item-subtitle>
 
                 <template #append>
+                  <!-- The server says whether a void is on offer: never for a
+                       provider's payment, which a refund reverses. -->
                   <v-btn
-                    v-if="!entry.is_void"
+                    v-if="entry.can_void"
                     color="error"
                     size="x-small"
                     text="Void"
