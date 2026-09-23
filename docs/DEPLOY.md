@@ -254,7 +254,9 @@ no connect button, no pay link, and the pay and webhook endpoints answer
    it should say connected. Open the seeded overdue invoice, Email it,
    open the pay link from the log (or Copy pay link), and pay with
    `4242 4242 4242 4242`, any future date, any CVC. Within seconds the
-   invoice shows paid, with the fee beside the payment. Refund it from the
+   invoice shows paid. The fee beside the payment is usually there at
+   once; when Stripe had not yet attached it to the charge, the sweep
+   fills it in within five minutes. Refund it from the
    *connected account's* dashboard (test mode) and watch the payment go
    void and the balance come back.
 5. **Production** is the same with the account in live mode, the endpoint

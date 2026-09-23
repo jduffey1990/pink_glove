@@ -219,6 +219,12 @@ STALE_AFTER = dt.timedelta(minutes=10)
 # in the admin's queue for a person instead of killing a worker every sweep.
 ABANDON_AFTER = dt.timedelta(hours=1)
 ABANDONED = "Not processed within an hour of delivery despite re-queuing; needs a person."
+# A fee is read from the charge's balance transaction, and the checkout event
+# can land a second before Stripe attaches it (staging, 2026-09-23: fee read
+# at 16:42:37, attached at 16:42:36 by Stripe's clock and still not on the
+# charge). A payment with no fee is re-read every sweep for this long -- a
+# dozen reads at most, and a fee Stripe never reports stays empty.
+FEE_RETRY_FOR = dt.timedelta(hours=1)
 
 
 def sweep() -> dict[str, int]:
@@ -259,7 +265,30 @@ def sweep() -> dict[str, int]:
             )
             _enqueue(row)
             requeued += 1
-    return {"requeued": requeued, "abandoned": abandoned}
+    return {"requeued": requeued, "abandoned": abandoned, "fees": _backfill_fees(now)}
+
+
+def _backfill_fees(now: dt.datetime) -> int:
+    """Fill the fee on Stripe payments that landed before Stripe had it."""
+    unfilled = Payment.objects.filter(
+        provider=PROVIDER,
+        fee_cents__isnull=True,
+        created_at__gt=now - FEE_RETRY_FOR,
+    ).select_related("organization")
+
+    filled = 0
+    for payment in unfilled:
+        # A partial refund's replacement is `pi_x:refunded-N`; the fee is
+        # on the PaymentIntent either way.
+        intent = payment.provider_reference.partition(":")[0]
+        fee = connect.fee_cents_for(intent, organization=payment.organization)
+        if fee is None:
+            continue
+        payment.fee_cents = fee
+        payment.save(update_fields=["fee_cents", "updated_at"])
+        logger.info("Fee for %s read on a later pass: %s cents", intent, fee)
+        filled += 1
+    return filled
 
 
 def _finish(row: StripeEvent, status: str, error: str = "") -> None:

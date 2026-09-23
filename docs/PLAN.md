@@ -1912,6 +1912,10 @@ visibility timeout). A row still RECEIVED an hour on is marked FAILED with
 a note, so a task that kills its worker every run lands in the admin's
 queue instead of looping. Ten minutes and an hour are margins, not knobs:
 the handler runs in milliseconds and the retries finish inside a minute.
+The same sweep fills in a card payment's fee when the checkout event
+landed before Stripe had attached the balance transaction to the charge
+(one second apart on staging): a Stripe payment with no fee is re-read
+each pass for an hour, then left as it is.
 
 **Overpayment is recorded as it happened.** `record_provider_payment` has
 no balance check and is idempotent on `(provider, provider_reference)`

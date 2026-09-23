@@ -621,7 +621,7 @@ class TestSweep:
         row = self._received(connected, age=dt.timedelta(minutes=11))
 
         with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-            assert webhook.sweep() == {"requeued": 1, "abandoned": 0}
+            assert webhook.sweep() == {"requeued": 1, "abandoned": 0, "fees": 0}
 
         delay.assert_called_once_with(str(connected.pk), str(row.pk))
         row.refresh_from_db()
@@ -631,7 +631,7 @@ class TestSweep:
         self._received(connected, age=dt.timedelta(minutes=2))
 
         with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-            assert webhook.sweep() == {"requeued": 0, "abandoned": 0}
+            assert webhook.sweep() == {"requeued": 0, "abandoned": 0, "fees": 0}
 
         delay.assert_not_called()
 
@@ -644,7 +644,7 @@ class TestSweep:
         StripeEvent.objects.filter(pk=row.pk).update(status=status)
 
         with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-            assert webhook.sweep() == {"requeued": 0, "abandoned": 0}
+            assert webhook.sweep() == {"requeued": 0, "abandoned": 0, "fees": 0}
 
         delay.assert_not_called()
         row.refresh_from_db()
@@ -654,7 +654,7 @@ class TestSweep:
         row = self._received(connected, age=dt.timedelta(hours=1, minutes=1))
 
         with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-            assert webhook.sweep() == {"requeued": 0, "abandoned": 1}
+            assert webhook.sweep() == {"requeued": 0, "abandoned": 1, "fees": 0}
 
         delay.assert_not_called()
         row.refresh_from_db()
@@ -672,7 +672,7 @@ class TestSweep:
             created_at=timezone.now() - dt.timedelta(minutes=30)
         )
 
-        assert sweep_stripe_events.apply().get() == {"requeued": 1, "abandoned": 0}
+        assert sweep_stripe_events.apply().get() == {"requeued": 1, "abandoned": 0, "fees": 0}
 
         row.refresh_from_db()
         assert row.status == StripeEventStatus.PROCESSED
@@ -683,3 +683,71 @@ class TestSweep:
 
         assert entry["task"] == "billing.sweep_stripe_events"
         assert str(entry["schedule"]) == "<crontab: */5 * * * * (m/h/dM/MY/d)>"
+
+
+@pytest.mark.django_db
+class TestFeeBackfill:
+    """
+    The checkout event can land a second before Stripe attaches the balance
+    transaction to the charge, so the fee read at that moment is None. The
+    sweep reads it again for an hour.
+    """
+
+    def _card(self, connected, *, age, reference="pi_bf", fee=None):
+        invoice = IssuedInvoiceFactory(organization=connected)
+        payment = PaymentFactory(
+            invoice=invoice,
+            organization=connected,
+            method=PaymentMethod.CARD,
+            provider=webhook.PROVIDER,
+            provider_reference=reference,
+            fee_cents=fee,
+        )
+        Payment.objects.filter(pk=payment.pk).update(created_at=timezone.now() - age)
+        payment.refresh_from_db()
+        return payment
+
+    def test_a_fee_stripe_has_by_now_is_filled_in(self, connected):
+        payment = self._card(connected, age=dt.timedelta(minutes=5))
+
+        with mock.patch.object(connect, "fee_cents_for", return_value=465) as read:
+            assert webhook.sweep()["fees"] == 1
+
+        read.assert_called_once_with("pi_bf", organization=connected)
+        payment.refresh_from_db()
+        assert payment.fee_cents == 465
+
+    def test_a_fee_stripe_still_lacks_stays_empty(self, connected):
+        payment = self._card(connected, age=dt.timedelta(minutes=5))
+
+        with mock.patch.object(connect, "fee_cents_for", return_value=None):
+            assert webhook.sweep()["fees"] == 0
+
+        payment.refresh_from_db()
+        assert payment.fee_cents is None
+
+    def test_a_replacement_asks_about_its_payment_intent(self, connected):
+        self._card(connected, age=dt.timedelta(minutes=5), reference="pi_bf:refunded-500")
+
+        with mock.patch.object(connect, "fee_cents_for", return_value=465) as read:
+            webhook.sweep()
+
+        read.assert_called_once_with("pi_bf", organization=connected)
+
+    def test_the_read_is_given_up_after_an_hour(self, connected):
+        self._card(connected, age=dt.timedelta(hours=1, minutes=1))
+
+        with mock.patch.object(connect, "fee_cents_for", return_value=465) as read:
+            assert webhook.sweep()["fees"] == 0
+
+        read.assert_not_called()
+
+    def test_a_filled_fee_and_a_manual_payment_are_never_read(self, connected):
+        self._card(connected, age=dt.timedelta(minutes=5), fee=300)
+        invoice = IssuedInvoiceFactory(organization=connected)
+        PaymentFactory(invoice=invoice, organization=connected, method=PaymentMethod.CASH)
+
+        with mock.patch.object(connect, "fee_cents_for", return_value=465) as read:
+            assert webhook.sweep()["fees"] == 0
+
+        read.assert_not_called()
