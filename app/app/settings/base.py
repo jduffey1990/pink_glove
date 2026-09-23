@@ -437,6 +437,10 @@ CACHES = {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
         "LOCATION": REDIS_URL,
         "KEY_PREFIX": "pink_glove",
+        # Passed to the redis client. A Redis that silently drops a
+        # connection must fail a throttled request in seconds, not hold its
+        # gunicorn thread until TCP gives up (see health.views._check_redis).
+        "OPTIONS": {"socket_connect_timeout": 2, "socket_timeout": 2},
     }
 }
 

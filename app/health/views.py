@@ -61,12 +61,22 @@ class ReadinessView(APIView):
 
     @staticmethod
     def _check_redis() -> str:
+        # Both timeouts, not just the connect one. Upstash drops idle
+        # connections; when it closes one politely the ping fails fast, but
+        # when it drops one silently a read with no timeout blocks until the
+        # kernel gives up on TCP -- tens of minutes -- and gunicorn's gthread
+        # worker never reaps a hung request thread. Four such probes and the
+        # web machine served nothing for half an hour (staging, 2026-09-23).
+        # The client is closed so a probe does not leave a connection behind.
         try:
             import redis
             from django.conf import settings
 
-            client = redis.from_url(settings.REDIS_URL, socket_connect_timeout=2)
-            client.ping()
+            client = redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+            try:
+                client.ping()
+            finally:
+                client.close()
             return "ok"
         except Exception as exc:
             logger.warning("Readiness: redis check failed: %s", exc)

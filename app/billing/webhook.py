@@ -307,7 +307,21 @@ def charge_refunded(row: StripeEvent) -> None:
 
     live = list(_stripe_payments_for(organization, intent))
     if not live:
-        return  # nothing of ours to reverse
+        # Nothing of ours to reverse. Not an error -- Stripe may be telling
+        # us about a charge that was never ours to ledger -- but loud, because
+        # the other way this happens is a checkout event lost before it was
+        # applied (a worker killed under it): the operator sees a refund that
+        # changed nothing, and the fix is to replay the checkout event first
+        # (docs/DEPLOY.md, "When a payment does not show up").
+        logger.warning(
+            "Stripe refund %s on %s: no live payment for PaymentIntent %s in organization %s;"
+            " nothing to void",
+            charge.get("id"),
+            row.account,
+            intent,
+            organization.pk,
+        )
+        return
 
     # Stripe does not promise order. The cumulative amount already applied
     # is in the live replacement's reference; an event that refunds no more

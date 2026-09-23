@@ -270,6 +270,12 @@ no connect button, no pay link, and the pay and webhook endpoints answer
    should show `POST … 200`. No line at all with `pending_webhooks: 0` in
    step 1 means no endpoint is subscribed for connected accounts (step 2
    above). A `400` means the `whsec_` on Fly is not this endpoint's.
+   Compare the event's `created` with `fly checks list`: an event that
+   fired while `web` was critical was delivered into a machine that could
+   not answer, and once the sandbox's few retries are spent
+   `pending_webhooks` reads 0 with nothing ever logged. Step 4 is the fix.
+   (`fly logs --no-tail` is the last hundred lines of *all* machines;
+   `--machine <id>` reads one machine's log further back.)
 3. Did the worker finish it? `/admin/` → Billing → Stripe events: the row's
    status and error. RECEIVED with nothing in the worker log means the
    worker died under it -- `fly logs … | grep <worker machine id>` will
@@ -283,6 +289,20 @@ no connect button, no pay link, and the pay and webhook endpoints answer
    (`--account`, not `--stripe-account`: the endpoint is the platform's.)
    Or from the dashboard: the event → Resend. Never pay again instead --
    the second charge is real and the invoice ends up overpaid.
+
+**When a refund does not show up.** The same four steps with
+`--type charge.refunded`. One more way it goes wrong: the refund arrives,
+the worker marks it PROCESSED in milliseconds, and the invoice does not
+move. That is a refund of a payment the ledger never had -- the checkout
+event before it was lost (step 3 above) and never replayed -- and the
+worker log says so: `no live payment for PaymentIntent pi_…; nothing to
+void`. Replay the *checkout* event first (step 4); the payment appears.
+The refund event is PROCESSED and a resend of a processed event is
+ignored by design, so void that payment in the app by hand, reason
+"Refunded in Stripe: $X of $Y" -- the entry the handler would have
+written. Nothing on the invoice's lines changes for a refund, ever: lines
+are what was billed, and the ledger cannot shrink them (ADR-025); the
+payment goes void and the balance comes back.
 
 Locally, the Stripe CLI forwards Connect events to the dev server:
 
@@ -392,4 +412,4 @@ docker compose -f deploy/docker-compose.rehearsal.yml down -v
 | Postgres credentials | `fly postgres users` / `fly secrets set DATABASE_URL=…`; machines restart on the new secret. |
 | Tigris credentials | `fly storage update` or the Tigris console; set the new `AWS_*` secrets. Signed URLs already issued stop working. |
 | A bad deploy | `fly releases --app …` then `fly deploy --image registry.fly.io/…:<previous tag>`. |
-| A machine stuck unhealthy | `fly checks list` first: it shows the probe's actual reply. A `503` from readiness (`/health/ready/`) means Postgres or Redis is unreachable from it; `connection refused` or a timeout means the process is wedged, `fly machines restart <id>`. A `400` means the app rejected the probe's `Host` header (Fly probes by private IP; `app/middleware/health.py` exempts the two probes and nothing else). |
+| A machine stuck unhealthy | `fly checks list` first: it shows the probe's actual reply. A `503` from readiness (`/health/ready/`) means Postgres or Redis is unreachable from it; `connection refused` or `context deadline exceeded` means the process is wedged, `fly machines restart <id>`. The tell for a wedge in `fly logs` is probes logged in *bursts* -- eight `/health/ready/` lines with one timestamp is two minutes of queued probes drained at once -- and then nothing. Every request slot is a thread stuck on a read, and gunicorn's gthread worker never reaps one; the readiness check and the cache now carry a read timeout so a dropped Redis connection is a 503, not a dead machine (2026-09-23). A `400` means the app rejected the probe's `Host` header (Fly probes by private IP; `app/middleware/health.py` exempts the two probes and nothing else). |

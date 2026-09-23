@@ -34,6 +34,25 @@ class TestReadiness:
         assert response.status_code == 503
         assert response.json()["status"] == "degraded"
 
+    def test_the_redis_probe_cannot_hang_and_leaves_no_connection_behind(self, api_client):
+        """
+        A connection Redis drops silently blocks a read with no timeout until
+        TCP gives up, and gunicorn's gthread worker never reaps a hung
+        request thread: four such probes and the web machine served nothing
+        for half an hour (staging, 2026-09-23). Both timeouts, and the client
+        closed, so a probe is bounded and leaves nothing open.
+        """
+        client = mock.Mock()
+        with mock.patch("redis.from_url", return_value=client) as from_url:
+            response = api_client.get(reverse("health:ready"))
+
+        assert response.status_code == 200
+        kwargs = from_url.call_args.kwargs
+        assert kwargs["socket_connect_timeout"] == 2
+        assert kwargs["socket_timeout"] == 2
+        client.ping.assert_called_once()
+        client.close.assert_called_once()
+
     def test_a_failure_does_not_describe_the_infrastructure(self, api_client):
         """Public endpoint; a driver error names the host, port, database and user."""
         with mock.patch(

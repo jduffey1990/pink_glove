@@ -461,12 +461,26 @@ class TestChargeRefunded:
         assert Payment.objects.get(provider_reference="pi_r:refunded-12000").amount_cents == 8000
         assert balance_cents(paid) == 12000
 
-    def test_a_refund_of_a_charge_we_never_saw_is_a_no_op(self, connected):
+    def test_a_refund_of_a_charge_we_never_saw_is_a_no_op_that_says_so(self, connected, caplog):
+        """
+        Nothing to void is not an error, but it is said aloud: the other way
+        a refund finds no payment is a checkout event lost before it was
+        applied, and an operator watching a refund change nothing needs the
+        log to say why (staging, 2026-09-23).
+        """
         invoice = IssuedInvoiceFactory(organization=connected)
         row = ledgered(invoice, self.charge(refunded=20000), "charge.refunded")
 
-        assert webhook.process(str(connected.pk), str(row.pk)) == StripeEventStatus.PROCESSED
+        with caplog.at_level("WARNING", logger="billing.webhook"):
+            status = webhook.process(str(connected.pk), str(row.pk))
+
+        assert status == StripeEventStatus.PROCESSED
         assert not Payment.objects.exists()
+        assert any(
+            "no live payment for PaymentIntent pi_r" in r.getMessage()
+            and "nothing to void" in r.getMessage()
+            for r in caplog.records
+        )
 
     def test_refunds_arriving_out_of_order_never_put_money_back(self, connected, paid):
         """
