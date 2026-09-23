@@ -26,6 +26,7 @@ second delivery, and `Payment`'s unique (provider, provider_reference) refuses
 a second row for one PaymentIntent.
 """
 
+import datetime as dt
 import json
 import logging
 from collections.abc import Callable
@@ -206,6 +207,59 @@ def process(organization_id: str, stripe_event_id: str) -> str:
         logger.exception("Stripe event %s (%s) failed", row.event_id, row.type)
         raise
     return row.status
+
+
+# A row still RECEIVED this long after delivery has lost its task: the
+# handler runs in milliseconds and the task's three retries with backoff are
+# over inside a minute, so this is a margin, not a tuning knob. Re-queuing is
+# idempotent, so guessing short costs a wasted run, never a second payment.
+STALE_AFTER = dt.timedelta(minutes=10)
+# ...and this long means re-queuing is not helping: the message is taken and
+# never finished -- a handler the kernel kills every time, say. FAILED puts it
+# in the admin's queue for a person instead of killing a worker every sweep.
+ABANDON_AFTER = dt.timedelta(hours=1)
+ABANDONED = "Not processed within an hour of delivery despite re-queuing; needs a person."
+
+
+def sweep() -> dict[str, int]:
+    """
+    The ledger as the queue of record (ADR-024): re-queue every event that
+    was delivered, ledgered, and then never applied.
+
+    Late acknowledgement puts a task back when a worker *child* dies under
+    it; nothing does when the whole worker machine goes, or the broker
+    forgets -- with a Redis broker an unacknowledged message comes back only
+    after the visibility timeout, an hour by default. The first staging
+    payment sat RECEIVED for a day this way (2026-09-22). This runs from
+    beat every few minutes and gets there in ten, from the row.
+
+    Takes no tenant: it fans out per row, and each task is handed that row's
+    own organization id (invariant 3), the same shape as
+    `audit.evaluate_access_reveals_all`.
+    """
+    now = timezone.now()
+    stale = StripeEvent.objects.filter(
+        status=StripeEventStatus.RECEIVED,
+        organization__isnull=False,
+        created_at__lt=now - STALE_AFTER,
+    ).order_by("created_at")
+
+    requeued = abandoned = 0
+    for row in stale:
+        if row.created_at < now - ABANDON_AFTER:
+            _finish(row, StripeEventStatus.FAILED, ABANDONED)
+            logger.error("Stripe event %s (%s) abandoned: %s", row.event_id, row.type, ABANDONED)
+            abandoned += 1
+        else:
+            logger.warning(
+                "Stripe event %s (%s) still RECEIVED after %s; re-queued",
+                row.event_id,
+                row.type,
+                now - row.created_at,
+            )
+            _enqueue(row)
+            requeued += 1
+    return {"requeued": requeued, "abandoned": abandoned}
 
 
 def _finish(row: StripeEvent, status: str, error: str = "") -> None:

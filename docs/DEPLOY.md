@@ -280,7 +280,12 @@ no connect button, no pay link, and the pay and webhook endpoints answer
    status and error. RECEIVED with nothing in the worker log means the
    worker died under it -- `fly logs … | grep <worker machine id>` will
    show why (the first one was an out-of-memory kill; the worker VM is
-   512MB now, `deploy/fly.toml`).
+   512MB now, `deploy/fly.toml`). A row does not stay RECEIVED for long:
+   beat runs `billing.sweep_stripe_events` every five minutes and re-queues
+   anything still RECEIVED after ten, so give it that long before
+   replaying by hand. One still RECEIVED an hour on is marked FAILED with
+   "needs a person" -- re-queuing did not help, so read the worker log
+   for what kills it before step 4.
 4. **Replay** by resending from Stripe; a resent event whose row is still
    RECEIVED or FAILED is re-queued, so this is the replay button:
    ```bash

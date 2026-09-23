@@ -7,9 +7,11 @@ processing side through `webhook.process` with the task's own arguments.
 tests chose, and `billing.connect` is patched where it would call out.
 """
 
+import datetime as dt
 from unittest import mock
 
 import pytest
+from django.utils import timezone
 
 from billing import connect, webhook
 from billing.enums import PaymentMethod, StripeEventStatus
@@ -594,3 +596,90 @@ class TestAccountUpdated:
         refresh.assert_called_once_with(connected)
         connected.refresh_from_db()
         assert connected.stripe_charges_enabled is True  # the event's False was not copied
+
+
+@pytest.mark.django_db
+class TestSweep:
+    """
+    The ledger is the queue of record. A row delivered and ledgered but
+    never applied is re-queued from beat; one that re-queuing does not help
+    is handed to a person.
+    """
+
+    def _received(self, connected, *, age):
+        row = StripeEventFactory(
+            organization=connected,
+            account=connected.stripe_account_id,
+            type="account.updated",
+            status=StripeEventStatus.RECEIVED,
+        )
+        StripeEvent.objects.filter(pk=row.pk).update(created_at=timezone.now() - age)
+        row.refresh_from_db()
+        return row
+
+    def test_a_stale_received_row_is_requeued_with_its_own_tenant(self, connected):
+        row = self._received(connected, age=dt.timedelta(minutes=11))
+
+        with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
+            assert webhook.sweep() == {"requeued": 1, "abandoned": 0}
+
+        delay.assert_called_once_with(str(connected.pk), str(row.pk))
+        row.refresh_from_db()
+        assert row.status == StripeEventStatus.RECEIVED
+
+    def test_a_fresh_received_row_is_still_in_flight(self, connected):
+        self._received(connected, age=dt.timedelta(minutes=2))
+
+        with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
+            assert webhook.sweep() == {"requeued": 0, "abandoned": 0}
+
+        delay.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "status",
+        [StripeEventStatus.PROCESSED, StripeEventStatus.FAILED, StripeEventStatus.IGNORED],
+    )
+    def test_settled_rows_are_left_alone(self, connected, status):
+        row = self._received(connected, age=dt.timedelta(days=2))
+        StripeEvent.objects.filter(pk=row.pk).update(status=status)
+
+        with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
+            assert webhook.sweep() == {"requeued": 0, "abandoned": 0}
+
+        delay.assert_not_called()
+        row.refresh_from_db()
+        assert row.status == status
+
+    def test_a_row_requeuing_has_not_helped_is_handed_to_a_person(self, connected):
+        row = self._received(connected, age=dt.timedelta(hours=1, minutes=1))
+
+        with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
+            assert webhook.sweep() == {"requeued": 0, "abandoned": 1}
+
+        delay.assert_not_called()
+        row.refresh_from_db()
+        assert row.status == StripeEventStatus.FAILED
+        assert row.error == webhook.ABANDONED
+        assert row.processed_at is not None
+
+    def test_the_sweep_actually_applies_the_event(self, connected, no_fee):
+        """Through the task and Celery's eager path: the row ends PROCESSED."""
+        from billing.tasks import sweep_stripe_events
+
+        invoice = IssuedInvoiceFactory(organization=connected)
+        row = ledgered(invoice, session(invoice))
+        StripeEvent.objects.filter(pk=row.pk).update(
+            created_at=timezone.now() - dt.timedelta(minutes=30)
+        )
+
+        assert sweep_stripe_events.apply().get() == {"requeued": 1, "abandoned": 0}
+
+        row.refresh_from_db()
+        assert row.status == StripeEventStatus.PROCESSED
+        assert Payment.objects.count() == 1
+
+    def test_beat_runs_it_every_five_minutes(self, settings):
+        entry = settings.CELERY_BEAT_SCHEDULE["sweep-stripe-events"]
+
+        assert entry["task"] == "billing.sweep_stripe_events"
+        assert str(entry["schedule"]) == "<crontab: */5 * * * * (m/h/dM/MY/d)>"

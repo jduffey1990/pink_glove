@@ -425,6 +425,14 @@ CELERY_BEAT_SCHEDULE = {
         "task": "audit.evaluate_access_reveals_all",
         "schedule": crontab(minute="0"),
     },
+    # The webhook ledger as the queue of record: any Stripe event delivered
+    # and ledgered but still unapplied after ten minutes is re-queued, so a
+    # worker machine lost under a task costs minutes, not a person noticing
+    # (billing.webhook.sweep). Cheap: one query and a few Redis commands.
+    "sweep-stripe-events": {
+        "task": "billing.sweep_stripe_events",
+        "schedule": crontab(minute="*/5"),
+    },
 }
 
 REDIS_URL = CELERY_BROKER_URL

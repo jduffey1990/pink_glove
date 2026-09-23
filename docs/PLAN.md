@@ -1898,6 +1898,21 @@ Replaying a FAILED event is `process_stripe_event.delay(org_id, row_id)`
 from a shell -- the admin "replay" action the spec mentioned is not built;
 the admin lists FAILED rows read-only and the shell is one line. Open.
 
+**The ledger is the queue of record (added 2026-09-23).** The first
+staging payment was ledgered, enqueued, and lost when the kernel killed the
+worker under it: the default early acknowledgement had already taken the
+message off Redis, and a process killed raises nothing for Celery's retry
+to catch. The row sat RECEIVED for a day. Two layers now: the task
+acknowledges late and is put back when a worker child dies
+(`acks_late`, `reject_on_worker_lost`); and `billing.sweep_stripe_events`
+runs from beat every five minutes and re-queues any row still RECEIVED
+after ten, which also covers a lost worker *machine* (with a Redis broker
+an unacknowledged message otherwise returns only after the hour-long
+visibility timeout). A row still RECEIVED an hour on is marked FAILED with
+a note, so a task that kills its worker every run lands in the admin's
+queue instead of looping. Ten minutes and an hour are margins, not knobs:
+the handler runs in milliseconds and the retries finish inside a minute.
+
 **Overpayment is recorded as it happened.** `record_provider_payment` has
 no balance check and is idempotent on `(provider, provider_reference)`
 including void rows; `overpaid_cents` is published and the invoice page

@@ -93,3 +93,16 @@ def process_stripe_event(self, organization_id: str, stripe_event_id: str) -> st
     from billing.webhook import process
 
     return process(organization_id, stripe_event_id)
+
+
+@shared_task(name="billing.sweep_stripe_events")
+def sweep_stripe_events() -> dict[str, int]:
+    """
+    Re-queue ledgered Stripe events that were never applied (`billing.webhook.sweep`).
+
+    Scheduled from beat. Takes no tenant because it fans out: every task it
+    queues is handed its own row's organization id, like the audit sweep.
+    """
+    from billing.webhook import sweep
+
+    return sweep()
