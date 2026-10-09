@@ -7,17 +7,20 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 ## Start here
 
-Everything through Phase 4b, plus what the first staging payment taught
-(2026-09-23), is on `main`, tests green — see "Phase 4b as built" and the
-two "Found on ..." sections at the end of this file. **Staging is up** at
-`https://pink-glove-staging.fly.dev` and CI deploys `main` to it; Stripe
-Connect is configured there per `docs/DEPLOY.md` step 9. Current work is
-**4c** (the platform subscription) on `phase-4c-platform-subscription`,
-spec under "Phase 4 — Billing", section 4c; Phase 5 follows it, as the
-table below says. Work on a branch, never on `main`; run the phase gate in
-`CLAUDE.md` at the end of each phase. Read "Phase 3b as built" before
-touching `ui/`, and "Phase gate — baseline": it records what was fixed and
-decided before Phase 4, and a backlog to fold in as files are touched.
+Everything through Phase 4c is built and gated: 4b and the staging fixes
+are on `main`; **4c (the platform subscription) is on
+`phase-4c-platform-subscription`, gated, waiting for Jordan to merge** --
+see "Phase 4c as built" at the very end of this file, and ADR-028.
+**Staging is up** at `https://pink-glove-staging.fly.dev` and CI deploys
+`main` to it; Stripe Connect is configured there per `docs/DEPLOY.md`
+step 9, and the subscription will be once Jordan follows step 10. Next is
+**Phase 5** (notifications and the customer portal), outlined under "Later
+phases": branch from `main` once 4c is merged, write its spec section in
+full before code, as 4a, 4b and 4c did. Work on a branch, never on
+`main`; run the phase gate in `CLAUDE.md` at the end of each phase. Read
+"Phase 3b as built" before touching `ui/`, and "Phase gate — baseline": it
+records what was fixed and decided before Phase 4, and a backlog to fold
+in as files are touched.
 
 ```bash
 cd app
@@ -31,7 +34,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **1049 passing** in `app/`, and **131** in `ui/` (`cd ui && npm test`).
+Expect **1234 passing** in `app/`, and **146** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -43,12 +46,11 @@ testing gotchas that will otherwise cost you an hour each.
 2. ~~Stripe Connect~~ — **decided**: Connect with direct charges, plus a
    platform subscription (ADR-024). Payments are a ledger and Stripe is one
    method (ADR-025); an invoice is a snapshot (ADR-026).
-3. **4c's three numbers** — the monthly price (a Price in the Stripe
-   dashboard, never in code), the trial length (`PLATFORM_TRIAL_DAYS`,
-   spec default 30) and the grace after coverage ends
-   (`PLATFORM_GRACE_DAYS`, spec default 14). The spec builds against the
-   defaults; Jordan sets the real values in Stripe and in Fly's secrets,
-   and nothing in code changes if they differ.
+3. **4c's three numbers** — still Jordan's: the monthly price (a Price in
+   the Stripe dashboard, never in code), the trial length
+   (`PLATFORM_TRIAL_DAYS`, built with 30) and the grace after coverage
+   ends (`PLATFORM_GRACE_DAYS`, built with 14). Set in Stripe and in Fly's
+   secrets per `docs/DEPLOY.md` step 10; nothing in code changes.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -61,7 +63,7 @@ testing gotchas that will otherwise cost you an hour each.
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
 | D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
 | 4b | Stripe Connect: tenants take card payments | **Done** (merged 2026-09-23, with the staging fixes) |
-| 4c | Platform subscription: tenants pay for pink_glove | **In progress** on `phase-4c-platform-subscription` — spec written 2026-10-09, no code yet |
+| 4c | Platform subscription: tenants pay for pink_glove | **Done** on `phase-4c-platform-subscription` (2026-10-09), gated; waiting to be merged |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
 ---
@@ -2481,3 +2483,182 @@ of it was lost twice, for reasons the rehearsal cannot reach:
   Stripe's own sentence as a 503.
 
 Backend 1027 → 1035.
+
+---
+
+## Phase 4c as built
+
+Branch `phase-4c-platform-subscription`, on top of `main` after the
+fee-backfill fix (2026-09-23). Backend 1049 → 1234, frontend 131 → 146.
+What the spec asked for, and what each turned into:
+
+**The coverage rule lives in `organizations/services.py`, as specified,
+and it is the only thing that moves `is_active` for billing.** Pure
+functions of the row and a moment: `covered_until`, `grace_ends_at`,
+`billing_state`, `billing_notice`, `billing_summary`, `available_actions`,
+`apply_coverage`. `billing/subscription.py` re-reads Stripe and then calls
+`apply_coverage`; the webhook handlers and the daily task call
+`refresh_subscription`; nothing else touches the fields. The trial is
+stamped in `Organization.save()` on first save, and migration 0006 gave
+every existing row one from the deploy.
+
+**`paid_through` reads the subscription item, and never moves forward on
+an unpaid read.** On the pinned API version the period is on
+`items.data[0]`; the item's `current_period_end` counts only when the
+latest invoice is `paid` (or Stripe is running a trial of its own),
+otherwise its `current_period_start` -- and, added by the gate, never
+later than what the row already says, because a subscription left to
+cycle unpaid advances its period every month. The read also refuses a
+Subscription whose `customer` is not the organization's own.
+
+**One webhook view, two endpoints.** `StripeWebhookView.as_view(platform=
+True)` verifies with the platform secret, resolves by `data.object.customer`,
+and ledgers with `account == ""`, which is what `process` keys the
+dispatch on (`checkout.session.completed` is in both tables). Every
+platform handler is one function: adopt the subscription id the
+organization lacks (or whose own is no longer live), then re-read. One
+thing the spec did not ask for: `_redeliver` lets the *right* endpoint
+take over a row the wrong one ledgered IGNORED and unowned -- a platform
+endpoint misconfigured to hear connected accounts would otherwise make the
+Connect delivery of the same event a dropped replay. The same path makes
+Stripe's Resend apply an event that arrived before the organization held
+its customer.
+
+**The banner and the card compose nothing.** The server publishes `state`,
+`level`, `notice` (the banner, null when quiet) and -- added by the gate --
+`summary` (the card, always a sentence), each written for the reader's
+role: the owner is told what to do, everyone else to ask the owner, and
+the tenant's own customers nothing at all (no notice, no banner, the block
+blank but for the state word). `available_actions` is what the endpoints
+will accept; the card draws its buttons from it and `session.isOwner`.
+
+**The one hole in the read-only rule** is `allowed_while_inactive = True`
+on exactly `SubscriptionCheckoutView`, `SubscriptionPortalView` (owner)
+and `SubscriptionRefreshView` (admin+), honoured in `IsOrgMember` after
+the membership check and before the role check, so the role line still
+holds on a deactivated organization. An organization deactivated *by
+hand* is refused checkout with a 409: billing would never turn it back on,
+so the money would buy nothing.
+
+**The daily task runs at 01:00 UTC, an hour before the materializer**, so
+a tenant it reactivates is filled the same night; it covers inactive
+organizations too, re-reads each subscription, and applies the rule from
+what is on file when Stripe is unreachable.
+
+**Deviations from the spec, all deliberate:** no `stripe_customer_id`
+uniqueness test was in the spec's list -- there is one now; the card's
+"Past invoices" secondary button is labelled "Billing portal", which is
+what it opens; `billing_enabled` is one function in `organizations.services`
+that `billing.subscription` re-exports rather than a second copy; the
+admin can edit `deactivated_for_billing_at`, because clearing it is how
+an operator keeps a lapsed organization off even if it pays.
+
+**What is not built, on purpose:** per-seat or usage pricing; a Stripe-side
+trial; card management pages (the portal); plan changes (one plan); a
+throttle on the three owner endpoints (consistent with the Connect ones;
+each is a single Stripe call by an authenticated owner); an admin action
+to replay a FAILED platform event (the shell one-liner from 4b applies).
+
+### Phase gate — Phase 4c (2026-10-09)
+
+Three reviewers ran in parallel (coverage; DRY/modularity/orthogonality;
+authentication, authorization and money), plus `/security-review` on the
+phase diff. Everything below marked fixed was reproduced first.
+
+**1. Test coverage.** Backend 1049 → 1234, frontend 131 → 146. Every new
+field, service function, handler, task, endpoint, serializer and frontend
+helper has a direct test; the coverage rule is tabled by state with the
+clock held; the Stripe module is tested at the client boundary with real
+`StripeObject` trees so the dict-subclass gotcha around `.items` is
+exercised; the webhook runs signed bytes against both secrets in both
+directions; each endpoint has a test per role on each side, plus the
+inactive-organization exemption with a PATCH and the Connect views beside
+it still refused. Fixed after review: the `stripe_customer_id` constraint
+had no `IntegrityError` test; the migration backfill was untested; the
+inactive-organization role check ran only the dispatcher; the same-endpoint
+take-over after onboarding and the older `invoice.subscription` shape were
+untested; one test name claimed the block was absent when it is `exempt`.
+*Gaps left open:* no page component has a spec (same as every phase):
+`settleReturn`, `subscriptionAction` and the `App.vue` alert are exercised
+by hand; `OrganizationAdmin`'s fieldsets are untested, like every admin;
+no explicit "owner of A with B's header" test on the three endpoints
+(`TenantMiddleware`'s own tests cover it).
+
+**2. DRY.** Fixed: the card composed dated sentences on the client for
+the quiet trial and active states and carried three unreachable fallbacks
+(ADR-023) -- the server publishes `summary` now and the card renders it;
+`_settings_url` was built twice (`connect.settings_page_url` serves both);
+`enabled()` twice; the two return-from-Stripe handlers on the settings
+page were one shape (`settleReturn`); three inline `api.post<{url}>`
+(`postForUrl`); the owner/non-owner call to action spelled four times
+(`_tell`). *Accepted:* `OrganizationSummarySerializer` stays in
+`users/serializers.py` by history, and `ORGANIZATION_INACTIVE` in
+`base/permissions.py`; moving either is a rename for its own sake.
+
+**3. Modularity.** The dependency direction holds: `billing` imports
+`organizations`; nothing outside `billing/` imports it but `seed_demo`
+(pre-existing, recorded). `organizations/services.py` imports
+`base.permissions` (one string) and `users.enums`; `users/serializers.py`
+imports `organizations/serializers.py`; a fresh-interpreter import of each
+module first finds no cycle. `stripe` is imported in `connect.py`,
+`subscription.py` (through `connect.client`) and `webhook.py` only.
+
+**4. Orthogonality.** Recorded in `CLAUDE.md`: the six platform event
+types (`PLATFORM_HANDLERS` and runbook step 10); the settings page's path
+and `?subscription=` keys (`connect.settings_page_url`, the page);
+`allowed_while_inactive` (three views, `base/permissions.py`);
+`ENUM_NAME_OVERRIDES` gains the two `state` enums and `NoticeLevel`; and
+the three readers of the pinned API version's object shapes
+(`paid_through`, `_subscription_id_in`, the fixtures), which a version
+bump must re-read. The enforcer's hour is now before the materializer's,
+and the comment says why.
+
+**5. Security.** `/security-review`: no findings above its bar. The gate
+reviewer found one MEDIUM and three LOW, all fixed:
+
+- **MEDIUM -- the tenant's customers were served its billing state.** The
+  notice, banner and full block went to `customer`-role members through
+  the session and `GET /api/organizations/current/`. `billing_notice` and
+  `billing_summary` answer nothing for a non-staff role, and the serializer
+  blanks the block but for the state word. Tested per role on both routes.
+- **LOW -- `refresh_subscription` did not check the Subscription's
+  `customer`.** It refuses to mirror one that is not the organization's.
+- **LOW -- `paid_through` crept forward across unpaid cycles.** An unpaid
+  read never moves the stored date forward. Tested with a second unpaid
+  cycle, and a paid read still moving it.
+- **LOW -- a billing-deactivated organization could not be kept off by
+  hand.** The admin can clear the stamp; the description says when to.
+
+Also fixed from `/security-review`'s notes: the owner of a hand-deactivated
+organization could buy a subscription that would never restore it (409
+now). *Accepted:* no throttle on the three owner endpoints (as 4b's).
+Invariants: `organization` and every subscription field are written only
+from the resolved tenant, a re-read of Stripe, or the admin (`is_active`,
+`billing_exempt`, `trial_ends_at`, `deactivated_for_billing_at`); nothing
+in the block is writable through the API (tested); both tasks take
+`organization_id`; every new view declares its permission; the platform
+webhook is a plain Django view, `csrf_exempt`, POST-only, verified with
+its own secret, the body never logged. `AllowAny`, unchanged from 4b:
+`PayInvoiceView`, `PayInvoiceCheckoutView`, the health probes, the auth
+views. `csrf_exempt`: `StripeWebhookView`, now mounted twice
+(`/api/billing/stripe/webhook/`, `/api/billing/stripe/platform-webhook/`).
+`allowed_while_inactive`: the three subscription views, and no other.
+Deploy audit clean. No secrets in git, `.env.example` or the bundle.
+Local rehearsal: the image rebuilt with the gate fixes, the stack up under production
+settings behind Caddy, seeded; readiness `ok`, `/schedule` 200 with
+`no-cache`, an API 404 is Django's, http 301s to https, an asset is
+immutable; a sign-in over TLS as the seeded trial owner (202, the code
+from the web log, verify 200) reads the billing block and the session
+summary as `exempt` with the trial stamped five days out, because the
+rehearsal has no price configured -- the documented "nothing to show"
+shape -- and checkout, portal and the unsigned platform webhook each
+answer 503 "Subscriptions are not configured on this server." Torn
+down with `-v`.
+
+**6. Branch and production guard.** All of Phase 4c is on
+`phase-4c-platform-subscription`, branched from `main` at the fee-backfill
+merge. Nothing was committed to `main` and nothing was pushed by an agent.
+Staging exists and was not touched: no `fly` command was run, no secret
+set; the platform price and secret are not set there, so staging runs
+this branch with the subscription off until Jordan follows
+`docs/DEPLOY.md` step 10.
