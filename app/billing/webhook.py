@@ -216,7 +216,8 @@ class StripeWebhookView(View):
             else settings.STRIPE_CONNECT_WEBHOOK_SECRET
         )
         if not settings.STRIPE_ENABLED or not secret:
-            return JsonResponse({"detail": connect.NOT_ENABLED}, status=503)
+            detail = subscription.NOT_ENABLED if self.platform else connect.NOT_ENABLED
+            return JsonResponse({"detail": detail}, status=503)
 
         import stripe
 

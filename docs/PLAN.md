@@ -1582,7 +1582,8 @@ the Subscription is the truth:
 Six types, registered on the platform endpoint ("events on your account",
 not connected accounts), listed in the runbook and nowhere else.
 
-`billing.enforce_platform_billing_all` runs from beat daily at 03:00 UTC
+`billing.enforce_platform_billing_all` runs from beat daily at 01:00 UTC,
+an hour before the materializer so a reactivated tenant is filled the same night,
 and fans out `billing.enforce_platform_billing(organization_id)` for
 every organization, inactive ones included (reactivation is its job too).
 Each re-reads the subscription from Stripe when there is one -- a call per
@@ -1686,7 +1687,7 @@ the three endpoints answering on an inactive organization while a
   dashboard's clock can be advanced to force. A "when the banner is wrong"
   section, in the shape of 4b's "when a payment does not show up": is the
   event there, did it arrive, did the worker apply it, and what the daily
-  task would do at 03:00 regardless.
+  task would do at 01:00 regardless.
 - `seed_demo`: the two organizations differ here as they do in tax -- one
   is `billing_exempt` (the banner never shows), the other on a trial that
   ends in five days (the banner shows, warning, with the date). A rule

@@ -27,7 +27,7 @@
 
   // The subscription banner (Phase 4c). The sentence is the server's; this
   // only decides whether to draw it and where to send an admin.
-  const banner = computed(() => billingBanner(session.billingNotice, session.isAdminOrHigher))
+  const banner = computed(() => billingBanner(session.billing, session.isAdminOrHigher))
 
   const navigation = computed(() => {
     const items: { title: string, icon: string, to: string }[] = []

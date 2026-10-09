@@ -124,7 +124,7 @@ export const useSessionStore = defineStore('session', () => {
   const isActive = computed(() => organization.value?.is_active ?? true)
 
   /** The server's own words about the subscription, for the banner (ADR-023). */
-  const billingNotice = computed(() => organization.value?.billing ?? null)
+  const billing = computed(() => organization.value?.billing ?? null)
 
   /** True when the user must choose before anything else can be scoped. */
   const needsOrganizationChoice = computed(
@@ -231,7 +231,7 @@ export const useSessionStore = defineStore('session', () => {
     isOwner,
     timeZone,
     isActive,
-    billingNotice,
+    billing,
     needsOrganizationChoice,
     boot,
     refresh,

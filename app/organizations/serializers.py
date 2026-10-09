@@ -62,6 +62,9 @@ class PlatformBillingSerializer(BillingNoticeSerializer):
     the page draws its buttons from it and not from `status`.
     """
 
+    summary = serializers.CharField(
+        help_text="One sentence for the settings card, always present; the notice when there is one."
+    )
     trial_ends_at = serializers.DateTimeField(allow_null=True)
     covered_until = serializers.DateTimeField(allow_null=True)
     grace_ends_at = serializers.DateTimeField(allow_null=True)
@@ -71,6 +74,22 @@ class PlatformBillingSerializer(BillingNoticeSerializer):
     available_actions = serializers.ListField(child=serializers.CharField())
 
     def to_representation(self, organization):
+        role = role_for_notice(self.context)
+        if not coverage.is_staff(role):
+            # The tenant's customers: the state word (they can see read-only
+            # for themselves) and none of the commercial relationship.
+            return {
+                **super().to_representation(organization),
+                "summary": "",
+                "trial_ends_at": None,
+                "covered_until": None,
+                "grace_ends_at": None,
+                "status": "",
+                "cancel_at_period_end": False,
+                "exempt": False,
+                "available_actions": [],
+            }
+
         stamp = self.fields["trial_ends_at"].to_representation
 
         def when(value):
@@ -78,6 +97,7 @@ class PlatformBillingSerializer(BillingNoticeSerializer):
 
         return {
             **super().to_representation(organization),
+            "summary": coverage.billing_summary(organization, role),
             "trial_ends_at": when(organization.trial_ends_at),
             "covered_until": when(coverage.covered_until(organization)),
             "grace_ends_at": when(coverage.grace_ends_at(organization)),

@@ -48,6 +48,8 @@ export type BillingNotice = Schemas['BillingNotice']
 export type PlatformBilling = Schemas['PlatformBilling']
 export type BillingState = Schemas['BillingStateEnum']
 export type NoticeLevel = Schemas['NoticeLevelEnum']
+/** What every "send the browser to Stripe" endpoint answers. */
+export type Url = Schemas['Url']
 export type PublicInvoice = Schemas['PublicInvoice']
 export type PublicInvoiceLine = Schemas['PublicInvoiceLine']
 

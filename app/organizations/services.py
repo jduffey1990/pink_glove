@@ -26,7 +26,7 @@ from django.utils import timezone
 
 from base.permissions import ORGANIZATION_INACTIVE
 from organizations.enums import BillingState, NoticeLevel
-from users.enums import Role
+from users.enums import STAFF_ROLES, Role
 
 if TYPE_CHECKING:
     from organizations.models import Organization
@@ -43,6 +43,11 @@ TRIAL_NOTICE_DAYS = 7
 
 SUBSCRIBE = "subscribe"
 MANAGE = "manage"
+
+
+def is_staff(role: str | None) -> bool:
+    """Staff are told about the subscription; the tenant's customers are not."""
+    return role in STAFF_ROLES
 
 
 def billing_enabled() -> bool:
@@ -88,7 +93,7 @@ def _covered_by_trial(organization: Organization) -> bool:
     return paid is None or trial >= paid
 
 
-def billing_state(organization: Organization, now: dt.datetime | None = None) -> str:
+def billing_state(organization: Organization, now: dt.datetime | None = None) -> BillingState:
     now = now or timezone.now()
     if not organization.is_active:
         return BillingState.DEACTIVATED
@@ -132,9 +137,16 @@ def _local_date(organization: Organization, when: dt.datetime) -> str:
     return f"{local:%B} {local.day}, {local.year}"
 
 
+def _tell(owner: bool, what: str) -> str:
+    """The call to action, for the owner or for someone who must ask them."""
+    if owner:
+        return what[0].upper() + what[1:]
+    return f"Ask the organization owner to {what}"
+
+
 def billing_notice(
     organization: Organization, role: str | None, now: dt.datetime | None = None
-) -> tuple[str, str] | None:
+) -> tuple[NoticeLevel, str] | None:
     """
     The banner's `(level, sentence)`, or `None` when there is nothing to say.
 
@@ -142,6 +154,12 @@ def billing_notice(
     the owner is told what to do, everyone else is told to ask the owner,
     because telling a cleaner to update a card they cannot see is noise.
     """
+    if not is_staff(role):
+        # The tenant's own customers: how the cleaning company pays for its
+        # software is not their business. A write they cannot make is
+        # refused with the permission layer's sentence, as ever.
+        return None
+
     now = now or timezone.now()
     state = billing_state(organization, now)
     owner = role == Role.OWNER
@@ -161,21 +179,13 @@ def billing_notice(
             if _covered_by_trial(organization)
             else f"its subscription lapsed on {_local_date(organization, until)}"
         )
-        fix = (
-            "Subscribe to restore access."
-            if owner
-            else "Ask the organization owner to subscribe to restore access."
-        )
+        fix = _tell(owner, "subscribe to restore access.")
         return NoticeLevel.ERROR, f"This organization is read-only because {what}. {fix}"
 
     if state == BillingState.TRIAL:
         if until - now > dt.timedelta(days=TRIAL_NOTICE_DAYS):
             return None
-        fix = (
-            "Subscribe to keep scheduling after that."
-            if owner
-            else "Ask the organization owner to subscribe to keep scheduling after that."
-        )
+        fix = _tell(owner, "subscribe to keep scheduling after that.")
         return (
             NoticeLevel.WARNING,
             f"Your free trial ends on {_local_date(organization, until)}. {fix}",
@@ -192,11 +202,9 @@ def billing_notice(
         return None
 
     if state == BillingState.PAST_DUE:
-        fix = (
-            f"Update your card by {_local_date(organization, grace)} to keep scheduling."
-            if owner
-            else "Ask the organization owner to update the card by "
-            f"{_local_date(organization, grace)} to keep scheduling."
+        card = "your card" if owner else "the card"
+        fix = _tell(
+            owner, f"update {card} by {_local_date(organization, grace)} to keep scheduling."
         )
         return NoticeLevel.WARNING, f"A payment for your subscription failed. {fix}"
 
@@ -207,13 +215,43 @@ def billing_notice(
         if _covered_by_trial(organization)
         else f"Your subscription ended on {_local_date(organization, until)}."
     )
-    fix = (
-        f"Subscribe by {_local_date(organization, grace)} to keep scheduling."
-        if owner
-        else "Ask the organization owner to subscribe by "
-        f"{_local_date(organization, grace)} to keep scheduling."
-    )
+    fix = _tell(owner, f"subscribe by {_local_date(organization, grace)} to keep scheduling.")
     return NoticeLevel.WARNING, f"{ended} {fix}"
+
+
+def billing_summary(
+    organization: Organization, role: str | None, now: dt.datetime | None = None
+) -> str:
+    """
+    One sentence for the settings card, always present: the banner's notice
+    when there is one, otherwise the quiet state said out loud. The card
+    composes nothing of its own (ADR-023).
+    """
+    if not is_staff(role):
+        return ""
+    now = now or timezone.now()
+    notice = billing_notice(organization, role, now)
+    if notice is not None:
+        return notice[1]
+
+    state = billing_state(organization, now)
+    owner = role == Role.OWNER
+    until = covered_until(organization)
+    if state == BillingState.EXEMPT:
+        return "This organization uses pink glove at no charge."
+    if state == BillingState.TRIAL:
+        return f"Your free trial runs until {_local_date(organization, until)}. " + _tell(
+            owner, "subscribe at any time to keep going after that."
+        )
+    if state == BillingState.ACTIVE:
+        where = "your" if owner else "the organization owner's"
+        return (
+            f"Paid through {_local_date(organization, until)}. The card, receipts and "
+            f"cancellation are in {where} billing portal."
+        )
+    # Every other state carries a notice. The customer role sees none, and
+    # gets nothing here either.
+    return ""
 
 
 def apply_coverage(organization: Organization, now: dt.datetime | None = None) -> bool:

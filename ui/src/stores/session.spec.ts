@@ -320,13 +320,13 @@ describe('the billing banner (Phase 4c)', () => {
     await store.boot()
 
     expect(store.isActive).toBe(false)
-    expect(store.billingNotice?.notice).toBe('This organization is read-only.')
+    expect(store.billing?.notice).toBe('This organization is read-only.')
   })
 
   it('is active with nothing to say when signed out', () => {
     const store = useSessionStore()
 
     expect(store.isActive).toBe(true)
-    expect(store.billingNotice).toBeNull()
+    expect(store.billing).toBeNull()
   })
 })

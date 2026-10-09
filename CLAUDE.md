@@ -302,8 +302,10 @@ fresh session can read what was checked and what was left.
      mechanical, and enforced by the pre-commit schema check;
    - `ENUM_NAME_OVERRIDES` in settings needs an entry per choice set whose
      field name is too generic to identify it, or collides: `Role`,
-     `JobStatus`/`CustomerStatus`, `InvoiceStatus`, and `PaymentMethod` /
-     `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`;
+     `JobStatus`/`CustomerStatus`, `InvoiceStatus`, `PaymentMethod` /
+     `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`,
+     and `StripeState`/`BillingState`, which are both a field called `state`
+     (`NoticeLevel` is listed beside them for the name);
    - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`
      -- in development only. Deployed, the build is served by gunicorn from
      the API's own origin (ADR-027): the SPA catch-all in `app/urls.py` is
@@ -341,7 +343,12 @@ fresh session can read what was checked and what was left.
      customer filter in `listAssignableStaff`. Changing a tier in
      `users/enums.py` means all of them;
    - Stripe (4b): `STRIPE_API_VERSION` in `settings/base.py` is pinned
-     beside the SDK pin in `pyproject.toml` -- bump both together; the
+     beside the SDK pin in `pyproject.toml` -- bump both together, and
+     re-read the three places that encode that version's object shapes:
+     `billing/subscription.py` `paid_through` (the period is on the
+     subscription item), `billing/webhook.py` `_subscription_id_in` (the
+     invoice's `parent.subscription_details`), and the fixtures in
+     `billing/tests/stripe_fixtures.py`; the
      `pay_page`/`pay_checkout` throttle scopes are listed in
      `settings/base.py`, `settings/local.py` and `settings/test.py` (each
      replaces the table whole); the pay page's path (`/pay/<token>`) and the
@@ -354,8 +361,9 @@ fresh session can read what was checked and what was left.
    - the platform subscription (4c): the six platform event types are
      `billing/webhook.py`'s `PLATFORM_HANDLERS` and the list the operator
      registers on the *second* endpoint (`docs/DEPLOY.md` step 10); the
-     settings page's `?subscription=return|cancelled` keys appear in
-     `BillingSettingsPage.vue` and `billing/subscription.py`; and
+     settings page's path and its `?subscription=return|cancelled` keys
+     appear in `BillingSettingsPage.vue` and are built by
+     `connect.settings_page_url`, which `billing/subscription.py` reuses; and
      `allowed_while_inactive = True` is set on exactly the three
      subscription views in `billing/views.py` and honoured in
      `base/permissions.py` -- the one hole in the read-only rule

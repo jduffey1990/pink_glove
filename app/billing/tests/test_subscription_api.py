@@ -177,12 +177,20 @@ class TestOnAReadOnlyOrganization:
         assert response.status_code == 200
         assert response.data["state"] == "deactivated"
 
-    def test_the_role_line_still_holds_there(self, api_client, make_member, deactivated):
-        """The hole is for the inactive rule only; a dispatcher is refused as ever."""
-        client = as_role(api_client, make_member, deactivated, Role.DISPATCHER)
+    @pytest.mark.parametrize("role", [Role.ADMIN, Role.DISPATCHER, Role.CLEANER, Role.CUSTOMER])
+    def test_the_owner_line_still_holds_there(self, api_client, make_member, deactivated, role):
+        """The hole is for the inactive rule only; everyone below the owner is refused as ever."""
+        client = as_role(api_client, make_member, deactivated, role)
 
-        assert client.post(CHECKOUT).status_code == 403
-        assert client.post(PORTAL).status_code == 403
+        with mock.patch.object(subscription, "start_checkout") as start:
+            assert client.post(CHECKOUT).status_code == 403
+            assert client.post(PORTAL).status_code == 403
+        start.assert_not_called()
+
+    @pytest.mark.parametrize("role", [Role.DISPATCHER, Role.CLEANER, Role.CUSTOMER])
+    def test_the_admin_line_still_holds_there(self, api_client, make_member, deactivated, role):
+        client = as_role(api_client, make_member, deactivated, role)
+
         assert client.post(REFRESH).status_code == 403
 
     def test_and_the_organization_itself_is_still_read_only(

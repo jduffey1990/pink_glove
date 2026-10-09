@@ -158,6 +158,22 @@ class TestStartCheckout:
         api.v1.customers.create.assert_not_called()
         assert api.v1.checkout.sessions.create.call_args.args[0]["customer"] == CUSTOMER_ID
 
+    def test_an_organization_switched_off_by_hand_is_refused(self, api):
+        """Billing would never turn it back on, so the money would buy nothing."""
+        organization = OrganizationFactory(is_active=False)
+
+        with pytest.raises(ConflictError, match="not for billing"):
+            subscription.start_checkout(organization)
+
+        api.v1.customers.create.assert_not_called()
+
+    def test_one_billing_switched_off_may_subscribe(self, api):
+        organization = OrganizationFactory(is_active=False, deactivated_for_billing_at=NOW)
+
+        subscription.start_checkout(organization)
+
+        api.v1.checkout.sessions.create.assert_called_once()
+
     def test_a_complimentary_organization_is_refused(self, api):
         with pytest.raises(ConflictError, match="complimentary"):
             subscription.start_checkout(OrganizationFactory(billing_exempt=True))
@@ -236,6 +252,44 @@ class TestRefreshSubscription:
         subscriber.refresh_from_db()
         assert subscriber.subscription_status == "past_due"
         assert subscriber.subscription_paid_through == NOW - 10 * DAY
+
+    def test_a_second_unpaid_cycle_does_not_move_the_date_forward(self, api, subscriber):
+        """Stripe advances the period monthly even unpaid; the last paid end does not move."""
+        subscriber.subscription_paid_through = NOW - 40 * DAY
+        subscriber.save()
+        self.retrieve(
+            api,
+            status="past_due",
+            latest_invoice_status="open",
+            period_start=ts(NOW - 10 * DAY),
+            period_end=ts(NOW + 20 * DAY),
+        )
+
+        subscription.refresh_subscription(subscriber, now=NOW)
+
+        subscriber.refresh_from_db()
+        assert subscriber.subscription_paid_through == NOW - 40 * DAY
+
+    def test_a_paid_read_still_moves_it_forward(self, api, subscriber):
+        subscriber.subscription_paid_through = NOW - 40 * DAY
+        subscriber.save()
+        self.retrieve(api, status="active", latest_invoice_status="paid")
+
+        subscription.refresh_subscription(subscriber, now=NOW)
+
+        subscriber.refresh_from_db()
+        assert subscriber.subscription_paid_through == NOW + 20 * DAY
+
+    def test_a_subscription_of_another_customer_is_not_mirrored(self, api, subscriber):
+        """Routing makes this impossible; the check makes it harmless."""
+        self.retrieve(api, status="active", customer="cus_somebody_else")
+        subscriber.subscription_status = "canceled"
+        subscriber.save()
+
+        subscription.refresh_subscription(subscriber, now=NOW)
+
+        subscriber.refresh_from_db()
+        assert subscriber.subscription_status == "canceled"
 
     def test_a_stripe_trial_is_covered_to_its_end(self, api, subscriber):
         self.retrieve(api, status="trialing", latest_invoice_status=None)

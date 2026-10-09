@@ -2717,6 +2717,8 @@ export interface components {
             state: components["schemas"]["BillingStateEnum"];
             level: (components["schemas"]["NoticeLevelEnum"] | components["schemas"]["NullEnum"]) | null;
             notice: string | null;
+            /** @description One sentence for the settings card, always present; the notice when there is one. */
+            summary: string;
             /** Format: date-time */
             trial_ends_at: string | null;
             /** Format: date-time */

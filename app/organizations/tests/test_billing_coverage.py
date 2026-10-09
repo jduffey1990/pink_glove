@@ -335,6 +335,102 @@ class TestBillingNotice:
 
         assert services.billing_notice(org, Role.OWNER, NOW) is None
 
+    def test_the_tenants_customers_are_told_nothing(self, org):
+        """How the cleaning company pays for its software is not its customers' business."""
+        org.trial_ends_at = NOW - DAY
+        assert services.billing_notice(org, Role.CUSTOMER, NOW) is None
+
+        org.is_active = False
+        assert services.billing_notice(org, Role.CUSTOMER, NOW) is None
+
+
+@pytest.mark.django_db
+class TestBillingSummary:
+    """Always a sentence for staff, so the settings card composes none of its own (ADR-023)."""
+
+    def test_is_the_notice_when_there_is_one(self, org):
+        org.trial_ends_at = NOW - DAY
+
+        assert (
+            services.billing_summary(org, Role.OWNER, NOW)
+            == (services.billing_notice(org, Role.OWNER, NOW)[1])
+        )
+
+    def test_a_quiet_trial_says_when_it_ends(self, org):
+        assert services.billing_summary(org, Role.OWNER, NOW) == (
+            "Your free trial runs until November 8, 2026. Subscribe at any time to keep going "
+            "after that."
+        )
+        assert services.billing_summary(org, Role.ADMIN, NOW).endswith(
+            "Ask the organization owner to subscribe at any time to keep going after that."
+        )
+
+    def test_a_quiet_subscription_says_what_it_is_paid_through(self, org):
+        subscribed(org, paid_through=NOW + 20 * DAY)
+
+        assert services.billing_summary(org, Role.OWNER, NOW) == (
+            "Paid through October 29, 2026. The card, receipts and cancellation are in your "
+            "billing portal."
+        )
+
+    def test_exempt(self, org):
+        org.billing_exempt = True
+
+        assert services.billing_summary(org, Role.OWNER, NOW) == (
+            "This organization uses pink glove at no charge."
+        )
+
+    def test_a_customer_gets_nothing(self, org):
+        org.trial_ends_at = NOW - DAY
+
+        assert services.billing_summary(org, Role.CUSTOMER, NOW) == ""
+
+
+@pytest.mark.django_db
+class TestTheStripeCustomerConstraint:
+    def test_two_live_organizations_cannot_share_a_customer(self, org):
+        from django.db import IntegrityError
+
+        org.stripe_customer_id = "cus_shared"
+        org.save()
+
+        with pytest.raises(IntegrityError):
+            Organization.objects.create(name="Copycat", stripe_customer_id="cus_shared")
+
+    def test_a_deleted_organization_frees_its_customer(self, org):
+        org.stripe_customer_id = "cus_freed"
+        org.save()
+        org.delete()
+
+        assert Organization.objects.create(name="Successor", stripe_customer_id="cus_freed")
+
+    def test_empty_is_not_a_customer(self, org):
+        """Every organization starts with "" and that must not collide."""
+        assert Organization.objects.create(name="Also empty").stripe_customer_id == ""
+
+
+@pytest.mark.django_db
+class TestTheMigrationBackfill:
+    """Nobody who predates 4c wakes up read-only on the deploy that introduced it."""
+
+    def test_existing_rows_get_a_trial_and_exempt_ones_do_not(self, db, settings):
+        import importlib
+
+        from django.apps import apps
+
+        settings.PLATFORM_TRIAL_DAYS = 30
+        migration = importlib.import_module("organizations.migrations.0006_platform_subscription")
+        old = Organization.objects.create(name="Pre-4c", trial_ends_at=NOW)
+        Organization.objects.filter(pk=old.pk).update(trial_ends_at=None)
+        comped = Organization.objects.create(name="Comped before 4c", billing_exempt=True)
+
+        migration.start_existing_organizations_on_a_trial(apps, None)
+
+        old.refresh_from_db()
+        comped.refresh_from_db()
+        assert abs(old.trial_ends_at - (timezone.now() + 30 * DAY)) < dt.timedelta(minutes=1)
+        assert comped.trial_ends_at is None
+
 
 @pytest.mark.django_db
 class TestApplyCoverage:

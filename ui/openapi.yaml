@@ -5990,6 +5990,10 @@ components:
         notice:
           type: string
           nullable: true
+        summary:
+          type: string
+          description: One sentence for the settings card, always present; the notice
+            when there is one.
         trial_ends_at:
           type: string
           format: date-time
@@ -6023,6 +6027,7 @@ components:
       - notice
       - state
       - status
+      - summary
       - trial_ends_at
     PreferredContactMethodEnum:
       enum:

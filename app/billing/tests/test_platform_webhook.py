@@ -123,7 +123,10 @@ class TestTheEndpoint:
             platform_event("invoice.paid", invoice_object()), PLATFORM_WEBHOOK_SECRET
         )
 
-        assert post(client, body, header).status_code == 503
+        response = post(client, body, header)
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == subscription.NOT_ENABLED
         assert not StripeEvent.objects.exists()
 
     def test_a_handled_event_for_a_known_customer_is_ledgered_and_enqueued(
@@ -260,6 +263,27 @@ class TestTheEndpoint:
         assert row.organization == subscriber
         enqueue.assert_called_once_with(str(subscriber.pk), str(row.pk))
 
+    def test_a_resend_after_the_customer_is_known_takes_the_row_over(self, client, enqueue):
+        """
+        The same endpoint, later: an event that arrived before the organization
+        held the customer (ledgered IGNORED) is applied when Stripe resends it
+        after the fact. Resend is the replay button here too.
+        """
+        body, header = signed(
+            platform_event("invoice.paid", invoice_object(), event_id="evt_early"),
+            PLATFORM_WEBHOOK_SECRET,
+        )
+        assert post(client, body, header).status_code == 200
+        assert StripeEvent.objects.get().status == StripeEventStatus.IGNORED
+        late = OrganizationFactory(stripe_customer_id=CUSTOMER_ID)
+
+        assert post(client, body, header).status_code == 200
+
+        row = StripeEvent.objects.get()
+        assert row.status == StripeEventStatus.RECEIVED
+        assert row.organization == late
+        enqueue.assert_called_once_with(str(late.pk), str(row.pk))
+
     def test_an_unowned_event_resent_to_the_same_endpoint_stays_ignored(self, client, enqueue):
         body, header = signed(
             platform_event("invoice.paid", invoice_object(customer="cus_nobody")),
@@ -344,6 +368,17 @@ class TestPlatformHandlers:
         organization = OrganizationFactory(stripe_customer_id=CUSTOMER_ID)
         obj = subscription_object(period_start=0, period_end=0)
         row = ledgered(organization, "customer.subscription.created", obj)
+
+        webhook.process(str(organization.pk), str(row.pk))
+
+        organization.refresh_from_db()
+        assert organization.stripe_subscription_id == SUBSCRIPTION_ID
+
+    def test_an_older_invoice_shape_names_the_subscription_at_the_top(self, api):
+        """Before the pinned version, `invoice.subscription` was the field; still honoured."""
+        organization = OrganizationFactory(stripe_customer_id=CUSTOMER_ID)
+        obj = {**invoice_object(), "parent": None, "subscription": SUBSCRIPTION_ID}
+        row = ledgered(organization, "invoice.paid", obj)
 
         webhook.process(str(organization.pk), str(row.pk))
 
@@ -526,4 +561,4 @@ class TestEnforcePlatformBilling:
         entry = settings.CELERY_BEAT_SCHEDULE["enforce-platform-billing"]
 
         assert entry["task"] == "billing.enforce_platform_billing_all"
-        assert str(entry["schedule"]) == "<crontab: 0 3 * * * (m/h/dM/MY/d)>"
+        assert str(entry["schedule"]) == "<crontab: 0 1 * * * (m/h/dM/MY/d)>"

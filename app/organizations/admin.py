@@ -20,7 +20,6 @@ class OrganizationAdmin(admin.ModelAdmin):
         "subscription_status",
         "subscription_paid_through",
         "subscription_cancel_at_period_end",
-        "deactivated_for_billing_at",
     )
 
     fieldsets = (
@@ -78,7 +77,10 @@ class OrganizationAdmin(admin.ModelAdmin):
                     "to give a pilot longer. The rest is read from Stripe by the daily task "
                     "and the webhook. An organization deactivated for billing has the stamp "
                     "set and comes back on its own when a subscription is paid; one switched "
-                    "off here, by hand, stays off whatever Stripe says."
+                    "off here, by hand, stays off whatever Stripe says. To keep a lapsed "
+                    "organization off even if it pays, clear the stamp; to switch one back on "
+                    "while it is still uncovered, clear the stamp too, or the daily task will "
+                    "switch it off again."
                 ),
             },
         ),

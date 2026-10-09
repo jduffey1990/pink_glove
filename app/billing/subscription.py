@@ -35,21 +35,20 @@ ALREADY_SUBSCRIBED = (
     "This organization already has a subscription. Manage it from the billing portal."
 )
 EXEMPT = "This organization is complimentary and needs no subscription."
+DEACTIVATED_BY_HAND = (
+    "This organization was deactivated by pink glove, not for billing, so a subscription "
+    "would not restore it. Contact support."
+)
 NO_CUSTOMER = "There is nothing to manage yet. Subscribe first."
 
 
-def enabled() -> bool:
-    return bool(settings.PLATFORM_BILLING_ENABLED)
+#: One rule, in `organizations.services`, so the serializer and this module agree.
+enabled = coverage.billing_enabled
 
 
 def _require_enabled() -> None:
     if not enabled():
         raise ServiceUnavailableError(NOT_ENABLED)
-
-
-def _settings_url(query: str = "") -> str:
-    base = f"{settings.FRONTEND_BASE_URL}/billing/settings"
-    return f"{base}?subscription={query}" if query else base
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +75,10 @@ def start_checkout(organization: Organization, *, actor=None) -> str:
     locked = Organization.objects.select_for_update().get(pk=organization.pk)
     if locked.billing_exempt:
         raise ConflictError(EXEMPT)
+    if not locked.is_active and locked.deactivated_for_billing_at is None:
+        # Switched off by a person; `apply_coverage` would never turn it
+        # back on, so taking the money would be taking it for nothing.
+        raise ConflictError(DEACTIVATED_BY_HAND)
     if coverage.has_live_subscription(locked):
         raise ConflictError(ALREADY_SUBSCRIBED)
 
@@ -108,8 +111,8 @@ def start_checkout(organization: Organization, *, actor=None) -> str:
                 "client_reference_id": str(locked.pk),
                 "metadata": metadata,
                 "subscription_data": {"metadata": metadata},
-                "success_url": _settings_url("return"),
-                "cancel_url": _settings_url("cancelled"),
+                "success_url": connect.settings_page_url(subscription="return"),
+                "cancel_url": connect.settings_page_url(subscription="cancelled"),
             }
         )
     return session.url
@@ -127,7 +130,10 @@ def portal_url(organization: Organization) -> str:
 
     with connect.stripe_errors("open the billing portal"):
         session = connect.client().v1.billing_portal.sessions.create(
-            {"customer": organization.stripe_customer_id, "return_url": _settings_url()}
+            {
+                "customer": organization.stripe_customer_id,
+                "return_url": connect.settings_page_url(),
+            }
         )
     return session.url
 
@@ -158,9 +164,25 @@ def refresh_subscription(
             organization.stripe_subscription_id, {"expand": ["latest_invoice"]}
         )
 
+    customer = getattr(subscription, "customer", None)
+    if customer != organization.stripe_customer_id:
+        # Not this tenant's subscription. Routing already guarantees it is
+        # (the event's customer resolved the organization), so this is the
+        # belt to that brace: a misrouted or replayed event mirrors nothing.
+        logger.warning(
+            "Subscription %s belongs to customer %s, not organization %s's %s; not mirrored",
+            organization.stripe_subscription_id,
+            customer,
+            organization.pk,
+            organization.stripe_customer_id,
+        )
+        return organization
+
     organization.subscription_status = subscription.status or ""
     organization.subscription_cancel_at_period_end = bool(subscription.cancel_at_period_end)
-    organization.subscription_paid_through = paid_through(subscription)
+    organization.subscription_paid_through = paid_through(
+        subscription, stored=organization.subscription_paid_through
+    )
     organization.save(
         update_fields=[
             "subscription_status",
@@ -173,7 +195,7 @@ def refresh_subscription(
     return organization
 
 
-def paid_through(subscription) -> dt.datetime | None:
+def paid_through(subscription, *, stored: dt.datetime | None = None) -> dt.datetime | None:
     """
     The end of the last period Stripe was paid for.
 
@@ -184,6 +206,11 @@ def paid_through(subscription) -> dt.datetime | None:
     trial of its own); otherwise it is the period's *start*, which is where
     the last paid period ended. Anything else hands a failed card a free
     month.
+
+    An unpaid read never moves the stored date *forward*: a subscription
+    left to cycle unpaid (dunning set to "leave as is") advances its period
+    every month, and the start of the third unpaid month is not the end of
+    the last paid one. `stored` is what the row already says.
     """
     # `.items` on a Stripe object is dict's method: the SDK's documented
     # gotcha, and why this is a subscript.
@@ -195,5 +222,7 @@ def paid_through(subscription) -> dt.datetime | None:
 
     latest = subscription.latest_invoice
     paid = subscription.status == "trialing" or getattr(latest, "status", None) == "paid"
-    stamp = item.current_period_end if paid else item.current_period_start
-    return dt.datetime.fromtimestamp(int(stamp), tz=dt.UTC)
+    if paid:
+        return dt.datetime.fromtimestamp(int(item.current_period_end), tz=dt.UTC)
+    start = dt.datetime.fromtimestamp(int(item.current_period_start), tz=dt.UTC)
+    return min(start, stored) if stored is not None else start

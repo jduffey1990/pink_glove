@@ -11,6 +11,7 @@
    */
   import type { Organization } from '@/api/types'
   import type { SubscriptionAction } from '@/lib/subscriptionCard'
+  import type { Ref } from 'vue'
   import { computed, ref } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import {
@@ -38,8 +39,43 @@
   const error = ref('')
   const saved = ref(false)
 
-  // The API enforces this independently; hiding the button is a courtesy.
-  const canEdit = computed(() => session.isAdminOrHigher)
+  // The API enforces both independently; hiding the button is a courtesy. A
+  // read-only organization (Phase 4c) would get a 403 from Save.
+  const canEdit = computed(() => session.isAdminOrHigher && session.isActive)
+
+  // --- Back from Stripe ------------------------------------------------------
+
+  /**
+   * Both Stripe flows send the browser back here with a query key. Re-read
+   * once (the webhook may not have landed yet), merge the fresh block into
+   * the organization, say what happened, and drop the query so a reload
+   * does not ask again. Admin and above only, which the API enforces too.
+   */
+  async function settleReturn<T> (
+    key: 'stripe' | 'subscription',
+    refresh: () => Promise<T>,
+    merge: (organization: Organization, fresh: T) => Organization,
+    noticeFor: (organization: Organization) => string,
+    busy: Ref<boolean>,
+    error: Ref<string>,
+    notice: Ref<string>,
+  ): Promise<void> {
+    if (!route.query[key] || !organization.value) {
+      return
+    }
+    if (session.isAdminOrHigher) {
+      busy.value = true
+      try {
+        organization.value = merge(organization.value, await refresh())
+        notice.value = noticeFor(organization.value)
+      } catch (error_) {
+        error.value = errorDetail(error_) ?? 'Could not check with Stripe.'
+      } finally {
+        busy.value = false
+      }
+    }
+    await router.replace({ query: {} })
+  }
 
   // --- Card payments (Stripe Connect, Phase 4b) -----------------------------
 
@@ -63,27 +99,19 @@
     }
   }
 
-  /**
-   * Back from Stripe (`?stripe=return` or `?stripe=refresh`): re-read the
-   * account once, since the webhook may not have landed yet, then drop the
-   * query so a reload does not ask again.
-   */
-  async function refreshAfterReturn (): Promise<void> {
-    if (!route.query.stripe || !organization.value || !session.isAdminOrHigher) {
-      return
-    }
-    stripeBusy.value = true
-    try {
-      organization.value = { ...organization.value, stripe: await refreshStripeStatus() }
-      stripeNotice.value = organization.value.stripe.charges_enabled
+  /** `?stripe=return` or `?stripe=refresh`: back from onboarding. */
+  function refreshAfterReturn (): Promise<void> {
+    return settleReturn(
+      'stripe',
+      refreshStripeStatus,
+      (current, stripe) => ({ ...current, stripe }),
+      current => current.stripe.charges_enabled
         ? 'Stripe is connected. Customers can now pay invoices by card.'
-        : 'Thanks -- Stripe is finishing up. This page will show when card payments are on.'
-    } catch (error_) {
-      stripeError.value = errorDetail(error_) ?? 'Could not check with Stripe.'
-    } finally {
-      stripeBusy.value = false
-      await router.replace({ query: {} })
-    }
+        : 'Thanks -- Stripe is finishing up. This page will show when card payments are on.',
+      stripeBusy,
+      stripeError,
+      stripeNotice,
+    )
   }
 
   // --- The platform subscription (Phase 4c) ---------------------------------
@@ -93,9 +121,7 @@
   const subscriptionNotice = ref('')
 
   const subscription = computed(() =>
-    organization.value
-      ? subscriptionCard(organization.value.billing, session.isOwner, session.timeZone)
-      : null,
+    organization.value ? subscriptionCard(organization.value.billing, session.isOwner) : null,
   )
 
   /** Both go to Stripe: Checkout to start, the portal for everything after. */
@@ -112,31 +138,26 @@
   }
 
   /**
-   * Back from Checkout (`?subscription=return`): re-read once, since the
-   * webhook may not have landed yet, refresh the session so the banner
-   * changes in the same navigation, then drop the query. `?subscription=
+   * `?subscription=return`: back from Checkout. The session is refreshed
+   * too, so the banner changes in the same navigation. `?subscription=
    * cancelled` just shows the card as it was.
    */
   async function refreshAfterSubscribing (): Promise<void> {
-    const outcome = route.query.subscription
-    if (!outcome || !organization.value) {
-      return
-    }
-    if (outcome === 'return' && session.isAdminOrHigher) {
-      subscriptionBusy.value = true
-      try {
-        organization.value = { ...organization.value, billing: await refreshSubscription() }
+    await settleReturn(
+      'subscription',
+      async () => {
+        const billing = await refreshSubscription()
         await session.refresh()
-        subscriptionNotice.value = organization.value.billing.state === 'active'
-          ? 'Thank you -- your subscription is active.'
-          : 'Thanks -- Stripe is finishing up. This page will show your subscription shortly.'
-      } catch (error_) {
-        subscriptionError.value = errorDetail(error_) ?? 'Could not check with Stripe.'
-      } finally {
-        subscriptionBusy.value = false
-      }
-    }
-    await router.replace({ query: {} })
+        return billing
+      },
+      (current, billing) => ({ ...current, billing }),
+      current => current.billing.state === 'active'
+        ? 'Thank you -- your subscription is active.'
+        : 'Thanks -- Stripe is finishing up. This page will show your subscription shortly.',
+      subscriptionBusy,
+      subscriptionError,
+      subscriptionNotice,
+    )
   }
 
   const FEE_TYPES = [
@@ -359,7 +380,7 @@
           <v-btn
             v-if="subscription.secondary"
             :disabled="subscriptionBusy"
-            text="Past invoices"
+            :text="subscription.secondaryLabel"
             variant="text"
             @click="subscriptionAction(subscription.secondary)"
           />

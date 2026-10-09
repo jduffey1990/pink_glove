@@ -47,6 +47,43 @@ class TestTheBillingBlock:
         assert billing["cancel_at_period_end"] is False
         assert billing["exempt"] is False
         assert billing["available_actions"] == ["subscribe"]
+        assert billing["summary"].startswith("Your free trial runs until")
+
+    def test_the_summary_is_the_notice_when_there_is_one(self, authed_client, organization):
+        organization.trial_ends_at = timezone.now() - DAY
+        organization.save()
+
+        billing = authed_client.get(self.URL).data["billing"]
+
+        assert billing["summary"] == billing["notice"]
+
+    def test_the_tenants_customers_see_the_state_and_nothing_else(
+        self, api_client, make_member, organization
+    ):
+        """How the cleaning company pays for its software is not its customers' business."""
+        organization.trial_ends_at = timezone.now() - DAY
+        organization.stripe_customer_id = "cus_x"
+        organization.subscription_status = "canceled"
+        organization.save()
+        customer = as_role(api_client, make_member, organization, Role.CUSTOMER)
+
+        billing = customer.get(self.URL).data["billing"]
+        current = customer.get("/api/users/session/").data["current_organization"]
+
+        assert billing == {
+            "state": "lapsed",
+            "level": None,
+            "notice": None,
+            "summary": "",
+            "trial_ends_at": None,
+            "covered_until": None,
+            "grace_ends_at": None,
+            "status": "",
+            "cancel_at_period_end": False,
+            "exempt": False,
+            "available_actions": [],
+        }
+        assert current["billing"] == {"state": "lapsed", "level": None, "notice": None}
 
     def test_the_grace_follows_the_coverage(self, authed_client, organization):
         billing = authed_client.get(self.URL).data["billing"]
@@ -126,10 +163,8 @@ class TestTheBillingBlock:
         assert organization.stripe_customer_id == ""
         assert response.data["billing"]["state"] == "trial"
 
-    def test_absent_entirely_when_billing_is_not_configured(
-        self, authed_client, organization, settings
-    ):
-        """Not absent: `exempt`, which the card treats as nothing to show."""
+    def test_is_exempt_when_billing_is_not_configured(self, authed_client, organization, settings):
+        """`exempt` with `exempt: false`, which the card treats as nothing to show."""
         settings.PLATFORM_BILLING_ENABLED = False
         organization.trial_ends_at = timezone.now() - 100 * DAY
         organization.save()

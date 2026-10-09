@@ -400,7 +400,7 @@ what the last re-read of the Subscription said. In order:
 3. Did the worker apply it? `/admin/` → Billing → Stripe events, filter on
    an empty account: the row's status and error. The sweep re-queues a row
    still RECEIVED after ten minutes, as for Connect.
-4. Whatever happened, the daily task at 03:00 UTC re-reads every
+4. Whatever happened, the daily task at 01:00 UTC re-reads every
    subscription and applies the rule. To not wait: run it as in step 6, or
    return to the settings page with `?subscription=return` in the URL
    (admin and above), which re-reads that one organization. An
