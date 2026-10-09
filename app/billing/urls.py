@@ -9,6 +9,9 @@ from billing.views import (
     PaymentViewSet,
     StripeConnectView,
     StripeRefreshView,
+    SubscriptionCheckoutView,
+    SubscriptionPortalView,
+    SubscriptionRefreshView,
 )
 from billing.webhook import StripeWebhookView
 
@@ -32,6 +35,12 @@ urlpatterns = [
     ),
     path("stripe/connect/", StripeConnectView.as_view(), name="stripe-connect"),
     path("stripe/refresh/", StripeRefreshView.as_view(), name="stripe-refresh"),
+    # The tenant's own subscription (Phase 4c). Reachable while read-only.
+    path(
+        "subscription/checkout/", SubscriptionCheckoutView.as_view(), name="subscription-checkout"
+    ),
+    path("subscription/portal/", SubscriptionPortalView.as_view(), name="subscription-portal"),
+    path("subscription/refresh/", SubscriptionRefreshView.as_view(), name="subscription-refresh"),
     # Public, by signed token (the credential is in the invoice email).
     path("pay/<str:token>/", PayInvoiceView.as_view(), name="pay"),
     path("pay/<str:token>/checkout/", PayInvoiceCheckoutView.as_view(), name="pay-checkout"),

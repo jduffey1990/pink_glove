@@ -2,15 +2,28 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from organizations.models import Organization
+from organizations.serializers import BillingNoticeSerializer
 from users.enums import Role
 from users.models import CustomUser, Membership
 
 
 class OrganizationSummarySerializer(serializers.ModelSerializer):
+    """
+    The organization as the shell sees it: enough to name it, reckon dates
+    in its zone, and draw the billing banner (Phase 4c) without a second
+    request. `is_active` is what the baseline gate owed the banner.
+    """
+
+    billing = serializers.SerializerMethodField()
+
     class Meta:
         model = Organization
-        fields = ("id", "name", "slug", "timezone", "primary_color", "logo")
+        fields = ("id", "name", "slug", "timezone", "primary_color", "logo", "is_active", "billing")
         read_only_fields = fields
+
+    @extend_schema_field(BillingNoticeSerializer)
+    def get_billing(self, organization: Organization) -> dict:
+        return BillingNoticeSerializer(organization, context=self.context).data
 
 
 class MembershipSerializer(serializers.ModelSerializer):
@@ -24,7 +37,7 @@ class MembershipSerializer(serializers.ModelSerializer):
     widens nothing.
     """
 
-    organization = OrganizationSummarySerializer(read_only=True)
+    organization = serializers.SerializerMethodField()
     user_name = serializers.CharField(source="user.full_name", read_only=True)
     user_email = serializers.EmailField(source="user.email", read_only=True)
 
@@ -32,6 +45,18 @@ class MembershipSerializer(serializers.ModelSerializer):
         model = Membership
         fields = ("id", "organization", "user", "user_name", "user_email", "role", "is_active")
         read_only_fields = fields
+
+    @extend_schema_field(OrganizationSummarySerializer)
+    def get_organization(self, membership: Membership) -> dict:
+        # The billing notice is written for the caller: in their own role
+        # when the row is their membership (the session's list), otherwise
+        # in the role they hold in the organization being read (the staff
+        # directory, where every row is the same organization).
+        request = self.context.get("request")
+        context = dict(self.context)
+        if request is not None and membership.user_id == getattr(request.user, "id", None):
+            context["role"] = membership.role
+        return OrganizationSummarySerializer(membership.organization, context=context).data
 
 
 class SessionSerializer(serializers.ModelSerializer):

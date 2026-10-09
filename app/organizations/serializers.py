@@ -1,8 +1,91 @@
+from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from organizations.enums import StripeState
+from organizations import services as coverage
+from organizations.enums import BillingState, NoticeLevel, StripeState
 from organizations.models import Organization, validate_timezone, validate_working_days
+from users.enums import Role
+
+
+def role_for_notice(context: dict) -> str | None:
+    """
+    Whose eyes the billing notice is written for (ADR-023).
+
+    An explicit `role` in the context wins (the session payload passes each
+    membership's own); otherwise the caller's membership in the resolved
+    organization; a superuser reads as the owner, since they can do what
+    the owner can; nobody known reads as "ask the owner".
+    """
+    role = context.get("role")
+    if role:
+        return role
+    request = context.get("request")
+    membership = getattr(request, "membership", None)
+    if membership is not None:
+        return membership.role
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_superuser", False):
+        return Role.OWNER
+    return None
+
+
+class BillingNoticeSerializer(serializers.Serializer):
+    """
+    The three fields the shell draws the banner from (Phase 4c, ADR-028):
+    the server's one word for the state, how loudly to say it, and the
+    sentence itself -- written for the reader's role, never composed on the
+    client (ADR-023). On the session's organization summary, so the banner
+    needs no second request.
+    """
+
+    state = serializers.ChoiceField(choices=BillingState.choices)
+    level = serializers.ChoiceField(choices=NoticeLevel.choices, allow_null=True)
+    notice = serializers.CharField(allow_null=True)
+
+    def to_representation(self, organization):
+        now = timezone.now()
+        notice = coverage.billing_notice(organization, role_for_notice(self.context), now)
+        return {
+            "state": coverage.billing_state(organization, now),
+            "level": notice[0] if notice else None,
+            "notice": notice[1] if notice else None,
+        }
+
+
+class PlatformBillingSerializer(BillingNoticeSerializer):
+    """
+    The whole of the organization's subscription state, for the settings
+    card. Read-only by construction: the fields it reads are written only by
+    `billing.subscription`, the platform webhook and the admin.
+    `available_actions` is what the subscription endpoints will accept, so
+    the page draws its buttons from it and not from `status`.
+    """
+
+    trial_ends_at = serializers.DateTimeField(allow_null=True)
+    covered_until = serializers.DateTimeField(allow_null=True)
+    grace_ends_at = serializers.DateTimeField(allow_null=True)
+    status = serializers.CharField(help_text="Stripe's own word, or empty with no subscription.")
+    cancel_at_period_end = serializers.BooleanField()
+    exempt = serializers.BooleanField()
+    available_actions = serializers.ListField(child=serializers.CharField())
+
+    def to_representation(self, organization):
+        stamp = self.fields["trial_ends_at"].to_representation
+
+        def when(value):
+            return stamp(value) if value is not None else None
+
+        return {
+            **super().to_representation(organization),
+            "trial_ends_at": when(organization.trial_ends_at),
+            "covered_until": when(coverage.covered_until(organization)),
+            "grace_ends_at": when(coverage.grace_ends_at(organization)),
+            "status": organization.subscription_status,
+            "cancel_at_period_end": organization.subscription_cancel_at_period_end,
+            "exempt": organization.billing_exempt,
+            "available_actions": coverage.available_actions(organization),
+        }
 
 
 class StripeStatusSerializer(serializers.Serializer):
@@ -32,6 +115,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
     """
 
     stripe = serializers.SerializerMethodField()
+    billing = serializers.SerializerMethodField()
 
     timezone = serializers.CharField(validators=[validate_timezone])
     working_days = serializers.ListField(
@@ -70,6 +154,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "invoice_terms_days",
             "invoice_footer",
             "stripe",
+            "billing",
             "is_active",
             "created_at",
         )
@@ -78,3 +163,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
     @extend_schema_field(StripeStatusSerializer)
     def get_stripe(self, organization: Organization) -> dict:
         return StripeStatusSerializer(organization).data
+
+    @extend_schema_field(PlatformBillingSerializer)
+    def get_billing(self, organization: Organization) -> dict:
+        return PlatformBillingSerializer(organization, context=self.context).data

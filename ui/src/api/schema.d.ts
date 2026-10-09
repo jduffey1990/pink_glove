@@ -519,6 +519,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/billing/subscription/checkout/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start subscribing
+         * @description Begin the subscription. Owner only: it binds the business to a recurring charge.
+         */
+        post: operations["billing_subscription_checkout_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/subscription/portal/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Open the billing portal
+         * @description Stripe's Customer Portal: the card, the receipts, cancelling. Owner only.
+         */
+        post: operations["billing_subscription_portal_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/subscription/refresh/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh the organization's subscription
+         * @description Re-read the subscription from Stripe; the settings page calls it on return.
+         */
+        post: operations["billing_subscription_refresh_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/catalog/services/": {
         parameters: {
             query?: never;
@@ -1516,6 +1576,28 @@ export interface components {
             status: string;
             amount_cents: number;
         };
+        /**
+         * @description The three fields the shell draws the banner from (Phase 4c, ADR-028):
+         *     the server's one word for the state, how loudly to say it, and the
+         *     sentence itself -- written for the reader's role, never composed on the
+         *     client (ADR-023). On the session's organization summary, so the banner
+         *     needs no second request.
+         */
+        BillingNotice: {
+            state: components["schemas"]["BillingStateEnum"];
+            level: (components["schemas"]["NoticeLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            notice: string | null;
+        };
+        /**
+         * @description * `exempt` - Complimentary
+         *     * `trial` - On trial
+         *     * `active` - Subscribed
+         *     * `past_due` - Payment failed
+         *     * `lapsed` - Lapsed
+         *     * `deactivated` - Deactivated
+         * @enum {string}
+         */
+        BillingStateEnum: "exempt" | "trial" | "active" | "past_due" | "lapsed" | "deactivated";
         /** @description 202 body: a code went out and the client should collect it. */
         ChallengeIssued: {
             detail: string;
@@ -1969,6 +2051,13 @@ export interface components {
          * @enum {string}
          */
         NoAccessFeeTypeEnum: "none" | "flat" | "percent";
+        /**
+         * @description * `info` - Info
+         *     * `warning` - Warning
+         *     * `error` - Error
+         * @enum {string}
+         */
+        NoticeLevelEnum: "info" | "warning" | "error";
         /** @enum {unknown} */
         NullEnum: null;
         /** @description One upcoming occurrence, in both the forms a UI needs. */
@@ -2027,6 +2116,7 @@ export interface components {
             /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
             invoice_footer?: string;
             readonly stripe: components["schemas"]["StripeStatus"];
+            readonly billing: components["schemas"]["PlatformBilling"];
             readonly is_active: boolean;
             /** Format: date-time */
             readonly created_at: string;
@@ -2077,6 +2167,11 @@ export interface components {
             /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
             invoice_footer?: string;
         };
+        /**
+         * @description The organization as the shell sees it: enough to name it, reckon dates
+         *     in its zone, and draw the billing banner (Phase 4c) without a second
+         *     request. `is_active` is what the baseline gate owed the banner.
+         */
         OrganizationSummary: {
             /** Format: uuid */
             readonly id: string;
@@ -2087,6 +2182,8 @@ export interface components {
             readonly primary_color: string;
             /** Format: uri */
             readonly logo: string | null;
+            readonly is_active: boolean;
+            readonly billing: components["schemas"]["BillingNotice"];
         };
         PaginatedAccessRevealList: {
             /** @example 123 */
@@ -2610,6 +2707,29 @@ export interface components {
          */
         PaymentStateEnum: "unpaid" | "partial" | "paid";
         /**
+         * @description The whole of the organization's subscription state, for the settings
+         *     card. Read-only by construction: the fields it reads are written only by
+         *     `billing.subscription`, the platform webhook and the admin.
+         *     `available_actions` is what the subscription endpoints will accept, so
+         *     the page draws its buttons from it and not from `status`.
+         */
+        PlatformBilling: {
+            state: components["schemas"]["BillingStateEnum"];
+            level: (components["schemas"]["NoticeLevelEnum"] | components["schemas"]["NullEnum"]) | null;
+            notice: string | null;
+            /** Format: date-time */
+            trial_ends_at: string | null;
+            /** Format: date-time */
+            covered_until: string | null;
+            /** Format: date-time */
+            grace_ends_at: string | null;
+            /** @description Stripe's own word, or empty with no subscription. */
+            status: string;
+            cancel_at_period_end: boolean;
+            exempt: boolean;
+            available_actions: string[];
+        };
+        /**
          * @description * `email` - Email
          *     * `sms` - Text message
          *     * `phone` - Phone call
@@ -3014,18 +3134,18 @@ export interface components {
             readonly current_organization: components["schemas"]["OrganizationSummary"] | null;
             readonly current_role: (components["schemas"]["RoleEnum"] | components["schemas"]["NullEnum"]) | null;
         };
+        StatusChangeRequest: {
+            status: components["schemas"]["JobStatusEnum"];
+            /** @default  */
+            reason: string;
+        };
         /**
          * @description * `not_connected` - Not connected
          *     * `pending` - Pending with Stripe
          *     * `enabled` - Taking card payments
          * @enum {string}
          */
-        StateEnum: "not_connected" | "pending" | "enabled";
-        StatusChangeRequest: {
-            status: components["schemas"]["JobStatusEnum"];
-            /** @default  */
-            reason: string;
-        };
+        StripeStateEnum: "not_connected" | "pending" | "enabled";
         /**
          * @description The organization's Stripe Connect state, as one thing to look at.
          *
@@ -3036,7 +3156,7 @@ export interface components {
          *     "Stripe will take a card" -- the pay link waits for the second.
          */
         StripeStatus: {
-            state: components["schemas"]["StateEnum"];
+            state: components["schemas"]["StripeStateEnum"];
             connected: boolean;
             charges_enabled: boolean;
             details_submitted: boolean;
@@ -4037,6 +4157,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StripeStatus"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_subscription_checkout_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Url"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_subscription_portal_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Url"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_subscription_refresh_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformBilling"];
                 };
             };
             503: {

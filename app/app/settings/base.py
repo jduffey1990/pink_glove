@@ -238,6 +238,11 @@ SPECTACULAR_SETTINGS = {
         # enough that the frontend would have to guess what they belong to.
         "PaymentMethodEnum": "billing.enums.PaymentMethod.choices",
         "LineKindEnum": "billing.enums.LineKind.choices",
+        # Two different choice sets are both exposed as a field called
+        # "state": the Connect status and the subscription's (Phase 4c).
+        "StripeStateEnum": "organizations.enums.StripeState.choices",
+        "BillingStateEnum": "organizations.enums.BillingState.choices",
+        "NoticeLevelEnum": "organizations.enums.NoticeLevel.choices",
     },
 }
 
