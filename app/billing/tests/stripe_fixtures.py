@@ -162,16 +162,13 @@ def subscription_checkout_session(
     }
 
 
-def as_object(value):
+def stripe_object(values: dict):
     """
-    A dict tree as the SDK would hand it back: attribute access all the way
-    down. The code under test reads `subscription.items.data[0].current_period_end`
-    and must work on what Stripe returns, not on a dict a test happened to build.
+    A dict as the SDK hands it back: a real `StripeObject` tree, so the code
+    under test reads `subscription["items"]["data"][0].current_period_end`
+    exactly as it would from Stripe -- including the gotcha that `.items`
+    on one of these is dict's method, not the field.
     """
-    from types import SimpleNamespace
+    from stripe._util import convert_to_stripe_object
 
-    if isinstance(value, dict):
-        return SimpleNamespace(**{k: as_object(v) for k, v in value.items()})
-    if isinstance(value, list):
-        return [as_object(v) for v in value]
-    return value
+    return convert_to_stripe_object(values, api_key="sk_test_x")
