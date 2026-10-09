@@ -17,6 +17,8 @@ from .base import (
     SECRET_KEY,
     STRIPE_CONNECT_WEBHOOK_SECRET,
     STRIPE_ENABLED,
+    STRIPE_PLATFORM_PRICE_ID,
+    STRIPE_PLATFORM_WEBHOOK_SECRET,
     UI_DIST_DIR,
     config,
 )
@@ -60,6 +62,21 @@ if STRIPE_ENABLED and not STRIPE_CONNECT_WEBHOOK_SECRET:
     raise ImproperlyConfigured(
         "STRIPE_SECRET_KEY is set but STRIPE_CONNECT_WEBHOOK_SECRET is not. Register the "
         "Connect webhook endpoint (docs/DEPLOY.md) and set its signing secret, or unset the key."
+    )
+
+# The same for the platform subscription (Phase 4c): a price with no platform
+# webhook secret would take subscriptions and never hear one lapse -- a free
+# product with a card form in front of it.
+if STRIPE_PLATFORM_PRICE_ID and not STRIPE_PLATFORM_WEBHOOK_SECRET:
+    raise ImproperlyConfigured(
+        "STRIPE_PLATFORM_PRICE_ID is set but STRIPE_PLATFORM_WEBHOOK_SECRET is not. Register "
+        "the platform webhook endpoint (docs/DEPLOY.md) and set its signing secret, or unset "
+        "the price."
+    )
+if STRIPE_PLATFORM_PRICE_ID and not STRIPE_ENABLED:
+    raise ImproperlyConfigured(
+        "STRIPE_PLATFORM_PRICE_ID is set but STRIPE_SECRET_KEY is not. The subscription is "
+        "charged through the platform account's key."
     )
 
 # --------------------------------------------------------------------------

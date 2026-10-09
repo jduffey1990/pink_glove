@@ -485,6 +485,30 @@ STRIPE_APPLICATION_FEE_PERCENT = config("STRIPE_APPLICATION_FEE_PERCENT", defaul
 STRIPE_API_VERSION = "2026-08-26.dahlia"
 
 # --------------------------------------------------------------------------
+# Platform subscription (Phase 4c, ADR-024, ADR-028)
+# --------------------------------------------------------------------------
+# What tenants pay for pink_glove, as a Stripe subscription on the platform
+# account. Optional, like Connect: with no price nobody is ever deactivated
+# for billing, the subscription card is absent and the banner has nothing to
+# say -- staging deploys without one. production.py refuses a price without
+# the platform webhook secret, for the same reason it refuses a key without
+# the Connect secret.
+
+#: The one monthly Price, created in the Stripe dashboard; the amount lives
+#: there, never here.
+STRIPE_PLATFORM_PRICE_ID = config("STRIPE_PLATFORM_PRICE_ID", default="")
+#: The signing secret of the PLATFORM webhook endpoint ("events on your
+#: account"), distinct from the Connect endpoint's.
+STRIPE_PLATFORM_WEBHOOK_SECRET = config("STRIPE_PLATFORM_WEBHOOK_SECRET", default="")
+PLATFORM_BILLING_ENABLED = STRIPE_ENABLED and bool(STRIPE_PLATFORM_PRICE_ID)
+
+#: The application-side trial a new organization starts on, with no card and
+#: nothing in Stripe, and how long after its coverage ends an organization
+#: becomes read-only. The rule that reads both is `organizations.services`.
+PLATFORM_TRIAL_DAYS = config("PLATFORM_TRIAL_DAYS", default=30, cast=int)
+PLATFORM_GRACE_DAYS = config("PLATFORM_GRACE_DAYS", default=14, cast=int)
+
+# --------------------------------------------------------------------------
 # Logging
 # --------------------------------------------------------------------------
 

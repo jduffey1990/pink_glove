@@ -292,5 +292,54 @@ class TestStripe:
         assert production.STRIPE_APPLICATION_FEE_PERCENT == Decimal("2.9")
 
 
+class TestPlatformBilling:
+    """Optional on top of Stripe (Phase 4c), and not half-configured either."""
+
+    CONNECT = {"STRIPE_SECRET_KEY": "sk_test_x", "STRIPE_CONNECT_WEBHOOK_SECRET": "whsec_x"}
+
+    def test_is_off_with_no_price(self, load):
+        production = load(**self.CONNECT, unset=("STRIPE_PLATFORM_PRICE_ID",))
+
+        assert production.PLATFORM_BILLING_ENABLED is False
+
+    def test_a_price_without_the_platform_secret_fails_the_start(self, load):
+        """A price alone takes subscriptions and never hears one lapse."""
+        with pytest.raises(ImproperlyConfigured, match="STRIPE_PLATFORM_WEBHOOK_SECRET"):
+            load(
+                **self.CONNECT,
+                STRIPE_PLATFORM_PRICE_ID="price_x",
+                unset=("STRIPE_PLATFORM_WEBHOOK_SECRET",),
+            )
+
+    def test_a_price_without_the_key_fails_the_start(self, load):
+        with pytest.raises(ImproperlyConfigured, match="STRIPE_SECRET_KEY"):
+            load(
+                STRIPE_PLATFORM_PRICE_ID="price_x",
+                STRIPE_PLATFORM_WEBHOOK_SECRET="whsec_p",
+                unset=("STRIPE_SECRET_KEY", "STRIPE_CONNECT_WEBHOOK_SECRET"),
+            )
+
+    def test_a_price_a_secret_and_the_key_turn_it_on(self, load):
+        production = load(
+            **self.CONNECT,
+            STRIPE_PLATFORM_PRICE_ID="price_x",
+            STRIPE_PLATFORM_WEBHOOK_SECRET="whsec_p",
+        )
+
+        assert production.PLATFORM_BILLING_ENABLED is True
+
+    def test_the_trial_and_grace_are_whole_days_from_the_environment(self, load):
+        production = load(PLATFORM_TRIAL_DAYS="45", PLATFORM_GRACE_DAYS="7")
+
+        assert production.PLATFORM_TRIAL_DAYS == 45
+        assert production.PLATFORM_GRACE_DAYS == 7
+
+    def test_and_default_to_thirty_and_fourteen(self, load):
+        production = load(unset=("PLATFORM_TRIAL_DAYS", "PLATFORM_GRACE_DAYS"))
+
+        assert production.PLATFORM_TRIAL_DAYS == 30
+        assert production.PLATFORM_GRACE_DAYS == 14
+
+
 def test_the_suite_itself_is_not_running_on_production_settings():
     assert os.environ["DJANGO_SETTINGS_MODULE"] == "app.settings.test"
