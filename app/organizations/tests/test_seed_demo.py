@@ -216,3 +216,37 @@ class TestSeededBilling:
         assert tipped.exists()
         for payment in tipped:
             assert payment.amount_cents < payment.invoice.total_cents
+
+
+@pytest.mark.django_db
+class TestSeededSubscription:
+    """The two differ on purpose (Phase 4c): no banner here, a dated banner there."""
+
+    def test_one_is_comped_and_the_other_on_a_short_trial(self, seeded, settings):
+        import datetime as dt
+
+        from django.utils import timezone
+
+        from organizations import services
+
+        settings.PLATFORM_BILLING_ENABLED = True
+        sparkle = Organization.objects.get(name="Sparkle Clean")
+        rival = Organization.objects.get(name="Rival Cleaners")
+
+        assert sparkle.billing_exempt is True
+        assert sparkle.trial_ends_at is None
+        assert services.billing_notice(sparkle, Role.OWNER) is None
+
+        assert rival.billing_exempt is False
+        assert abs(rival.trial_ends_at - (timezone.now() + dt.timedelta(days=5))) < dt.timedelta(
+            minutes=5
+        )
+        level, text = services.billing_notice(rival, Role.OWNER)
+        assert level == "warning"
+        assert text.startswith("Your free trial ends on")
+
+    def test_nothing_in_stripe_is_seeded(self, seeded):
+        for organization in Organization.objects.all():
+            assert organization.stripe_customer_id == ""
+            assert organization.stripe_subscription_id == ""
+            assert organization.subscription_status == ""

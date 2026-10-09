@@ -318,6 +318,106 @@ stripe listen --forward-connect-to localhost:8000/api/billing/stripe/webhook/
 # prints a whsec_… for THIS session; put it in app/.env as STRIPE_CONNECT_WEBHOOK_SECRET
 ```
 
+### 10. The platform subscription (Phase 4c)
+
+Optional on top of step 9, and the app runs without it: with no
+`STRIPE_PLATFORM_PRICE_ID` nobody is ever made read-only for billing, the
+subscription card is absent and the banner has nothing to say. Every
+organization starts on a trial of `PLATFORM_TRIAL_DAYS` (30) with no card,
+and goes read-only `PLATFORM_GRACE_DAYS` (14) after its coverage ends
+(ADR-028). Do this once there is a price to charge.
+
+1. **The Product and its Price**, in the same sandbox as step 9: Product
+   catalog → Add product → one recurring monthly price. Copy the `price_…`
+   id from the price's page. The amount lives here and nowhere in the code;
+   change it by making a new price and setting the new id.
+2. **Register the platform webhook**: Developers → Webhooks → Add endpoint,
+   a *second* endpoint beside step 9's:
+   - URL `https://pink-glove-staging.fly.dev/api/billing/stripe/platform-webhook/`
+   - **Listen to: events on your account** -- step 9's is on connected
+     accounts, this one is not. The header on each endpoint's page says
+     which; read both. (An endpoint set the wrong way round ledgers the
+     other's events as ignored; the right endpoint's own delivery still
+     takes the row over, so nothing is lost, but the admin fills with
+     IGNORED rows.)
+   - Events: `checkout.session.completed`, `customer.subscription.created`,
+     `customer.subscription.updated`, `customer.subscription.deleted`,
+     `invoice.paid`, `invoice.payment_failed`. Anything else is ledgered and
+     ignored.
+   - **Reveal** and copy the signing secret (`whsec_…`). It is a different
+     secret from step 9's.
+3. **Configure the Customer Portal once**: Settings → Billing → Customer
+   portal: allow customers to update payment methods, view invoice
+   history, and cancel subscriptions *at the end of the billing period*;
+   do not offer plan changes (there is one plan). Without this the Manage
+   billing button answers with Stripe's "portal not configured" as a 503.
+4. **Set the retry behaviour**: Settings → Billing → Subscriptions and
+   emails → *Manage failed payments*: keep Smart Retries, and when all
+   retries fail, **cancel the subscription**. The app's grace is
+   independent of Stripe's retries, and `unpaid` is a status with no end.
+5. **Set the two values** (the app refuses to start with the price and not
+   the secret):
+
+   ```bash
+   fly secrets set --app pink-glove-staging \
+       STRIPE_PLATFORM_PRICE_ID='price_…' \
+       STRIPE_PLATFORM_WEBHOOK_SECRET='whsec_…'
+   ```
+
+   `PLATFORM_TRIAL_DAYS` and `PLATFORM_GRACE_DAYS` stay unset for the
+   defaults. Every organization that existed before this deploy got a trial
+   from the moment of the migration, so nobody wakes up read-only.
+6. **Try it end to end** as the seeded Rival Cleaners owner (the seed puts
+   that organization five days from the end of its trial, and Sparkle Clean
+   on a complimentary plan that shows nothing): the banner says when the
+   trial ends; Billing → Billing settings → Subscribe, pay with
+   `4242 4242 4242 4242`; back on the settings page it says Subscribed with
+   no banner. Manage billing opens the portal; cancel there and the banner
+   says "ends on" within seconds. To see a failed renewal, subscribe with
+   `4000 0000 0000 0341` instead (it attaches, then fails every charge) and
+   advance the sandbox's test clock past the renewal: the banner turns
+   warning with the grace date. To see read-only, move `trial_ends_at` and
+   `subscription_paid_through` back a month in `/admin/` and run the daily
+   task by hand from a shell (`fly ssh console --app … -C "python manage.py
+   shell -c 'from billing.tasks import enforce_platform_billing_all as t;
+   t()'"`): the banner turns red, the schedule still loads, a job cannot be
+   edited, Subscribe still works and the organization comes back.
+7. **Production** is the same with the live-mode price and endpoint and
+   their own secret.
+
+**When the banner is wrong.** The banner is the organization row's own
+fields, read by the rule in `organizations/services.py`; the fields are
+what the last re-read of the Subscription said. In order:
+
+1. What does Stripe say? The customer's page in the dashboard (search the
+   organization's name; `stripe_customer_id` is in `/admin/`), its
+   subscription's status and current period, and whether the latest
+   invoice is paid.
+2. Did the event arrive? `fly logs --app … --no-tail | grep platform-webhook`
+   should show `POST … 200`; nothing at all means the endpoint in step 2
+   is not subscribed to that type or is listening to connected accounts; a
+   `400` means the secret on Fly is step 9's, not this one's.
+3. Did the worker apply it? `/admin/` → Billing → Stripe events, filter on
+   an empty account: the row's status and error. The sweep re-queues a row
+   still RECEIVED after ten minutes, as for Connect.
+4. Whatever happened, the daily task at 03:00 UTC re-reads every
+   subscription and applies the rule. To not wait: run it as in step 6, or
+   return to the settings page with `?subscription=return` in the URL
+   (admin and above), which re-reads that one organization. An
+   organization read-only with `deactivated_for_billing_at` set comes back
+   the moment a re-read finds it covered; one with that field empty was
+   switched off by hand and only the admin switches it on.
+
+Locally, the Stripe CLI forwards both endpoints with one command:
+
+```bash
+stripe listen \
+  --forward-to localhost:8000/api/billing/stripe/platform-webhook/ \
+  --forward-connect-to localhost:8000/api/billing/stripe/webhook/
+# prints ONE whsec_… for both; put it in app/.env as both
+# STRIPE_CONNECT_WEBHOOK_SECRET and STRIPE_PLATFORM_WEBHOOK_SECRET
+```
+
 ---
 
 ## Production
