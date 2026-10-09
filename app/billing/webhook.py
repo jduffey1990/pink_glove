@@ -18,8 +18,18 @@ edge. In the request, and in one transaction:
 
 The view is a plain Django view, outside DRF and the schema: nothing in
 `ui/` calls it, and `request.body` has to reach `construct_event` as the
-bytes Stripe signed. The secret is read per request, never at import, so a
-test can override it and Phase 4c can add the platform endpoint with its own.
+bytes Stripe signed. The secret is read per request, never at import.
+
+**Two endpoints, one view (Phase 4c).** The platform endpoint
+(`platform=True`) verifies with `STRIPE_PLATFORM_WEBHOOK_SECRET`, resolves
+the organization by the event object's `customer` rather than by `account`,
+and dispatches on `PLATFORM_HANDLERS`. Everything else -- the ledger, the
+IGNORED rule, ids-only to the task, the 200 -- is the same code. A platform
+event's row has `account == ""`, and that is what `process` keys the
+dispatch on, because `checkout.session.completed` is in both tables with
+different handlers. Each endpoint ledgers and ignores the other's events;
+if a misconfigured endpoint ledgers an event first, the right endpoint's
+delivery of the same event takes the row over (`_redeliver`).
 
 Handlers are idempotent because both ledgers are: the event row refuses a
 second delivery, and `Payment`'s unique (provider, provider_reference) refuses
@@ -40,7 +50,7 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from billing import connect
+from billing import connect, subscription
 from billing.enums import StripeEventStatus
 from billing.models import Invoice, Payment, StripeEvent
 from billing.services import (
@@ -50,6 +60,7 @@ from billing.services import (
     void_payment,
 )
 from organizations.models import Organization
+from organizations.services import has_live_subscription
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +77,38 @@ class HandlerError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def receive(event: dict) -> StripeEvent | None:
+def _resolve_connect(event: dict) -> Organization | None:
+    """The organization whose connected account the event is about."""
+    account = event.get("account") or ""
+    return Organization.objects.filter(stripe_account_id=account).first() if account else None
+
+
+def _resolve_platform(event: dict) -> Organization | None:
+    """
+    The organization whose platform Customer the event is about. An event
+    carrying an `account` is a Connect event and belongs to the other
+    endpoint, whatever its object says.
+    """
+    if event.get("account"):
+        return None
+    customer = _customer_in(event)
+    return Organization.objects.filter(stripe_customer_id=customer).first() if customer else None
+
+
+def _customer_in(event: dict) -> str:
+    customer = ((event.get("data") or {}).get("object") or {}).get("customer")
+    return customer if isinstance(customer, str) else ""
+
+
+def _unowned(event: dict, *, platform: bool) -> str:
+    if platform:
+        if event.get("account"):
+            return "A connected-account event at the platform endpoint."
+        return f"No organization holds customer {_customer_in(event)!r}."
+    return f"No organization owns account {event.get('account') or ''!r}."
+
+
+def receive(event: dict, *, platform: bool = False) -> StripeEvent | None:
     """
     Ledger one verified event and, if anything is to be done, enqueue it.
 
@@ -76,13 +118,11 @@ def receive(event: dict) -> StripeEvent | None:
     would only make Stripe send it again.
     """
     account = event.get("account") or ""
-    organization = (
-        Organization.objects.filter(stripe_account_id=account).first() if account else None
-    )
-    handled = event["type"] in HANDLERS
+    organization = _resolve_platform(event) if platform else _resolve_connect(event)
+    handled = event["type"] in (PLATFORM_HANDLERS if platform else HANDLERS)
 
     if organization is None:
-        status, error = StripeEventStatus.IGNORED, f"No organization owns account {account!r}."
+        status, error = StripeEventStatus.IGNORED, _unowned(event, platform=platform)
     elif not handled:
         status, error = StripeEventStatus.IGNORED, NO_HANDLER
     else:
@@ -100,7 +140,9 @@ def receive(event: dict) -> StripeEvent | None:
                 error=error,
             )
     except IntegrityError:
-        return _redeliver(event["id"], account)
+        return _redeliver(
+            event["id"], account, organization if status == StripeEventStatus.RECEIVED else None
+        )
 
     if status == StripeEventStatus.RECEIVED:
         _enqueue(row)
@@ -115,19 +157,39 @@ def _enqueue(row: StripeEvent) -> None:
     process_stripe_event.delay(str(row.organization_id), str(row.pk))
 
 
-def _redeliver(event_id: str, account: str) -> None:
+def _redeliver(event_id: str, account: str, owner: Organization | None) -> None:
     """
     The same event again. Stripe retries on its own, and an operator can
     press Resend; either way the first delivery owns the row. A row that is
     PROCESSED or IGNORED is left alone. One still RECEIVED or FAILED is
     re-queued -- that is what Resend is *for* after a worker died under the
     task, and it is safe because both ledgers make a second run a no-op.
+
+    One exception: a row IGNORED with no organization that *this* delivery
+    can own. That is the other endpoint having ledgered an event it was not
+    meant to receive (a platform endpoint listening to connected accounts,
+    say); the right endpoint takes the row over rather than dropping the
+    only delivery that could apply it.
     """
     row = StripeEvent.objects.filter(event_id=event_id, account=account).first()
+    if row is None:
+        return None
     if (
-        row is not None
-        and row.organization_id is not None
-        and row.status in (StripeEventStatus.RECEIVED, StripeEventStatus.FAILED)
+        row.organization_id is None
+        and row.status == StripeEventStatus.IGNORED
+        and owner is not None
+    ):
+        row.organization = owner
+        row.status = StripeEventStatus.RECEIVED
+        row.error = ""
+        row.save(update_fields=["organization", "status", "error", "updated_at"])
+        logger.warning(
+            "Stripe event %s was ledgered unowned at the other endpoint; taken over", event_id
+        )
+        _enqueue(row)
+    elif row.organization_id is not None and row.status in (
+        StripeEventStatus.RECEIVED,
+        StripeEventStatus.FAILED,
     ):
         logger.info("Stripe event %s delivered again while %s; re-queued", event_id, row.status)
         _enqueue(row)
@@ -138,10 +200,21 @@ def _redeliver(event_id: str, account: str) -> None:
 
 @method_decorator(csrf_exempt, name="dispatch")
 class StripeWebhookView(View):
+    """
+    `as_view()` is the Connect endpoint; `as_view(platform=True)` is the
+    platform one. Same verification, same ledger, a different secret and a
+    different way of finding the tenant.
+    """
+
     http_method_names = ["post"]
+    platform = False
 
     def post(self, request: HttpRequest) -> HttpResponse:
-        secret = settings.STRIPE_CONNECT_WEBHOOK_SECRET
+        secret = (
+            settings.STRIPE_PLATFORM_WEBHOOK_SECRET
+            if self.platform
+            else settings.STRIPE_CONNECT_WEBHOOK_SECRET
+        )
         if not settings.STRIPE_ENABLED or not secret:
             return JsonResponse({"detail": connect.NOT_ENABLED}, status=503)
 
@@ -167,7 +240,7 @@ class StripeWebhookView(View):
             logger.warning("Stripe webhook rejected: no event id or type")
             return HttpResponse(status=400)
 
-        receive(event)
+        receive(event, platform=self.platform)
         return HttpResponse(status=200)
 
 
@@ -193,7 +266,10 @@ def process(organization_id: str, stripe_event_id: str) -> str:
     if row.status not in (StripeEventStatus.RECEIVED, StripeEventStatus.FAILED):
         return row.status
 
-    handler = HANDLERS.get(row.type)
+    # A platform event's row has no account. The two tables share a type
+    # (`checkout.session.completed`), so the row decides, not the type.
+    handlers = PLATFORM_HANDLERS if row.account == "" else HANDLERS
+    handler = handlers.get(row.type)
     if handler is None:
         _finish(row, StripeEventStatus.IGNORED, NO_HANDLER)
         return row.status
@@ -469,4 +545,56 @@ HANDLERS: dict[str, Callable[[StripeEvent], None]] = {
     "charge.dispute.created": charge_dispute_created,
     "charge.dispute.closed": charge_dispute_closed,
     "account.updated": account_updated,
+}
+
+
+# ---------------------------------------------------------------------------
+# The platform endpoint (Phase 4c): the tenant's own subscription
+# ---------------------------------------------------------------------------
+
+
+def _subscription_id_in(row: StripeEvent) -> str:
+    """The Subscription this event is about, wherever its object keeps it."""
+    obj = _object(row)
+    kind = obj.get("object")
+    if kind == "subscription":
+        return obj.get("id") or ""
+    if kind == "checkout.session":
+        return (obj.get("subscription") or "") if obj.get("mode") == "subscription" else ""
+    if kind == "invoice":
+        parent = obj.get("parent") or {}
+        details = parent.get("subscription_details") or {}
+        return details.get("subscription") or obj.get("subscription") or ""
+    return ""
+
+
+def platform_subscription_changed(row: StripeEvent) -> None:
+    """
+    Every platform event is the same two steps: make sure the row knows
+    which Subscription is the tenant's, then re-read it. Never copy from
+    the event -- Stripe does not promise order, and the Subscription is the
+    truth (4b's lesson, ADR-028).
+
+    The event's subscription is adopted when the organization has none, or
+    when the one it has is no longer live: an owner who subscribes again
+    after cancelling gets a new Subscription, and a stale event about the
+    old one must not steal the id back from the live one.
+    """
+    organization = row.organization
+    named = _subscription_id_in(row)
+    if named and named != organization.stripe_subscription_id:
+        live = bool(organization.stripe_subscription_id) and has_live_subscription(organization)
+        if not live:
+            organization.stripe_subscription_id = named
+            organization.save(update_fields=["stripe_subscription_id", "updated_at"])
+    subscription.refresh_subscription(organization)
+
+
+PLATFORM_HANDLERS: dict[str, Callable[[StripeEvent], None]] = {
+    "checkout.session.completed": platform_subscription_changed,
+    "customer.subscription.created": platform_subscription_changed,
+    "customer.subscription.updated": platform_subscription_changed,
+    "customer.subscription.deleted": platform_subscription_changed,
+    "invoice.paid": platform_subscription_changed,
+    "invoice.payment_failed": platform_subscription_changed,
 }

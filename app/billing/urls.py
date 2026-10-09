@@ -23,6 +23,13 @@ urlpatterns = [
     # Stripe calls this, nothing in ui/ does: a plain Django view outside the
     # schema, verified by signature rather than session (billing/webhook.py).
     path("stripe/webhook/", StripeWebhookView.as_view(), name="stripe-webhook"),
+    # The platform account's own events (the tenants' subscriptions, Phase
+    # 4c): a second endpoint in Stripe with its own secret, the same view.
+    path(
+        "stripe/platform-webhook/",
+        StripeWebhookView.as_view(platform=True),
+        name="stripe-platform-webhook",
+    ),
     path("stripe/connect/", StripeConnectView.as_view(), name="stripe-connect"),
     path("stripe/refresh/", StripeRefreshView.as_view(), name="stripe-refresh"),
     # Public, by signed token (the credential is in the invoice email).

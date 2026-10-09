@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 @shared_task(name="scheduling.materialize_all_organizations")
 def materialize_all_organizations() -> int:
     """Dispatch a per-organization materialization. Returns how many were queued."""
+    # A deactivated organization (by hand, or for billing -- Phase 4c) stops
+    # materializing; the horizon catches up on its own once it is back.
     organization_ids = Organization.objects.filter(is_active=True).values_list("id", flat=True)
 
     for organization_id in organization_ids:

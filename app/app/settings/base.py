@@ -433,6 +433,15 @@ CELERY_BEAT_SCHEDULE = {
         "task": "billing.sweep_stripe_events",
         "schedule": crontab(minute="*/5"),
     },
+    # Every organization's subscription re-read from Stripe and the coverage
+    # rule applied: a lapsed tenant goes read-only, one that paid comes back
+    # (Phase 4c, ADR-028). Daily, in the same small hours as the
+    # materializer; the webhook does the same within seconds when it
+    # arrives, this is for when it does not.
+    "enforce-platform-billing": {
+        "task": "billing.enforce_platform_billing_all",
+        "schedule": crontab(hour="3", minute="0"),
+    },
 }
 
 REDIS_URL = CELERY_BROKER_URL
