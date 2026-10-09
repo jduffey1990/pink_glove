@@ -30,6 +30,7 @@ import type {
   Payment,
   PaymentState,
   PlanPreview,
+  PlatformBilling,
   PublicInvoice,
   RecordPaymentRequest,
   RecurringPlan,
@@ -509,6 +510,27 @@ export async function startStripeOnboarding (): Promise<string> {
 /** Re-read the account from Stripe; called once on return from onboarding. */
 export async function refreshStripeStatus (): Promise<StripeStatus> {
   const { data } = await api.post<StripeStatus>('/api/billing/stripe/refresh/')
+  return data
+}
+
+// --- The platform subscription (Phase 4c) ----------------------------------
+// All three answer on a read-only organization: the owner must be able to pay.
+
+/** Owner only. Returns where to send the browser: Stripe Checkout, subscription mode. */
+export async function startSubscription (): Promise<string> {
+  const { data } = await api.post<{ url: string }>('/api/billing/subscription/checkout/')
+  return data.url
+}
+
+/** Owner only. Returns where to send the browser: Stripe's Customer Portal. */
+export async function openBillingPortal (): Promise<string> {
+  const { data } = await api.post<{ url: string }>('/api/billing/subscription/portal/')
+  return data.url
+}
+
+/** Re-read the subscription from Stripe; called once on return from Checkout. */
+export async function refreshSubscription (): Promise<PlatformBilling> {
+  const { data } = await api.post<PlatformBilling>('/api/billing/subscription/refresh/')
   return data
 }
 

@@ -42,6 +42,12 @@ export type BillableJob = Schemas['BillableJob']
 
 /** Stripe Connect (Phase 4b). */
 export type StripeStatus = Schemas['StripeStatus']
+
+/** The platform subscription (Phase 4c). The state and the notice are the server's. */
+export type BillingNotice = Schemas['BillingNotice']
+export type PlatformBilling = Schemas['PlatformBilling']
+export type BillingState = Schemas['BillingStateEnum']
+export type NoticeLevel = Schemas['NoticeLevelEnum']
 export type PublicInvoice = Schemas['PublicInvoice']
 export type PublicInvoiceLine = Schemas['PublicInvoiceLine']
 

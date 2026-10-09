@@ -10,17 +10,22 @@
    * says and nothing that has already gone out.
    */
   import type { Organization } from '@/api/types'
+  import type { SubscriptionAction } from '@/lib/subscriptionCard'
   import { computed, ref } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import {
     getCurrentOrganization,
+    openBillingPortal,
     refreshStripeStatus,
+    refreshSubscription,
     startStripeOnboarding,
+    startSubscription,
     updateOrganization,
   } from '@/api/endpoints'
   import { errorDetail } from '@/api/errors'
   import { noAccessFeeToApi, noAccessFeeToForm } from '@/lib/money'
   import { stripeCard } from '@/lib/stripeCard'
+  import { subscriptionCard } from '@/lib/subscriptionCard'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -81,6 +86,59 @@
     }
   }
 
+  // --- The platform subscription (Phase 4c) ---------------------------------
+
+  const subscriptionBusy = ref(false)
+  const subscriptionError = ref('')
+  const subscriptionNotice = ref('')
+
+  const subscription = computed(() =>
+    organization.value
+      ? subscriptionCard(organization.value.billing, session.isOwner, session.timeZone)
+      : null,
+  )
+
+  /** Both go to Stripe: Checkout to start, the portal for everything after. */
+  async function subscriptionAction (action: SubscriptionAction): Promise<void> {
+    subscriptionBusy.value = true
+    subscriptionError.value = ''
+    try {
+      const url = action === 'subscribe' ? await startSubscription() : await openBillingPortal()
+      window.location.assign(url)
+    } catch (error_) {
+      subscriptionError.value = errorDetail(error_) ?? 'Could not reach Stripe.'
+      subscriptionBusy.value = false
+    }
+  }
+
+  /**
+   * Back from Checkout (`?subscription=return`): re-read once, since the
+   * webhook may not have landed yet, refresh the session so the banner
+   * changes in the same navigation, then drop the query. `?subscription=
+   * cancelled` just shows the card as it was.
+   */
+  async function refreshAfterSubscribing (): Promise<void> {
+    const outcome = route.query.subscription
+    if (!outcome || !organization.value) {
+      return
+    }
+    if (outcome === 'return' && session.isAdminOrHigher) {
+      subscriptionBusy.value = true
+      try {
+        organization.value = { ...organization.value, billing: await refreshSubscription() }
+        await session.refresh()
+        subscriptionNotice.value = organization.value.billing.state === 'active'
+          ? 'Thank you -- your subscription is active.'
+          : 'Thanks -- Stripe is finishing up. This page will show your subscription shortly.'
+      } catch (error_) {
+        subscriptionError.value = errorDetail(error_) ?? 'Could not check with Stripe.'
+      } finally {
+        subscriptionBusy.value = false
+      }
+    }
+    await router.replace({ query: {} })
+  }
+
   const FEE_TYPES = [
     { value: 'none', title: 'No charge' },
     { value: 'flat', title: 'Flat amount' },
@@ -126,7 +184,7 @@
     }
   }
 
-  load().then(refreshAfterReturn)
+  load().then(refreshAfterReturn).then(refreshAfterSubscribing)
 
   async function save (): Promise<void> {
     saving.value = true
@@ -271,6 +329,53 @@
         />
       </v-card-actions>
     </v-card>
+
+    <!-- The platform subscription (Phase 4c). State, copy and the actions the
+         API will accept are all the server's; absent when billing is not
+         configured on the server. -->
+    <template v-if="subscription">
+      <h2 class="text-subtitle-1 mt-6 mb-2">Your pink glove subscription</h2>
+
+      <v-alert v-if="subscriptionError" class="mb-3" type="error" variant="tonal">
+        {{ subscriptionError }}
+      </v-alert>
+
+      <v-alert v-if="subscriptionNotice" class="mb-3" type="success" variant="tonal">
+        {{ subscriptionNotice }}
+      </v-alert>
+
+      <v-card border flat>
+        <v-card-item>
+          <template #prepend>
+            <v-icon :color="subscription.color" :icon="subscription.icon" />
+          </template>
+
+          <v-card-title class="text-subtitle-2">{{ subscription.title }}</v-card-title>
+        </v-card-item>
+
+        <v-card-text>{{ subscription.text }}</v-card-text>
+
+        <v-card-actions v-if="subscription.action">
+          <v-btn
+            v-if="subscription.secondary"
+            :disabled="subscriptionBusy"
+            text="Past invoices"
+            variant="text"
+            @click="subscriptionAction(subscription.secondary)"
+          />
+
+          <v-spacer />
+
+          <v-btn
+            color="primary"
+            :loading="subscriptionBusy"
+            :text="subscription.actionLabel"
+            variant="flat"
+            @click="subscriptionAction(subscription.action)"
+          />
+        </v-card-actions>
+      </v-card>
+    </template>
 
     <!-- Card payments: Stripe Connect. The server owns every state here. -->
     <h2 class="text-subtitle-1 mt-6 mb-2">Card payments</h2>

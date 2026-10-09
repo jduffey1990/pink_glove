@@ -25,6 +25,8 @@ function membership (organizationId: string, role = 'dispatcher') {
       timezone: 'America/Denver',
       primary_color: '',
       logo: null,
+      is_active: true,
+      billing: { state: 'trial', level: null, notice: null },
     },
     role,
     is_active: true,
@@ -302,5 +304,29 @@ describe('a 403 while signed in', () => {
     await settle()
 
     expect(store.isAuthenticated).toBe(false)
+  })
+})
+
+describe('the billing banner (Phase 4c)', () => {
+  it('reads is_active and the notice off the current organization', async () => {
+    const current = {
+      ...membership('org-a').organization,
+      is_active: false,
+      billing: { state: 'deactivated', level: 'error', notice: 'This organization is read-only.' },
+    }
+    mock.onGet('/api/users/session/').reply(200, session({ current_organization: current }))
+    const store = useSessionStore()
+
+    await store.boot()
+
+    expect(store.isActive).toBe(false)
+    expect(store.billingNotice?.notice).toBe('This organization is read-only.')
+  })
+
+  it('is active with nothing to say when signed out', () => {
+    const store = useSessionStore()
+
+    expect(store.isActive).toBe(true)
+    expect(store.billingNotice).toBeNull()
   })
 })
