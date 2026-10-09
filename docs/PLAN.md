@@ -7,15 +7,17 @@ Invariants that hold across all phases are in `CLAUDE.md`.
 
 ## Start here
 
-Everything through Phase D is on `main`, tests green — see "Phase 4a as
-built" and "Phase D as built" at the end of this file. **Staging is up**
-at `https://pink-glove-staging.fly.dev` (2026-09-22) and CI deploys `main`
-to it; "Found on the first staging deploy" at the very end records what
-standing it up turned up. Current work is **4b** (Stripe Connect) on
-`phase-4b-stripe-connect`, spec under "Phase 4 — Billing". Work on a branch, never on `main`; run the
-phase gate in `CLAUDE.md` at the end of each phase. Read "Phase 3b as built"
-before touching `ui/`, and "Phase gate — baseline": it records what was fixed
-and decided before Phase 4, and a backlog to fold in as files are touched.
+Everything through Phase 4b, plus what the first staging payment taught
+(2026-09-23), is on `main`, tests green — see "Phase 4b as built" and the
+two "Found on ..." sections at the end of this file. **Staging is up** at
+`https://pink-glove-staging.fly.dev` and CI deploys `main` to it; Stripe
+Connect is configured there per `docs/DEPLOY.md` step 9. Current work is
+**4c** (the platform subscription) on `phase-4c-platform-subscription`,
+spec under "Phase 4 — Billing", section 4c; Phase 5 follows it, as the
+table below says. Work on a branch, never on `main`; run the phase gate in
+`CLAUDE.md` at the end of each phase. Read "Phase 3b as built" before
+touching `ui/`, and "Phase gate — baseline": it records what was fixed and
+decided before Phase 4, and a backlog to fold in as files are touched.
 
 ```bash
 cd app
@@ -29,7 +31,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **1035 passing** in `app/`, and **131** in `ui/` (`cd ui && npm test`).
+Expect **1049 passing** in `app/`, and **131** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -41,6 +43,12 @@ testing gotchas that will otherwise cost you an hour each.
 2. ~~Stripe Connect~~ — **decided**: Connect with direct charges, plus a
    platform subscription (ADR-024). Payments are a ledger and Stripe is one
    method (ADR-025); an invoice is a snapshot (ADR-026).
+3. **4c's three numbers** — the monthly price (a Price in the Stripe
+   dashboard, never in code), the trial length (`PLATFORM_TRIAL_DAYS`,
+   spec default 30) and the grace after coverage ends
+   (`PLATFORM_GRACE_DAYS`, spec default 14). The spec builds against the
+   defaults; Jordan sets the real values in Stripe and in Fly's secrets,
+   and nothing in code changes if they differ.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -52,8 +60,8 @@ testing gotchas that will otherwise cost you an hour each.
 | 3b | Frontend slice (`ui/`), built against 3a | **Done** |
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
 | D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
-| 4b | Stripe Connect: tenants take card payments | **Done** on `phase-4b-stripe-connect`, gated; waiting to be merged |
-| 4c | Platform subscription: tenants pay for pink_glove | Not started |
+| 4b | Stripe Connect: tenants take card payments | **Done** (merged 2026-09-23, with the staging fixes) |
+| 4c | Platform subscription: tenants pay for pink_glove | **In progress** on `phase-4c-platform-subscription` — spec written 2026-10-09, no code yet |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
 ---
@@ -1303,13 +1311,404 @@ payment; a refund from the tenant's Stripe dashboard puts the balance back;
 and the other organization, which never connected Stripe, sees no button,
 no link, and no payment.
 
-### 4c — Platform subscription (outline)
+### 4c — Platform subscription
 
-Stripe Billing on the platform account; the platform webhook (separate
-endpoint and secret); a grace period, then `Organization.is_active = False`,
-which is already read-only (baseline gate, decision 2). Needs the standing
-"this organization is deactivated" banner the gate left undone, with a link to
-fix billing, and `is_active` on the session payload to drive it.
+Decided in ADR-024: Stripe Billing on the **platform** account, a separate
+webhook endpoint with its own secret, and a lapse that ends in
+`Organization.is_active = False`, which is already read-only (baseline gate,
+decision 2). Do not re-open those. This section decides the rest: how a
+tenant comes to be covered, what a lapse is, how long the grace is, and
+what the people inside a lapsed organization see. Same rules as 4a and 4b:
+checkpoints in order, suite green and schema regenerated at each, tests
+before the API, a cross-tenant test and a test per role on each side of
+every permission line.
+
+**The shape, in one paragraph.** A new organization starts on an
+*application-side* trial with no card: `trial_ends_at` is stamped when the
+row is created, and nothing in Stripe exists yet. The owner subscribes
+through Stripe Checkout in subscription mode on the platform account, which
+creates the Stripe Customer and the Subscription; everything after that --
+the card, the receipts, cancelling -- is Stripe's Customer Portal, not pages
+here. The organization mirrors the subscription's state (status, the end
+of the last *paid* period, cancel-at-period-end), written only by
+`billing/subscription.py` and the platform webhook, and always by
+re-reading the Subscription rather than copying from an event. From those
+fields one rule computes `covered_until`; `PLATFORM_GRACE_DAYS` after it
+passes, a daily task sets `is_active = False`, and a subscription that
+comes good turns it back on. The server publishes one word for the state
+and one sentence for the banner (ADR-023), and the owner can still reach
+the subscribe and portal endpoints while the organization is read-only --
+the one deliberate hole in the read-only rule, because someone has to be
+able to pay.
+
+**Decisions this section makes, with what was rejected.**
+
+- **A flat monthly price per organization, held in Stripe.** The amount
+  is a Price in the dashboard and `STRIPE_PLATFORM_PRICE_ID` names it;
+  the code never knows the number. *Rejected -- per-seat pricing:* a
+  cleaning company's headcount moves weekly and a one-person platform
+  does not want to police seats. *Rejected -- the price in code or
+  settings:* changing it would be a deploy, and Stripe already versions
+  prices.
+- **The trial is ours, not Stripe's.** `trial_ends_at` on the row, set at
+  creation to `PLATFORM_TRIAL_DAYS` out (default 30), extended by hand in
+  the admin when a pilot needs longer. A trial with no card and no Stripe
+  object is what ADR-024 means by "needed before anyone is charged, not
+  before a pilot tenant can use the product". *Rejected -- Checkout with
+  `trial_period_days`:* it puts the card form in front of a pilot on day
+  one, and a trial that ends in Stripe but was never started here is a
+  lapse the app cannot explain.
+- **Coverage is a date, and the grace runs from it.** `covered_until` is
+  the latest of the trial end and the end of the last period Stripe was
+  *paid* for; `PLATFORM_GRACE_DAYS` (default 14) after it the organization
+  is read-only. One rule for every lapse: an expired trial nobody
+  subscribed after, a renewal whose card failed, a subscription the owner
+  cancelled. *Rejected -- deactivating on Stripe's `past_due` or
+  `canceled` directly:* Stripe's retry schedule and its "what to do when
+  retries fail" setting are dashboard configuration, and `past_due`
+  arrives the morning a card fails, which is no time to lock a dispatcher
+  out of the day's schedule. *Rejected -- computing read-only-ness per
+  request from the dates:* `is_active` is already the chokepoint
+  `IsOrgMember` reads with no extra query, and the admin flag already
+  means "read-only" to the rest of the product; a second meaning for the
+  same state is a bug factory.
+- **Deactivation by billing is reversible only by billing; deactivation
+  by hand is not touched.** `deactivated_for_billing_at` records which
+  it was. A subscription coming good reactivates an organization *that
+  billing deactivated*; one Jordan switched off in the admin stays off
+  whatever Stripe says.
+- **Stripe's Customer Portal, not our own card pages.** Updating a card,
+  reading receipts, cancelling, and un-cancelling before the period ends
+  are the portal's. The product gets two buttons and no PCI surface.
+- **A deactivated tenant's customers can still pay it.** The pay page and
+  its checkout are public, by token, and the webhook writes the payment
+  regardless of `is_active`: the money is the tenant's, not ours, and an
+  invoice already sent is a document their customer is entitled to settle.
+  Cash and checks are recorded through a write the tenant cannot make
+  until they are current -- that is the read-only rule working as
+  intended, and the banner says so.
+- **Billing is optional on the server, like Connect.** With no
+  `STRIPE_PLATFORM_PRICE_ID` nobody is ever deactivated for billing, the
+  subscription card is absent, and the banner has nothing to say: staging
+  deploys without a price, and the product is exactly 4b. Production
+  refuses to start with a price but no platform webhook secret, for 4b's
+  reason -- a subscription whose lapse is never heard about is a free
+  product with a card form.
+
+#### 4c.0 — Prep
+
+1. Settings, all from env, none required: `STRIPE_PLATFORM_PRICE_ID`,
+   `STRIPE_PLATFORM_WEBHOOK_SECRET`, `PLATFORM_TRIAL_DAYS` (int, 30),
+   `PLATFORM_GRACE_DAYS` (int, 14), and the derived
+   `PLATFORM_BILLING_ENABLED = STRIPE_ENABLED and bool(STRIPE_PLATFORM_PRICE_ID)`.
+   Document them in `.env.example` under their own heading. `production.py`
+   refuses a price id without the platform secret, beside the 4b check.
+   `bin/deploy-audit.sh` needs nothing: nothing new is required.
+2. `billing/subscription.py` -- the one module that talks to Stripe on the
+   platform's own behalf: customers, subscription Checkout, portal
+   sessions, and reading a Subscription back. It reuses `connect.client()`
+   and `connect.stripe_errors()` and never passes `stripe_account=` --
+   that absence is the whole difference between the two modules, and a
+   comment at the top says so. (Not `billing/platform.py`: it would
+   shadow the standard library's `platform`, and `ruff` would say so.)
+   The dependency direction holds -- `billing` imports `organizations`;
+   nothing imports `billing`. The coverage rule itself lives in
+   `organizations/services.py`, because `OrganizationSerializer` has to
+   publish the result and `organizations` must not import `billing`.
+3. `ADR-028` in `docs/DECISIONS.md`: the five decisions above, with their
+   rejections, so the next person who wants to "simplify" the trial into
+   Stripe's reads why it is not there.
+4. Fixtures in `billing/tests/stripe_fixtures.py`: platform event payloads
+   (`customer.subscription.*`, `invoice.paid`, `invoice.payment_failed`,
+   a subscription-mode `checkout.session.completed`) with no `account`
+   key, a Subscription object in the pinned API version's shape (the
+   period is on the *item* -- see 4c.2), and the existing `signed()`
+   helper with the platform secret. `billing/tests/conftest.py` gains
+   `platform_billing_on` beside `stripe_on`.
+
+#### 4c.1 — Models
+
+```
+Organization
+    stripe_customer_id            CharField(255), blank (exists; gains a partial unique
+                                  constraint where != "", like stripe_account_id)
+    stripe_subscription_id        CharField(255), blank (exists)
+    subscription_status           CharField(32), blank      # Stripe's word, verbatim
+    subscription_paid_through     DateTimeField, null       # end of the last PAID period
+    subscription_cancel_at_period_end  BooleanField, default False
+    trial_ends_at                 DateTimeField, null       # stamped on create; admin may extend
+    billing_exempt                BooleanField, default False  # comped; admin only, never on the API as writable
+    deactivated_for_billing_at    DateTimeField, null       # set by the coverage rule, cleared by it
+```
+
+`trial_ends_at` is stamped in `save()` on first save, like `slug`, when it
+is null and the row is not exempt: `created + PLATFORM_TRIAL_DAYS`. The
+migration gives every existing row a trial from the migration's own
+moment, so staging's demo organizations and anything created before 4c are
+covered for a month from the deploy and nobody wakes up read-only. The
+`stripe_customer_id` constraint matches the account one: a platform event
+resolves its `customer` to exactly one tenant, and the database refuses
+two.
+
+The Connect and subscription fields stay on `Organization` rather than a
+`Subscription` model. There is one subscription per tenant, the rule reads
+four fields, and a join for four fields is a join for its own sake; the
+day there are two products or a history worth keeping, the table appears
+with a migration that copies these over.
+
+`organizations/enums.py` gains `BillingState` -- the one word the pages
+switch on:
+
+| state | meaning |
+|---|---|
+| `exempt` | comped, or platform billing is not configured on the server |
+| `trial` | the trial is running and there is no live subscription |
+| `active` | Stripe says `active` or `trialing`; paid through a future date |
+| `past_due` | Stripe says `past_due`: a renewal failed and Stripe is retrying |
+| `lapsed` | coverage has ended and the grace is running |
+| `deactivated` | `is_active` is false, for billing or by hand |
+
+`organizations/services.py` (new) holds the rule, pure functions of an
+organization and a `now`, so every path -- the serializer, the task, the
+webhook -- gets the same answer:
+
+- `covered_until(organization) -> datetime | None` -- `None` means
+  indefinitely (exempt, or billing not enabled); otherwise the later of
+  `trial_ends_at` and `subscription_paid_through`.
+- `grace_ends_at(organization)` -- `covered_until + PLATFORM_GRACE_DAYS`,
+  or `None`.
+- `billing_state(organization, now) -> BillingState`.
+- `billing_notice(organization, role, now) -> (level, text) | None` --
+  the banner's sentence, or nothing. `level` is `info`, `warning` or
+  `error`. Nothing during a trial until seven days remain ("Your free
+  trial ends on {date}. Subscribe to keep scheduling after that."), then
+  warning; `active` with cancel-at-period-end is info ("Your subscription
+  ends on {date}."); `past_due` and `lapsed` are warning, and name the
+  grace end ("Subscribe by {date} to keep scheduling"); `deactivated` is
+  error, and says whether it was billing ("read-only because its
+  subscription lapsed on {date}") or not ("This organization has been
+  deactivated." -- the sentence the baseline gate owed). A non-owner's
+  sentence ends "Ask the organization owner to ..." rather than telling
+  them to do something they cannot. Dates are organization-local, through
+  `Organization.tz`.
+- `available_actions(organization) -> list[str]` -- `subscribe` when
+  billing is enabled, the organization is not exempt and there is no live
+  subscription (status not in `active`, `trialing`, `past_due`); `manage`
+  when a Stripe customer exists. The role is the permission layer's
+  business, as it is for Connect.
+- `apply_coverage(organization, now) -> bool` -- the one place `is_active`
+  moves for billing. Past the grace and still active: `is_active = False`,
+  `deactivated_for_billing_at = now`. Covered and
+  `deactivated_for_billing_at` set: `is_active = True`, clear the stamp.
+  Returns whether anything changed. Never touches an organization that is
+  inactive with the stamp null -- that one was switched off by a person.
+  Saves only the fields it changed.
+
+Test the rule by table: each state from each combination of the fields;
+the grace boundary on both sides of midnight in the organization's zone;
+exempt and not-enabled never lapse; a manual deactivation survives a paid
+subscription; the stamp round-trips; the notice per role.
+
+#### 4c.2 — Subscription services (`billing/subscription.py`)
+
+- `start_checkout(organization, *, actor) -> str` -- under the
+  organization's row lock, creates the Stripe Customer on first call
+  (`name`, `email`, `metadata={organization_id}`) and stores
+  `stripe_customer_id`; then a Checkout Session on the platform account:
+  `mode="subscription"`, `customer=` the stored id, one line item of
+  `STRIPE_PLATFORM_PRICE_ID` quantity 1, `client_reference_id` =
+  organization id, `metadata={organization_id}` on the session and in
+  `subscription_data.metadata` (the Subscription is what later events name,
+  and it does not inherit the session's), `success_url` and `cancel_url`
+  to `FRONTEND_BASE_URL/billing/settings?subscription=return|cancelled`.
+  Returns the URL. Refused with a 409 when a live subscription exists --
+  the portal is the door then. Owner only: subscribing binds the business
+  to a recurring charge.
+- `portal_url(organization) -> str` -- a Billing Portal session for the
+  stored customer, `return_url` the settings page. 409 with no customer.
+  Owner only. The portal's features (update card, cancel at period end,
+  invoice history; no plan switching, there is one plan) are dashboard
+  configuration, written down in the runbook.
+- `refresh_subscription(organization) -> Organization` -- re-reads the
+  Subscription (`expand=["latest_invoice"]`) and copies four things:
+  `subscription_status`; `subscription_cancel_at_period_end`;
+  `subscription_paid_through`, which is the item's `current_period_end`
+  when the latest invoice is `paid` or the status is `trialing`, and the
+  item's `current_period_start` otherwise -- **on the pinned API version
+  the period lives on `items.data[0]`, not on the Subscription**, and a
+  renewal Stripe is still trying to collect has already advanced the
+  period, so "the period end" alone would hand a failed card a free
+  month; and `stripe_subscription_id` when the row has none yet (the
+  checkout event races the subscription events). Then `apply_coverage`,
+  so a payment that comes good reactivates in the same call that learned
+  of it. With no subscription id, a no-op. Called on return from
+  Checkout, by every platform handler, and by the daily task.
+
+Test each with `stripe` patched: the customer is created once; the
+session carries the metadata on both objects and the price from settings;
+a 409 when live; the four fields from a paid, a failed-renewal, a
+trialing and a cancel-at-period-end Subscription, read off the item; the
+reactivation happens inside `refresh_subscription`.
+
+#### 4c.3 — The platform webhook and the daily task
+
+`POST /api/billing/stripe/platform-webhook/` -- a second instance of the
+4b view with the platform secret and a different resolver, not a second
+copy of it: `StripeWebhookView` gains `secret_setting` and `resolve` class
+attributes, and `receive()` takes the resolver. Everything else -- raw
+bytes to `construct_event`, the 400 without the body logged, the ledger
+insert on `(event_id, account)`, IGNORED for what nobody owns or handles,
+enqueue ids only, 200 -- is the same code. The platform resolver reads
+`data.object.customer` and finds the organization with that
+`stripe_customer_id`; an event with an `account` at this endpoint, or with
+no customer, or with a customer nobody holds, is IGNORED, never guessed at.
+The Connect endpoint already ignores an event with no account; now the
+two are mirror images and a test sends each endpoint the other's event.
+
+`process()` picks the table by the row: `account == ""` is a platform
+event and dispatches on `PLATFORM_HANDLERS`; otherwise `HANDLERS` as
+before. `checkout.session.completed` is in both tables with different
+handlers, and this is why the dispatch keys on the row and not the type.
+Every platform handler is the same two lines -- `refresh_subscription`,
+which re-reads and applies -- because Stripe does not promise order and
+the Subscription is the truth:
+
+| Event | Effect |
+|---|---|
+| `checkout.session.completed` (`mode == "subscription"`) | store `session.subscription` as `stripe_subscription_id` if the row has none, then refresh |
+| `customer.subscription.created` / `updated` / `deleted` | refresh |
+| `invoice.paid` / `invoice.payment_failed` | refresh (the handler is what makes a card coming good reactivate within seconds rather than at 3am) |
+
+Six types, registered on the platform endpoint ("events on your account",
+not connected accounts), listed in the runbook and nowhere else.
+
+`billing.enforce_platform_billing_all` runs from beat daily at 03:00 UTC
+and fans out `billing.enforce_platform_billing(organization_id)` for
+every organization, inactive ones included (reactivation is its job too).
+Each re-reads the subscription from Stripe when there is one -- a call per
+tenant per day, so a webhook lost the way 4b's first payment was lost
+costs a day, not a tenant -- and then `apply_coverage`. With billing not
+enabled it does nothing. The sweep is unchanged; platform rows are swept
+like Connect rows because the sweep reads the ledger, not the type.
+
+**What deactivation stops.** `scheduling.materialize_all_organizations`
+and `audit.evaluate_access_reveals_all` already skip inactive
+organizations: a read-only tenant stops materializing jobs and stops
+evaluating reveals (it cannot make any). Reactivation resumes both at the
+next beat, and the materializer's horizon catches up on its own. Say so in
+a comment where each filters on `is_active`.
+
+Test the pipeline end to end with signed bytes against the platform
+secret: a Connect-secret signature is a 400 here; a replay is one row;
+an event with an `account` is IGNORED; a customer nobody holds is
+IGNORED; organization B's customer never touches organization A even when
+the metadata names it; each handler refreshes; a payment event on a
+billing-deactivated organization reactivates it, and on a hand-deactivated
+one does not. The task: `.apply()`ed once, skips without a subscription,
+is a no-op with billing disabled.
+
+#### 4c.4 — API
+
+- `OrganizationSerializer` gains `billing`, read-only, from a
+  `PlatformBillingSerializer` in `organizations/serializers.py`: `state`,
+  `level`, `notice`, `trial_ends_at`, `covered_until`, `grace_ends_at`,
+  `status` (Stripe's word), `cancel_at_period_end`, `exempt`,
+  `available_actions`. `OrganizationSummarySerializer` -- the one on the
+  session payload and the membership list -- gains `is_active` and a
+  `billing` block of `state`, `level` and `notice` only, so the shell can
+  draw the banner from the session it already has. Both tailor `notice` to
+  the caller's role from the serializer context (the membership is on the
+  request; on the membership list it is the row's).
+- `POST /api/billing/subscription/checkout/` (owner) → `{url}`.
+  `POST /api/billing/subscription/portal/` (owner) → `{url}`.
+  `POST /api/billing/subscription/refresh/` (admin+) → the `billing` block
+  after `refresh_subscription`; the settings page calls it on return from
+  Checkout. Views in `billing/views.py` beside the Connect views, reaching
+  `organizations.serializers.PlatformBillingSerializer` the narrow way
+  `StripeStatusSerializer` is reached.
+- **All three carry `allowed_while_inactive = True`**, a view attribute
+  `IsOrgMember` reads before refusing an unsafe method on a deactivated
+  organization. It is the only exemption, it is explicit on the view, and
+  the gate lists every view that sets it. Without it the owner of a
+  lapsed organization could see the bill and not pay it.
+- Every new view carries `@extend_schema`; regenerate the contract.
+
+Tests: each endpoint per role on both sides (owner / admin / dispatcher /
+cleaner / customer / anonymous), the 503 with Stripe off, the 409s, and
+the three endpoints answering on an inactive organization while a
+`PATCH /api/organizations/current/` beside them is still refused.
+
+#### 4c.5 — Frontend
+
+- **The banner**, the thing the baseline gate left undone. `App.vue`
+  renders one `v-alert` above the router view when
+  `session.organization.billing.notice` is set, coloured by `level`, with
+  a "Billing settings" link for admin and above. The copy is the server's
+  sentence, never composed here (ADR-023). A pure
+  `src/lib/billingBanner.ts` decides "show, with what colour and link"
+  from the summary and the role, with a spec. The session store exposes
+  `isActive` and refreshes after the settings page's refresh call, so the
+  banner changes in the same navigation that fixed it.
+- **Billing settings** gains a "Your pink glove subscription" card that
+  switches on `billing.state`, built by `src/lib/subscriptionCard.ts` the
+  way `stripeCard.ts` builds the Connect card: title, text, which of
+  `subscribe` / `manage` to offer from `available_actions` and
+  `session.isOwner`, with the owner-only note for everyone else. The
+  Subscribe button posts for a checkout URL and sets `window.location`;
+  Manage does the same with the portal. On `?subscription=return` the page
+  calls refresh once, then `session.refresh()`, and drops the query, as
+  the Connect card does on `?stripe=return`. `?subscription=cancelled`
+  shows the card unchanged. The card is absent when `state` is `exempt`
+  and billing is not configured, and says "Complimentary" when it is
+  exempt by hand.
+- Nothing is added to the router; the query keys join the coupling list
+  beside Connect's.
+- Vitest: `subscriptionCard.spec.ts` for every state and both roles;
+  `billingBanner.spec.ts`; the session store's `isActive`.
+
+#### 4c.6 — Deploy, seed, docs, gate
+
+- `docs/DEPLOY.md` step 10: in the same sandbox as step 9, create the
+  Product and its monthly Price and copy the `price_…` id; register a
+  *second* endpoint at `/api/billing/stripe/platform-webhook/` listening
+  to **events on your account** (step 9's is on connected accounts; the
+  header on each endpoint's page says which) with the six types; set
+  `STRIPE_PLATFORM_PRICE_ID` and `STRIPE_PLATFORM_WEBHOOK_SECRET`;
+  configure the Customer Portal once (Settings → Billing → Customer
+  portal: update payment method, cancel at period end, invoice history;
+  no plan changes) and the subscription retry setting (Settings → Billing
+  → Subscriptions: when all retries fail, *cancel the subscription* -- the
+  app's grace is independent of it, and `unpaid` would be a status with
+  no end). Locally, `stripe listen --forward-to localhost:8000/…` for
+  this endpoint and `--forward-connect-to` for the other; both at once
+  is one command with both flags. Test cards: `4242…` subscribes;
+  `4000 0000 0000 0341` attaches and then fails the renewal, which the
+  dashboard's clock can be advanced to force. A "when the banner is wrong"
+  section, in the shape of 4b's "when a payment does not show up": is the
+  event there, did it arrive, did the worker apply it, and what the daily
+  task would do at 03:00 regardless.
+- `seed_demo`: the two organizations differ here as they do in tax -- one
+  is `billing_exempt` (the banner never shows), the other on a trial that
+  ends in five days (the banner shows, warning, with the date). A rule
+  read from the wrong tenant shows up as the wrong banner. No Stripe
+  objects are seeded, for 4b's reason.
+- `CLAUDE.md`: `billing/subscription.py` in the layout beside
+  `connect.py` and `webhook.py` as the third and last Stripe caller; the
+  coupling list gains the six platform event types (`PLATFORM_HANDLERS`
+  and the runbook), the `?subscription=return|cancelled` keys, and
+  `allowed_while_inactive`; invariant 4's gate record lists the platform
+  webhook as the second deliberate public route. Write "Phase 4c as
+  built", run the gate, record it.
+
+**4c exit criteria:** on staging, the seeded trial organization shows the
+trial banner; its owner subscribes with the test card and, back on the
+settings page, sees Active with the renewal date and no banner; the
+portal opens from Manage and a cancellation there puts "ends on" in the
+banner within seconds; with `trial_ends_at` and `subscription_paid_through`
+moved back in the admin, the daily task makes the organization read-only
+and the banner says why, the schedule still loads, a job cannot be
+edited, and Subscribe still works and reactivates it; and the other
+organization, exempt, sees none of it.
 
 ---
 
