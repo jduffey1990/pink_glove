@@ -5,10 +5,23 @@ from organizations.models import Organization
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "timezone", "is_active", "created_at")
-    list_filter = ("is_active", "timezone")
+    list_display = ("name", "slug", "timezone", "is_active", "billing_exempt", "created_at")
+    list_filter = ("is_active", "billing_exempt", "timezone")
     search_fields = ("name", "slug", "email", "phone")
-    readonly_fields = ("id", "slug", "created_at", "updated_at", "deleted_at")
+    readonly_fields = (
+        "id",
+        "slug",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        # Mirrors of Stripe (ADR-028): re-read from it, never typed in here.
+        "stripe_customer_id",
+        "stripe_subscription_id",
+        "subscription_status",
+        "subscription_paid_through",
+        "subscription_cancel_at_period_end",
+        "deactivated_for_billing_at",
+    )
 
     fieldsets = (
         (None, {"fields": ("name", "slug", "timezone", "is_active")}),
@@ -48,10 +61,25 @@ class OrganizationAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Stripe (Phase 4b/4c)",
+            "Platform subscription (Phase 4c)",
             {
-                "fields": ("stripe_customer_id", "stripe_subscription_id"),
-                "classes": ("collapse",),
+                "fields": (
+                    "billing_exempt",
+                    "trial_ends_at",
+                    "subscription_status",
+                    "subscription_paid_through",
+                    "subscription_cancel_at_period_end",
+                    "deactivated_for_billing_at",
+                    "stripe_customer_id",
+                    "stripe_subscription_id",
+                ),
+                "description": (
+                    "Exempt means comped: never deactivated for billing. Move the trial end "
+                    "to give a pilot longer. The rest is read from Stripe by the daily task "
+                    "and the webhook. An organization deactivated for billing has the stamp "
+                    "set and comes back on its own when a subscription is paid; one switched "
+                    "off here, by hand, stays off whatever Stripe says."
+                ),
             },
         ),
         ("Audit", {"fields": ("id", "created_at", "updated_at", "deleted_at")}),
