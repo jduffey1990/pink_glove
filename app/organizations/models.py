@@ -2,6 +2,7 @@ import datetime as dt
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo, available_timezones
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
@@ -141,10 +142,36 @@ class Organization(Base):
         help_text='Printed at the foot of every invoice, e.g. "Make checks payable to ...".',
     )
 
-    # Parked for Phase 4c -- tenants paying for the software, as distinct from
-    # the tenant's own customers paying invoices. See ADR-024.
+    # --- Platform subscription (Phase 4c, ADR-024, ADR-028) -----------------
+    # The tenant paying for pink_glove, as distinct from the tenant's own
+    # customers paying invoices. The Stripe fields are written only by
+    # `billing.subscription` and the platform webhook, always by re-reading
+    # the Subscription; the rule that turns them into "covered until" and
+    # "read-only" is `organizations.services`, and the only thing it writes
+    # is `is_active` and the stamp beside it.
+
+    #: The Customer on the platform account. A platform event resolves its
+    #: `customer` to exactly one tenant, so the constraint below refuses two.
     stripe_customer_id = models.CharField(max_length=255, blank=True, default="", db_index=True)
     stripe_subscription_id = models.CharField(max_length=255, blank=True, default="")
+    #: Stripe's own word, verbatim: active, trialing, past_due, canceled, ...
+    subscription_status = models.CharField(max_length=32, blank=True, default="")
+    #: The end of the last period Stripe was PAID for. A renewal Stripe is
+    #: still trying to collect has already advanced the period, so this is
+    #: not "the period end" -- see `billing.subscription.refresh_subscription`.
+    subscription_paid_through = models.DateTimeField(null=True, blank=True)
+    subscription_cancel_at_period_end = models.BooleanField(default=False)
+
+    #: The application-side trial: stamped on creation, `PLATFORM_TRIAL_DAYS`
+    #: out, with no card and nothing in Stripe. Extended by hand in the admin
+    #: when a pilot needs longer.
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+    #: Comped. Never on the API as writable; the admin sets it.
+    billing_exempt = models.BooleanField(default=False)
+    #: Set when the coverage rule deactivated this organization, cleared when
+    #: it reactivates it. Null on an inactive organization means a person
+    #: switched it off, and billing leaves it alone.
+    deactivated_for_billing_at = models.DateTimeField(null=True, blank=True)
 
     # --- Stripe Connect (Phase 4b, ADR-024) ---------------------------------
     # The tenant's own Stripe account, on which its customers' card payments
@@ -174,7 +201,12 @@ class Organization(Base):
                 fields=["stripe_account_id"],
                 condition=~models.Q(stripe_account_id="") & models.Q(deleted_at__isnull=True),
                 name="one_organization_per_stripe_account",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["stripe_customer_id"],
+                condition=~models.Q(stripe_customer_id="") & models.Q(deleted_at__isnull=True),
+                name="one_organization_per_stripe_customer",
+            ),
         ]
 
     @property
@@ -195,6 +227,11 @@ class Organization(Base):
     def save(self, *args, **kwargs):
         if not self.slug:
             self.slug = slugify(self.name)
+        if self._state.adding and self.trial_ends_at is None and not self.billing_exempt:
+            # A new organization starts on the trial, with nothing in Stripe
+            # (ADR-028). Stamped here rather than defaulted so the length is
+            # read from settings at creation, and so a comped one gets none.
+            self.trial_ends_at = timezone.now() + dt.timedelta(days=settings.PLATFORM_TRIAL_DAYS)
         super().save(*args, **kwargs)
 
     @property

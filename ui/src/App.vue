@@ -7,6 +7,7 @@
   import { computed, ref, watchEffect } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import { useDisplay } from 'vuetify'
+  import { billingBanner } from '@/lib/billingBanner'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -23,6 +24,10 @@
   })
 
   const bare = computed(() => route.meta.access === 'public' || !session.isAuthenticated)
+
+  // The subscription banner (Phase 4c). The sentence is the server's; this
+  // only decides whether to draw it and where to send an admin.
+  const banner = computed(() => billingBanner(session.billing, session.isAdminOrHigher))
 
   const navigation = computed(() => {
     const items: { title: string, icon: string, to: string }[] = []
@@ -108,6 +113,24 @@
     </template>
 
     <v-main>
+      <v-alert
+        v-if="!bare && banner"
+        class="rounded-0"
+        density="compact"
+        :icon="banner.icon"
+        :type="banner.level"
+        variant="tonal"
+      >
+        {{ banner.text }}
+        <router-link
+          v-if="banner.showSettingsLink"
+          class="ml-2 font-weight-medium"
+          :to="{ name: 'billing-settings' }"
+        >
+          Billing settings
+        </router-link>
+      </v-alert>
+
       <router-view />
     </v-main>
   </v-app>

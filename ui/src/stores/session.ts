@@ -117,6 +117,15 @@ export const useSessionStore = defineStore('session', () => {
    */
   const timeZone = computed(() => organization.value?.timezone ?? 'UTC')
 
+  /**
+   * Whether the organization may be written to. False means read-only: the
+   * server refuses every unsafe request, and the banner says why (Phase 4c).
+   */
+  const isActive = computed(() => organization.value?.is_active ?? true)
+
+  /** The server's own words about the subscription, for the banner (ADR-023). */
+  const billing = computed(() => organization.value?.billing ?? null)
+
   /** True when the user must choose before anything else can be scoped. */
   const needsOrganizationChoice = computed(
     () => isAuthenticated.value && memberships.value.length > 1 && organization.value === null,
@@ -221,6 +230,8 @@ export const useSessionStore = defineStore('session', () => {
     isCustomer,
     isOwner,
     timeZone,
+    isActive,
+    billing,
     needsOrganizationChoice,
     boot,
     refresh,

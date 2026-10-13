@@ -10,17 +10,23 @@
    * says and nothing that has already gone out.
    */
   import type { Organization } from '@/api/types'
+  import type { SubscriptionAction } from '@/lib/subscriptionCard'
+  import type { Ref } from 'vue'
   import { computed, ref } from 'vue'
   import { useRoute, useRouter } from 'vue-router'
   import {
     getCurrentOrganization,
+    openBillingPortal,
     refreshStripeStatus,
+    refreshSubscription,
     startStripeOnboarding,
+    startSubscription,
     updateOrganization,
   } from '@/api/endpoints'
   import { errorDetail } from '@/api/errors'
   import { noAccessFeeToApi, noAccessFeeToForm } from '@/lib/money'
   import { stripeCard } from '@/lib/stripeCard'
+  import { subscriptionCard } from '@/lib/subscriptionCard'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -33,8 +39,43 @@
   const error = ref('')
   const saved = ref(false)
 
-  // The API enforces this independently; hiding the button is a courtesy.
-  const canEdit = computed(() => session.isAdminOrHigher)
+  // The API enforces both independently; hiding the button is a courtesy. A
+  // read-only organization (Phase 4c) would get a 403 from Save.
+  const canEdit = computed(() => session.isAdminOrHigher && session.isActive)
+
+  // --- Back from Stripe ------------------------------------------------------
+
+  /**
+   * Both Stripe flows send the browser back here with a query key. Re-read
+   * once (the webhook may not have landed yet), merge the fresh block into
+   * the organization, say what happened, and drop the query so a reload
+   * does not ask again. Admin and above only, which the API enforces too.
+   */
+  async function settleReturn<T> (
+    key: 'stripe' | 'subscription',
+    refresh: () => Promise<T>,
+    merge: (organization: Organization, fresh: T) => Organization,
+    noticeFor: (organization: Organization) => string,
+    busy: Ref<boolean>,
+    error: Ref<string>,
+    notice: Ref<string>,
+  ): Promise<void> {
+    if (!route.query[key] || !organization.value) {
+      return
+    }
+    if (session.isAdminOrHigher) {
+      busy.value = true
+      try {
+        organization.value = merge(organization.value, await refresh())
+        notice.value = noticeFor(organization.value)
+      } catch (error_) {
+        error.value = errorDetail(error_) ?? 'Could not check with Stripe.'
+      } finally {
+        busy.value = false
+      }
+    }
+    await router.replace({ query: {} })
+  }
 
   // --- Card payments (Stripe Connect, Phase 4b) -----------------------------
 
@@ -58,27 +99,65 @@
     }
   }
 
-  /**
-   * Back from Stripe (`?stripe=return` or `?stripe=refresh`): re-read the
-   * account once, since the webhook may not have landed yet, then drop the
-   * query so a reload does not ask again.
-   */
-  async function refreshAfterReturn (): Promise<void> {
-    if (!route.query.stripe || !organization.value || !session.isAdminOrHigher) {
-      return
-    }
-    stripeBusy.value = true
-    try {
-      organization.value = { ...organization.value, stripe: await refreshStripeStatus() }
-      stripeNotice.value = organization.value.stripe.charges_enabled
+  /** `?stripe=return` or `?stripe=refresh`: back from onboarding. */
+  function refreshAfterReturn (): Promise<void> {
+    return settleReturn(
+      'stripe',
+      refreshStripeStatus,
+      (current, stripe) => ({ ...current, stripe }),
+      current => current.stripe.charges_enabled
         ? 'Stripe is connected. Customers can now pay invoices by card.'
-        : 'Thanks -- Stripe is finishing up. This page will show when card payments are on.'
+        : 'Thanks -- Stripe is finishing up. This page will show when card payments are on.',
+      stripeBusy,
+      stripeError,
+      stripeNotice,
+    )
+  }
+
+  // --- The platform subscription (Phase 4c) ---------------------------------
+
+  const subscriptionBusy = ref(false)
+  const subscriptionError = ref('')
+  const subscriptionNotice = ref('')
+
+  const subscription = computed(() =>
+    organization.value ? subscriptionCard(organization.value.billing, session.isOwner) : null,
+  )
+
+  /** Both go to Stripe: Checkout to start, the portal for everything after. */
+  async function subscriptionAction (action: SubscriptionAction): Promise<void> {
+    subscriptionBusy.value = true
+    subscriptionError.value = ''
+    try {
+      const url = action === 'subscribe' ? await startSubscription() : await openBillingPortal()
+      window.location.assign(url)
     } catch (error_) {
-      stripeError.value = errorDetail(error_) ?? 'Could not check with Stripe.'
-    } finally {
-      stripeBusy.value = false
-      await router.replace({ query: {} })
+      subscriptionError.value = errorDetail(error_) ?? 'Could not reach Stripe.'
+      subscriptionBusy.value = false
     }
+  }
+
+  /**
+   * `?subscription=return`: back from Checkout. The session is refreshed
+   * too, so the banner changes in the same navigation. `?subscription=
+   * cancelled` just shows the card as it was.
+   */
+  async function refreshAfterSubscribing (): Promise<void> {
+    await settleReturn(
+      'subscription',
+      async () => {
+        const billing = await refreshSubscription()
+        await session.refresh()
+        return billing
+      },
+      (current, billing) => ({ ...current, billing }),
+      current => current.billing.state === 'active'
+        ? 'Thank you -- your subscription is active.'
+        : 'Thanks -- Stripe is finishing up. This page will show your subscription shortly.',
+      subscriptionBusy,
+      subscriptionError,
+      subscriptionNotice,
+    )
   }
 
   const FEE_TYPES = [
@@ -126,7 +205,7 @@
     }
   }
 
-  load().then(refreshAfterReturn)
+  load().then(refreshAfterReturn).then(refreshAfterSubscribing)
 
   async function save (): Promise<void> {
     saving.value = true
@@ -271,6 +350,53 @@
         />
       </v-card-actions>
     </v-card>
+
+    <!-- The platform subscription (Phase 4c). State, copy and the actions the
+         API will accept are all the server's; absent when billing is not
+         configured on the server. -->
+    <template v-if="subscription">
+      <h2 class="text-subtitle-1 mt-6 mb-2">Your pink glove subscription</h2>
+
+      <v-alert v-if="subscriptionError" class="mb-3" type="error" variant="tonal">
+        {{ subscriptionError }}
+      </v-alert>
+
+      <v-alert v-if="subscriptionNotice" class="mb-3" type="success" variant="tonal">
+        {{ subscriptionNotice }}
+      </v-alert>
+
+      <v-card border flat>
+        <v-card-item>
+          <template #prepend>
+            <v-icon :color="subscription.color" :icon="subscription.icon" />
+          </template>
+
+          <v-card-title class="text-subtitle-2">{{ subscription.title }}</v-card-title>
+        </v-card-item>
+
+        <v-card-text>{{ subscription.text }}</v-card-text>
+
+        <v-card-actions v-if="subscription.action">
+          <v-btn
+            v-if="subscription.secondary"
+            :disabled="subscriptionBusy"
+            :text="subscription.secondaryLabel"
+            variant="text"
+            @click="subscriptionAction(subscription.secondary)"
+          />
+
+          <v-spacer />
+
+          <v-btn
+            color="primary"
+            :loading="subscriptionBusy"
+            :text="subscription.actionLabel"
+            variant="flat"
+            @click="subscriptionAction(subscription.action)"
+          />
+        </v-card-actions>
+      </v-card>
+    </template>
 
     <!-- Card payments: Stripe Connect. The server owns every state here. -->
     <h2 class="text-subtitle-1 mt-6 mb-2">Card payments</h2>

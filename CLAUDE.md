@@ -31,7 +31,9 @@ pink_glove/
 │   ├── audit/              # AccessReveal, the end-of-day evaluator
 │   ├── scheduling/         # RecurringPlan, Job, assignments, time, notes, photos
 │   ├── billing/            # Invoice, InvoiceLine, Payment, InvoiceSequence;
-│   │                       # connect.py + webhook.py are the only Stripe callers
+│   │                       # connect.py, subscription.py + webhook.py are the
+│   │                       # only Stripe callers; organizations/services.py is
+│   │                       # the coverage rule the subscription feeds (ADR-028)
 │   ├── health/             # liveness + readiness
 │   └── ...                 # organizations, two_factor; notifications by phase
 ├── ui/                     # Vue 3 + Vuetify 4 + TypeScript SPA (ADR-018)
@@ -128,8 +130,10 @@ docker compose run --rm web python manage.py migrate
 # past already worked, and four invoices (paid / part-paid with a tip /
 # overdue / draft). The two bill differently on purpose -- one charges tax and
 # a flat no-access fee, the other neither -- so a rule read from the wrong
-# tenant shows up as a wrong number. Password printed at the end. Two, not
-# one: tenant isolation bugs are invisible with a single tenant.
+# tenant shows up as a wrong number; and one is comped while the other is
+# five days from the end of its trial, so the wrong banner shows up the same
+# way. Password printed at the end. Two, not one: tenant isolation bugs are
+# invisible with a single tenant.
 docker compose run --rm web python manage.py seed_demo
 
 # OpenAPI schema (ADR-019). Both are authenticated; sign in first.
@@ -298,8 +302,10 @@ fresh session can read what was checked and what was left.
      mechanical, and enforced by the pre-commit schema check;
    - `ENUM_NAME_OVERRIDES` in settings needs an entry per choice set whose
      field name is too generic to identify it, or collides: `Role`,
-     `JobStatus`/`CustomerStatus`, `InvoiceStatus`, and `PaymentMethod` /
-     `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`;
+     `JobStatus`/`CustomerStatus`, `InvoiceStatus`, `PaymentMethod` /
+     `LineKind`, which would otherwise generate as `MethodEnum` and `KindEnum`,
+     and `StripeState`/`BillingState`, which are both a field called `state`
+     (`NoticeLevel` is listed beside them for the name);
    - the Vite port (`:3000`, `strictPort`) must match `CORS_ALLOWED_ORIGINS`
      -- in development only. Deployed, the build is served by gunicorn from
      the API's own origin (ADR-027): the SPA catch-all in `app/urls.py` is
@@ -337,7 +343,12 @@ fresh session can read what was checked and what was left.
      customer filter in `listAssignableStaff`. Changing a tier in
      `users/enums.py` means all of them;
    - Stripe (4b): `STRIPE_API_VERSION` in `settings/base.py` is pinned
-     beside the SDK pin in `pyproject.toml` -- bump both together; the
+     beside the SDK pin in `pyproject.toml` -- bump both together, and
+     re-read the three places that encode that version's object shapes:
+     `billing/subscription.py` `paid_through` (the period is on the
+     subscription item), `billing/webhook.py` `_subscription_id_in` (the
+     invoice's `parent.subscription_details`), and the fixtures in
+     `billing/tests/stripe_fixtures.py`; the
      `pay_page`/`pay_checkout` throttle scopes are listed in
      `settings/base.py`, `settings/local.py` and `settings/test.py` (each
      replaces the table whole); the pay page's path (`/pay/<token>`) and the
@@ -347,6 +358,16 @@ fresh session can read what was checked and what was left.
      which builds the URLs Stripe and the email send people to; and the
      five handled event types are `billing/webhook.py`'s `HANDLERS` and
      the list the operator registers in Stripe (`docs/DEPLOY.md`);
+   - the platform subscription (4c): the six platform event types are
+     `billing/webhook.py`'s `PLATFORM_HANDLERS` and the list the operator
+     registers on the *second* endpoint (`docs/DEPLOY.md` step 10); the
+     settings page's path and its `?subscription=return|cancelled` keys
+     appear in `BillingSettingsPage.vue` and are built by
+     `connect.settings_page_url`, which `billing/subscription.py` reuses; and
+     `allowed_while_inactive = True` is set on exactly the three
+     subscription views in `billing/views.py` and honoured in
+     `base/permissions.py` -- the one hole in the read-only rule
+     (ADR-028), and the gate lists every view that sets it;
    - `scheduling/serializers.py` picks the field for a pricing 400 by reading
      the text of the `ValueError` from `catalog.models.Service.quote_cents`;
    - `customers/views.py` lazy-imports `scheduling.permissions`, because
@@ -360,6 +381,9 @@ fresh session can read what was checked and what was left.
 5. **Security (authentication and authorization).**
    - Every new model holding tenant data inherits `TenantModel`, and every
      view over it inherits `TenantViewSetMixin` (invariant 1).
+   - A deactivated organization is read-only (`IsOrgMember`). A view that
+     sets `allowed_while_inactive = True` opts out, so each one is
+     deliberate and listed in the gate record (ADR-028).
    - `organization` is stamped from the resolved tenant, never accepted from
      request data (invariant 2); new Celery tasks take `organization_id`
      (invariant 3).

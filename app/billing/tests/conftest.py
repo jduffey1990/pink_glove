@@ -17,7 +17,7 @@ import pytest
 from django.utils import timezone
 
 from billing.tests.stripe_fixtures import ACCOUNT_ID as STRIPE_ACCOUNT_ID
-from billing.tests.stripe_fixtures import WEBHOOK_SECRET
+from billing.tests.stripe_fixtures import PLATFORM_WEBHOOK_SECRET, PRICE_ID, WEBHOOK_SECRET
 from scheduling.enums import JobStatus
 from scheduling.tests.factories import (
     CustomerFactory,
@@ -43,6 +43,16 @@ def stripe_on(settings):
     settings.STRIPE_CONNECT_WEBHOOK_SECRET = WEBHOOK_SECRET
     settings.STRIPE_APPLICATION_FEE_PERCENT = Decimal("0")
     settings.FRONTEND_BASE_URL = "https://app.example.test"
+
+
+@pytest.fixture
+def platform_billing_on(settings, stripe_on):
+    """Stripe on, and a price to subscribe to (Phase 4c). Still no network."""
+    settings.STRIPE_PLATFORM_PRICE_ID = PRICE_ID
+    settings.STRIPE_PLATFORM_WEBHOOK_SECRET = PLATFORM_WEBHOOK_SECRET
+    settings.PLATFORM_BILLING_ENABLED = True
+    settings.PLATFORM_TRIAL_DAYS = 30
+    settings.PLATFORM_GRACE_DAYS = 14
 
 
 @pytest.fixture

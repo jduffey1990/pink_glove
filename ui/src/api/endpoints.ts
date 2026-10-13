@@ -30,6 +30,7 @@ import type {
   Payment,
   PaymentState,
   PlanPreview,
+  PlatformBilling,
   PublicInvoice,
   RecordPaymentRequest,
   RecurringPlan,
@@ -42,6 +43,7 @@ import type {
   ServiceRequest,
   StripeStatus,
   TimeEntry,
+  Url,
 } from './types'
 import { api } from './client'
 
@@ -500,15 +502,39 @@ export async function updateOrganization (payload: OrganizationRequest): Promise
 
 // --- Stripe Connect (Phase 4b) ---------------------------------------------
 
-/** Owner only. Returns where to send the browser: Stripe's hosted onboarding. */
-export async function startStripeOnboarding (): Promise<string> {
-  const { data } = await api.post<{ url: string }>('/api/billing/stripe/connect/')
+/** The endpoints that hand back a Stripe page to send the browser to. */
+async function postForUrl (path: string): Promise<string> {
+  const { data } = await api.post<Url>(path)
   return data.url
+}
+
+/** Owner only. Returns where to send the browser: Stripe's hosted onboarding. */
+export function startStripeOnboarding (): Promise<string> {
+  return postForUrl('/api/billing/stripe/connect/')
 }
 
 /** Re-read the account from Stripe; called once on return from onboarding. */
 export async function refreshStripeStatus (): Promise<StripeStatus> {
   const { data } = await api.post<StripeStatus>('/api/billing/stripe/refresh/')
+  return data
+}
+
+// --- The platform subscription (Phase 4c) ----------------------------------
+// All three answer on a read-only organization: the owner must be able to pay.
+
+/** Owner only. Returns where to send the browser: Stripe Checkout, subscription mode. */
+export function startSubscription (): Promise<string> {
+  return postForUrl('/api/billing/subscription/checkout/')
+}
+
+/** Owner only. Returns where to send the browser: Stripe's Customer Portal. */
+export function openBillingPortal (): Promise<string> {
+  return postForUrl('/api/billing/subscription/portal/')
+}
+
+/** Re-read the subscription from Stripe; called once on return from Checkout. */
+export async function refreshSubscription (): Promise<PlatformBilling> {
+  const { data } = await api.post<PlatformBilling>('/api/billing/subscription/refresh/')
   return data
 }
 
@@ -522,7 +548,6 @@ export async function getPublicInvoice (token: string): Promise<PublicInvoice> {
 }
 
 /** Open a Checkout session for the balance. Returns Stripe's URL. */
-export async function openCheckout (token: string): Promise<string> {
-  const { data } = await api.post<{ url: string }>(`/api/billing/pay/${token}/checkout/`)
-  return data.url
+export function openCheckout (token: string): Promise<string> {
+  return postForUrl(`/api/billing/pay/${token}/checkout/`)
 }

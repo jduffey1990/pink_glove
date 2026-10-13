@@ -15,9 +15,11 @@ from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
 from django.utils import timezone
 
+from app.exceptions import ServiceUnavailableError
 from billing.enums import InvoiceStatus
 from billing.models import Invoice
 from billing.services import invoice_email_context
+from organizations.models import Organization
 
 logger = logging.getLogger(__name__)
 
@@ -106,3 +108,68 @@ def sweep_stripe_events() -> dict[str, int]:
     from billing.webhook import sweep
 
     return sweep()
+
+
+@shared_task(name="billing.enforce_platform_billing_all")
+def enforce_platform_billing_all() -> int:
+    """
+    The daily pass over every organization's coverage (Phase 4c, ADR-028).
+
+    Inactive organizations included: reactivating one that billing took
+    down is this task's job too. Fans out one task per organization, each
+    handed its own id (invariant 3). Nothing at all with platform billing
+    not configured -- nobody is deactivated for a subscription that cannot
+    be bought.
+    """
+    if not settings.PLATFORM_BILLING_ENABLED:
+        return 0
+
+    organization_ids = Organization.objects.values_list("id", flat=True)
+    for organization_id in organization_ids:
+        enforce_platform_billing.delay(str(organization_id))
+    return len(organization_ids)
+
+
+@shared_task(name="billing.enforce_platform_billing")
+def enforce_platform_billing(organization_id: str) -> dict:
+    """
+    Re-read one organization's subscription from Stripe, then apply the
+    coverage rule. A webhook lost the way 4b's first payment was lost costs
+    a day this way, not a tenant. Stripe being unreachable is logged and
+    the rule still runs on what the row already says.
+    """
+    from billing.subscription import refresh_subscription
+    from organizations.services import apply_coverage
+
+    if not settings.PLATFORM_BILLING_ENABLED:
+        return {"refreshed": False, "changed": False}
+
+    organization = Organization.objects.filter(pk=organization_id).first()
+    if organization is None:
+        logger.warning("enforce_platform_billing: no organization %s", organization_id)
+        return {"refreshed": False, "changed": False}
+
+    was_active = organization.is_active
+    refreshed = False
+    if organization.stripe_subscription_id:
+        try:
+            # Applies the coverage rule itself, in the same call.
+            refresh_subscription(organization)
+            refreshed = True
+        except ServiceUnavailableError:
+            logger.warning(
+                "enforce_platform_billing: could not read %s's subscription; applying what is "
+                "on file",
+                organization_id,
+                exc_info=True,
+            )
+
+    apply_coverage(organization)
+    changed = organization.is_active != was_active
+    if changed:
+        logger.info(
+            "enforce_platform_billing: organization %s is now %s",
+            organization_id,
+            "active" if organization.is_active else "read-only",
+        )
+    return {"refreshed": refreshed, "changed": changed}

@@ -42,10 +42,15 @@ class IsOrgMember(BasePermission):
         # so. Raised rather than returned so the reason survives `A | B`
         # composition, which would otherwise swap in a generic message.
         # Superusers are exempt: someone has to be able to put things right.
+        # So is a view that says `allowed_while_inactive = True` -- the
+        # subscription endpoints (Phase 4c, ADR-028), because the owner of a
+        # lapsed organization must be able to pay. Explicit on the view, and
+        # the phase gate lists every one that sets it.
         if (
             request.method not in SAFE_METHODS
             and not organization.is_active
             and not user.is_superuser
+            and not getattr(view, "allowed_while_inactive", False)
         ):
             raise PermissionDenied(ORGANIZATION_INACTIVE)
         return True

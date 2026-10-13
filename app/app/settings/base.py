@@ -238,6 +238,11 @@ SPECTACULAR_SETTINGS = {
         # enough that the frontend would have to guess what they belong to.
         "PaymentMethodEnum": "billing.enums.PaymentMethod.choices",
         "LineKindEnum": "billing.enums.LineKind.choices",
+        # Two different choice sets are both exposed as a field called
+        # "state": the Connect status and the subscription's (Phase 4c).
+        "StripeStateEnum": "organizations.enums.StripeState.choices",
+        "BillingStateEnum": "organizations.enums.BillingState.choices",
+        "NoticeLevelEnum": "organizations.enums.NoticeLevel.choices",
     },
 }
 
@@ -433,6 +438,16 @@ CELERY_BEAT_SCHEDULE = {
         "task": "billing.sweep_stripe_events",
         "schedule": crontab(minute="*/5"),
     },
+    # Every organization's subscription re-read from Stripe and the coverage
+    # rule applied: a lapsed tenant goes read-only, one that paid comes back
+    # (Phase 4c, ADR-028). Daily, an hour BEFORE the materializer, so an
+    # organization it reactivates is materialized the same night rather than
+    # the next; the webhook does the same within seconds when it arrives,
+    # this is for when it does not.
+    "enforce-platform-billing": {
+        "task": "billing.enforce_platform_billing_all",
+        "schedule": crontab(hour="1", minute="0"),
+    },
 }
 
 REDIS_URL = CELERY_BROKER_URL
@@ -483,6 +498,30 @@ STRIPE_APPLICATION_FEE_PERCENT = config("STRIPE_APPLICATION_FEE_PERCENT", defaul
 # change payload shapes underneath the handlers. Bump it here, deliberately,
 # together with the SDK.
 STRIPE_API_VERSION = "2026-08-26.dahlia"
+
+# --------------------------------------------------------------------------
+# Platform subscription (Phase 4c, ADR-024, ADR-028)
+# --------------------------------------------------------------------------
+# What tenants pay for pink_glove, as a Stripe subscription on the platform
+# account. Optional, like Connect: with no price nobody is ever deactivated
+# for billing, the subscription card is absent and the banner has nothing to
+# say -- staging deploys without one. production.py refuses a price without
+# the platform webhook secret, for the same reason it refuses a key without
+# the Connect secret.
+
+#: The one monthly Price, created in the Stripe dashboard; the amount lives
+#: there, never here.
+STRIPE_PLATFORM_PRICE_ID = config("STRIPE_PLATFORM_PRICE_ID", default="")
+#: The signing secret of the PLATFORM webhook endpoint ("events on your
+#: account"), distinct from the Connect endpoint's.
+STRIPE_PLATFORM_WEBHOOK_SECRET = config("STRIPE_PLATFORM_WEBHOOK_SECRET", default="")
+PLATFORM_BILLING_ENABLED = STRIPE_ENABLED and bool(STRIPE_PLATFORM_PRICE_ID)
+
+#: The application-side trial a new organization starts on, with no card and
+#: nothing in Stripe, and how long after its coverage ends an organization
+#: becomes read-only. The rule that reads both is `organizations.services`.
+PLATFORM_TRIAL_DAYS = config("PLATFORM_TRIAL_DAYS", default=30, cast=int)
+PLATFORM_GRACE_DAYS = config("PLATFORM_GRACE_DAYS", default=14, cast=int)
 
 # --------------------------------------------------------------------------
 # Logging

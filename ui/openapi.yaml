@@ -1207,6 +1207,87 @@ paths:
               schema:
                 $ref: '#/components/schemas/Detail'
           description: ''
+  /api/billing/subscription/checkout/:
+    post:
+      operationId: billing_subscription_checkout_create
+      description: 'Begin the subscription. Owner only: it binds the business to a
+        recurring charge.'
+      summary: Start subscribing
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Url'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/subscription/portal/:
+    post:
+      operationId: billing_subscription_portal_create
+      description: 'Stripe''s Customer Portal: the card, the receipts, cancelling.
+        Owner only.'
+      summary: Open the billing portal
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Url'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/subscription/refresh/:
+    post:
+      operationId: billing_subscription_refresh_create
+      description: Re-read the subscription from Stripe; the settings page calls it
+        on return.
+      summary: Refresh the organization's subscription
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformBilling'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
   /api/catalog/services/:
     get:
       operationId: catalog_services_list
@@ -3671,6 +3752,45 @@ components:
       - scheduled_start
       - service_name
       - status
+    BillingNotice:
+      type: object
+      description: |-
+        The three fields the shell draws the banner from (Phase 4c, ADR-028):
+        the server's one word for the state, how loudly to say it, and the
+        sentence itself -- written for the reader's role, never composed on the
+        client (ADR-023). On the session's organization summary, so the banner
+        needs no second request.
+      properties:
+        state:
+          $ref: '#/components/schemas/BillingStateEnum'
+        level:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/NoticeLevelEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        notice:
+          type: string
+          nullable: true
+      required:
+      - level
+      - notice
+      - state
+    BillingStateEnum:
+      enum:
+      - exempt
+      - trial
+      - active
+      - past_due
+      - lapsed
+      - deactivated
+      type: string
+      description: |-
+        * `exempt` - Complimentary
+        * `trial` - On trial
+        * `active` - Subscribed
+        * `past_due` - Payment failed
+        * `lapsed` - Lapsed
+        * `deactivated` - Deactivated
     ChallengeIssued:
       type: object
       description: '202 body: a code went out and the client should collect it.'
@@ -4665,6 +4785,16 @@ components:
         * `none` - No charge
         * `flat` - Flat amount
         * `percent` - Percentage of the visit price
+    NoticeLevelEnum:
+      enum:
+      - info
+      - warning
+      - error
+      type: string
+      description: |-
+        * `info` - Info
+        * `warning` - Warning
+        * `error` - Error
     NullEnum:
       enum:
       - null
@@ -4787,6 +4917,10 @@ components:
           allOf:
           - $ref: '#/components/schemas/StripeStatus'
           readOnly: true
+        billing:
+          allOf:
+          - $ref: '#/components/schemas/PlatformBilling'
+          readOnly: true
         is_active:
           type: boolean
           readOnly: true
@@ -4795,6 +4929,7 @@ components:
           format: date-time
           readOnly: true
       required:
+      - billing
       - created_at
       - id
       - is_active
@@ -4904,6 +5039,10 @@ components:
       - timezone
     OrganizationSummary:
       type: object
+      description: |-
+        The organization as the shell sees it: enough to name it, reckon dates
+        in its zone, and draw the billing banner (Phase 4c) without a second
+        request. `is_active` is what the baseline gate owed the banner.
       properties:
         id:
           type: string
@@ -4928,8 +5067,17 @@ components:
           format: uri
           nullable: true
           readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+        billing:
+          allOf:
+          - $ref: '#/components/schemas/BillingNotice'
+          readOnly: true
       required:
+      - billing
       - id
+      - is_active
       - logo
       - name
       - primary_color
@@ -5823,6 +5971,64 @@ components:
         * `unpaid` - Unpaid
         * `partial` - Partly paid
         * `paid` - Paid
+    PlatformBilling:
+      type: object
+      description: |-
+        The whole of the organization's subscription state, for the settings
+        card. Read-only by construction: the fields it reads are written only by
+        `billing.subscription`, the platform webhook and the admin.
+        `available_actions` is what the subscription endpoints will accept, so
+        the page draws its buttons from it and not from `status`.
+      properties:
+        state:
+          $ref: '#/components/schemas/BillingStateEnum'
+        level:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/NoticeLevelEnum'
+          - $ref: '#/components/schemas/NullEnum'
+        notice:
+          type: string
+          nullable: true
+        summary:
+          type: string
+          description: One sentence for the settings card, always present; the notice
+            when there is one.
+        trial_ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        covered_until:
+          type: string
+          format: date-time
+          nullable: true
+        grace_ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          description: Stripe's own word, or empty with no subscription.
+        cancel_at_period_end:
+          type: boolean
+        exempt:
+          type: boolean
+        available_actions:
+          type: array
+          items:
+            type: string
+      required:
+      - available_actions
+      - cancel_at_period_end
+      - covered_until
+      - exempt
+      - grace_ends_at
+      - level
+      - notice
+      - state
+      - status
+      - summary
+      - trial_ends_at
     PreferredContactMethodEnum:
       enum:
       - email
@@ -6637,16 +6843,6 @@ components:
       - last_name
       - memberships
       - phone
-    StateEnum:
-      enum:
-      - not_connected
-      - pending
-      - enabled
-      type: string
-      description: |-
-        * `not_connected` - Not connected
-        * `pending` - Pending with Stripe
-        * `enabled` - Taking card payments
     StatusChangeRequest:
       type: object
       properties:
@@ -6657,6 +6853,16 @@ components:
           default: ''
       required:
       - status
+    StripeStateEnum:
+      enum:
+      - not_connected
+      - pending
+      - enabled
+      type: string
+      description: |-
+        * `not_connected` - Not connected
+        * `pending` - Pending with Stripe
+        * `enabled` - Taking card payments
     StripeStatus:
       type: object
       description: |-
@@ -6669,7 +6875,7 @@ components:
         "Stripe will take a card" -- the pay link waits for the second.
       properties:
         state:
-          $ref: '#/components/schemas/StateEnum'
+          $ref: '#/components/schemas/StripeStateEnum'
         connected:
           type: boolean
         charges_enabled:

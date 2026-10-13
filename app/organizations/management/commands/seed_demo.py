@@ -58,6 +58,16 @@ ORGANIZATIONS = [
     },
 ]
 
+#: The two differ on the platform subscription too (Phase 4c): one is comped
+#: and never shows a banner, the other is on a trial with five days left, so
+#: the banner shows with a date. A rule read from the wrong tenant shows up
+#: as the wrong banner. No Stripe objects are seeded, for 4b's reason -- a
+#: fake customer id would make the settings card lie.
+BILLING = {
+    "Sparkle Clean": {"billing_exempt": True, "trial_days_left": None},
+    "Rival Cleaners": {"billing_exempt": False, "trial_days_left": 5},
+}
+
 ROLES = [Role.OWNER, Role.ADMIN, Role.DISPATCHER, Role.CLEANER, Role.CUSTOMER]
 
 #: One customer per interesting shape, because each exercises a different path:
@@ -176,6 +186,13 @@ class Command(BaseCommand):
         two organizations exist to be overwritten.
         """
         settings_fields = {key: value for key, value in spec.items() if key != "name"}
+        billing = BILLING[spec["name"]]
+        settings_fields["billing_exempt"] = billing["billing_exempt"]
+        settings_fields["trial_ends_at"] = (
+            None
+            if billing["trial_days_left"] is None
+            else timezone.now() + dt.timedelta(days=billing["trial_days_left"])
+        )
         organization, created = Organization.objects.get_or_create(
             name=spec["name"], defaults=settings_fields
         )

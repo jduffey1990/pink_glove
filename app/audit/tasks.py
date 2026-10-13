@@ -31,6 +31,9 @@ OUTSIDE_BUSINESS_HOURS = "outside_business_hours"
 
 @shared_task(name="audit.evaluate_access_reveals_all")
 def evaluate_access_reveals_all() -> int:
+    # A deactivated organization (by hand, or for billing -- Phase 4c) is
+    # read-only and can make no reveals, so there is nothing to judge until
+    # it is back; the pass resumes at the next hour.
     organization_ids = Organization.objects.filter(is_active=True).values_list("id", flat=True)
 
     for organization_id in organization_ids:

@@ -27,7 +27,7 @@ from rest_framework.viewsets import ModelViewSet
 from base.permissions import IsAdminOrHigher, IsDispatcherOrHigher, IsOwner
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
-from billing import connect, services
+from billing import connect, services, subscription
 from billing.enums import LineKind
 from billing.filters import InvoiceFilterSet, PaymentFilterSet
 from billing.models import Invoice, InvoiceLine, Payment
@@ -47,7 +47,7 @@ from customers.models import Customer
 # One-way, and narrow: the Stripe block describes Organization state that
 # `billing.connect` writes. The Connect views stay here so `organizations`
 # never imports `billing` (CLAUDE.md, dependency direction).
-from organizations.serializers import StripeStatusSerializer
+from organizations.serializers import PlatformBillingSerializer, StripeStatusSerializer
 
 
 class InvoiceViewSet(TenantViewSetMixin, ModelViewSet):
@@ -378,6 +378,60 @@ class StripeRefreshView(APIView):
     def post(self, request):
         organization = connect.refresh_account(request.organization)
         return Response(StripeStatusSerializer(organization).data)
+
+
+# ---------------------------------------------------------------------------
+# The platform subscription (Phase 4c, ADR-028)
+# ---------------------------------------------------------------------------
+# All three set `allowed_while_inactive`: a lapsed organization is read-only,
+# and the owner must still be able to pay. The only views that do.
+
+
+class SubscriptionCheckoutView(APIView):
+    """Begin the subscription. Owner only: it binds the business to a recurring charge."""
+
+    permission_classes = [IsOwner]
+    allowed_while_inactive = True
+
+    @extend_schema(
+        request=None,
+        responses={200: UrlSerializer, 409: DetailSerializer, 503: DetailSerializer},
+        summary="Start subscribing",
+    )
+    def post(self, request):
+        url = subscription.start_checkout(request.organization, actor=request.user)
+        return Response({"url": url})
+
+
+class SubscriptionPortalView(APIView):
+    """Stripe's Customer Portal: the card, the receipts, cancelling. Owner only."""
+
+    permission_classes = [IsOwner]
+    allowed_while_inactive = True
+
+    @extend_schema(
+        request=None,
+        responses={200: UrlSerializer, 409: DetailSerializer, 503: DetailSerializer},
+        summary="Open the billing portal",
+    )
+    def post(self, request):
+        return Response({"url": subscription.portal_url(request.organization)})
+
+
+class SubscriptionRefreshView(APIView):
+    """Re-read the subscription from Stripe; the settings page calls it on return."""
+
+    permission_classes = [IsAdminOrHigher]
+    allowed_while_inactive = True
+
+    @extend_schema(
+        request=None,
+        responses={200: PlatformBillingSerializer, 503: DetailSerializer},
+        summary="Refresh the organization's subscription",
+    )
+    def post(self, request):
+        organization = subscription.refresh_subscription(request.organization)
+        return Response(PlatformBillingSerializer(organization, context={"request": request}).data)
 
 
 # ---------------------------------------------------------------------------

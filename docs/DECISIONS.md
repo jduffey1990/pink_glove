@@ -801,3 +801,82 @@ be https, because a customer's sign-in token travels in it. A staff sign-in
 in a rehearsal is read from the web log (`EMAIL_BACKEND` is env-selectable
 for that). The `FIELD_ENCRYPTION_KEY` backup rule in `.env.example` becomes
 operational: `docs/DEPLOY.md` says where it must live.
+
+---
+
+## ADR-028: The platform subscription is enforced from a coverage date, with a trial of our own
+
+**Decided (2026-10-09).** Fills in what ADR-024 left to Phase 4c: how a
+tenant comes to be covered, what a lapse is, and what it costs them.
+
+**A flat monthly price per organization, held in Stripe.** The amount is a
+Price in the dashboard; `STRIPE_PLATFORM_PRICE_ID` names it and the code
+never knows the number.
+
+*Rejected -- per-seat pricing.* A cleaning company's headcount moves weekly,
+and a one-person platform does not want to police seats.
+
+*Rejected -- the price in code or settings.* Changing it would be a deploy,
+and Stripe already versions prices.
+
+**The trial is ours, not Stripe's.** `Organization.trial_ends_at` is stamped
+when the row is created, `PLATFORM_TRIAL_DAYS` out, and extended by hand in
+the admin when a pilot needs longer. Nothing in Stripe exists until the owner
+subscribes. This is what ADR-024 meant by "needed before anyone is charged,
+not before a pilot tenant can use the product".
+
+*Rejected -- Checkout with `trial_period_days`.* It puts the card form in
+front of a pilot on day one, and a trial that ends in Stripe but was never
+started here is a lapse the app cannot explain.
+
+**Coverage is a date, and the grace runs from it.** `covered_until` is the
+later of the trial's end and the end of the last period Stripe was *paid*
+for -- on the pinned API version the period is on the subscription item,
+and a renewal Stripe is still trying to collect has already advanced it, so
+the item's `current_period_start` is the answer until its invoice is paid.
+`PLATFORM_GRACE_DAYS` after `covered_until`, a daily task sets `is_active =
+False`, which the baseline gate already made read-only. One rule for every
+lapse: an expired trial nobody subscribed after, a renewal whose card
+failed, a subscription the owner cancelled.
+
+*Rejected -- deactivating on Stripe's `past_due` or `canceled` directly.*
+Stripe's retry schedule and its "when retries fail" behaviour are dashboard
+configuration, and `past_due` arrives the morning a card fails, which is no
+time to lock a dispatcher out of the day's schedule.
+
+*Rejected -- computing read-only-ness per request from the dates.*
+`is_active` is already the chokepoint `IsOrgMember` reads with no extra
+query, and the admin flag already means "read-only" to the rest of the
+product. A second meaning for the same state is a bug factory.
+
+**Deactivation by billing is reversible only by billing; deactivation by
+hand is not touched.** `deactivated_for_billing_at` records which it was. A
+subscription coming good reactivates an organization that billing
+deactivated; one switched off in the admin stays off whatever Stripe says.
+
+**Stripe's Customer Portal, not our own card pages.** Updating a card,
+reading receipts, cancelling at period end and resuming are the portal's.
+The product gets two buttons and no PCI surface.
+
+**The state is re-read, never copied.** Every platform webhook handler and
+the daily task call the same `refresh_subscription`, which fetches the
+Subscription and then applies the coverage rule, for 4b's reason: Stripe
+does not promise order, and a lost webhook costs a day, not a tenant.
+
+**A deactivated tenant's customers can still pay it.** The pay page and its
+checkout are public, by token, and the Connect webhook writes the payment
+regardless of `is_active`: the money is the tenant's, not ours, and an
+invoice already sent is a document their customer is entitled to settle.
+Recording a cash payment is a write the tenant cannot make until they are
+current -- the read-only rule working as intended.
+
+**The one hole in the read-only rule.** The three subscription endpoints
+(checkout, portal, refresh) set `allowed_while_inactive = True`, which
+`IsOrgMember` honours before refusing an unsafe method. Without it the owner
+of a lapsed organization could see the bill and not pay it. It is explicit
+on the view, and the phase gate lists every view that sets it.
+
+**Optional on the server, like Connect.** With no price nobody is ever
+deactivated for billing, the subscription card is absent and the banner has
+nothing to say. Production refuses a price without the platform webhook
+secret, and a price without the key.

@@ -110,8 +110,21 @@ def stripe_errors(doing: str):
 # ---------------------------------------------------------------------------
 
 
+def settings_page_url(**query: str) -> str:
+    """
+    The billing settings page, where Stripe sends people back to -- after
+    Connect onboarding (`stripe=`) and after subscribing (`subscription=`,
+    `billing.subscription`). The path and the query keys are mirrored in
+    `ui/src/router/index.ts` and `BillingSettingsPage.vue` (CLAUDE.md).
+    """
+    base = f"{settings.FRONTEND_BASE_URL}/billing/settings"
+    if not query:
+        return base
+    return base + "?" + "&".join(f"{key}={value}" for key, value in query.items())
+
+
 def _settings_url(query: str) -> str:
-    return f"{settings.FRONTEND_BASE_URL}/billing/settings?stripe={query}"
+    return settings_page_url(stripe=query)
 
 
 @transaction.atomic
