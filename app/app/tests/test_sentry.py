@@ -275,10 +275,10 @@ class TestBeforeSend:
 
         assert before_send(event, {})["request"]["query_string"] == f"token={FILTERED}&page=2"
 
-    def test_only_the_users_id_survives(self):
+    def test_the_user_is_removed_whole_not_even_an_id_is_kept(self):
         event = {"user": {"id": "u1", "email": "pat@example.com", "ip_address": "203.0.113.77"}}
 
-        assert before_send(event, {})["user"] == {"id": "u1"}
+        assert before_send(event, {}) == {}
 
     def test_a_long_file_name_in_a_stack_frame_is_not_mistaken_for_a_token(self):
         """It is the line someone needs to read when a migration fails."""

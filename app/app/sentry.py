@@ -121,9 +121,9 @@ def before_send(event, hint=None):
     The last thing an event passes through before it leaves.
 
     Removes what must not be there whatever the SDK was told (the request
-    body, cookies, local variables, anything about the user but an id), then
-    redacts every value stored under a sensitive name, wherever in the event
-    it is. If this raises, the SDK drops the event: it fails closed.
+    body, cookies, local variables, the user), then redacts every value
+    stored under a sensitive name, wherever in the event it is. If this
+    raises, the SDK drops the event: it fails closed.
     """
     request = event.get("request")
     if isinstance(request, dict):
@@ -131,9 +131,8 @@ def before_send(event, hint=None):
         request.pop("data", None)
         request.pop("cookies", None)
 
-    user = event.get("user")
-    if isinstance(user, dict):
-        event["user"] = {"id": user["id"]} if user.get("id") else {}
+    # Who it happened to is not sent, not even as an id (ADR-029).
+    event.pop("user", None)
 
     for key in list(event):
         # `_meta` is the SDK's own notes on what it trimmed, keyed like the
