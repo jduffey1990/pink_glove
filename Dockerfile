@@ -49,6 +49,12 @@ COPY app/pyproject.toml ./
 # thing everywhere it runs.
 RUN pip install --no-cache-dir ".[s3]"
 
+# Dependencies are ranges, resolved afresh on every build, and only gunicorn
+# is behind a health check: a worker or beat that cannot import its broker
+# transport dies at start with the deploy reported healthy. Importing it here
+# turns that into a failed build, which CI's image job sees.
+RUN python -c "import kombu.transport.redis"
+
 # --------------------------------------------------------------------------
 # Runtime
 # --------------------------------------------------------------------------
