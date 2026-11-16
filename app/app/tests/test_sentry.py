@@ -26,22 +26,15 @@ from django.conf import settings
 from app import sentry
 from app.sentry import FILTERED, before_send, is_sensitive, scrub_url
 from app.tests.sentry_probe import DSN, MARKER, PLANTED
+from app.tests.test_settings_production import _BASELINE as PRODUCTION_BASELINE
 
-#: What production.py needs to import at all: `bin/deploy-audit.sh`'s list.
-#: Every value is set, including the empty ones, so a developer's `app/.env`
-#: (which decouple reads for anything the environment leaves out) cannot
-#: change an outcome.
+#: What production.py needs to import at all: the settings tests' own
+#: baseline, plus everything optional set EMPTY. A child process cannot have
+#: decouple's `.env` lookup patched out the way those tests do, and an empty
+#: value in the environment wins over a developer's `app/.env`.
 PRODUCTION_ENV = {
-    "SECRET_KEY": "x" * 64,
-    "ALLOWED_HOSTS": "app.pink-glove.test",
-    "FRONTEND_BASE_URL": "https://app.pink-glove.test",
-    "FIELD_ENCRYPTION_KEY": "probe-only-not-a-key",
-    "DEFAULT_FROM_EMAIL": "pink glove <noreply@pink-glove.test>",
-    "EMAIL_BACKEND": "django.core.mail.backends.console.EmailBackend",
-    "MEDIA_BACKEND": "s3",
-    "MEDIA_BUCKET": "probe-only",
+    **PRODUCTION_BASELINE,
     "UI_DIST_DIR": "",
-    "CORS_ALLOWED_ORIGINS": "",
     "STRIPE_SECRET_KEY": "",
     "SENTRY_DSN": "",
     "SENTRY_ENVIRONMENT": "",
@@ -353,6 +346,12 @@ class TestAnEventAsProductionSendsIt:
             for exception in event.get("exception", {}).get("values", []):
                 for frame in exception["stacktrace"]["frames"]:
                     assert "vars" not in frame
+
+    def test_a_querys_text_is_kept_as_a_breadcrumb_without_what_was_bound_to_it(self, captured):
+        """ADR-029 lists this: the statement, placeholders in place of values."""
+        crumbs = events(captured["shipped"])[0]["breadcrumbs"]["values"]
+
+        assert "select %s" in [crumb["message"] for crumb in crumbs if crumb["category"] == "query"]
 
     def test_the_task_is_named_but_its_arguments_are_not_sent(self, captured):
         job = events(captured["shipped"])[1]["extra"]["celery-job"]

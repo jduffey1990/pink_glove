@@ -44,6 +44,9 @@ PLANTED = {
     "authorization": "PLANTED-BEARER",
     "task": "PLANTED-TASK-KWARG",
     "log_extra": "PLANTED-LOG-EXTRA",
+    # Bound to a query the view runs. The statement's text is kept as a
+    # breadcrumb; the value bound to it must not be.
+    "sql_param": "PLANTED-SQL-PARAMETER",
     # TEST-NET-3 (RFC 5737), in the header Fly's proxy adds to every request.
     "client_ip": "203.0.113.77",
     # The shape of a Django signed token (`billing.connect.pay_token`):
@@ -114,6 +117,9 @@ def _capture() -> dict:
     # The planted session cookie must not send the session middleware to a
     # database this process does not have.
     settings.SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+    # Nor has it the suite's Postgres. The one query the view runs needs no
+    # table, so an empty in-memory database will do.
+    settings.DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
     settings.CELERY_TASK_EAGER_PROPAGATES = False
     django.setup()
 

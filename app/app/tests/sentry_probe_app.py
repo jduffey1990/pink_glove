@@ -7,6 +7,7 @@ probe's URLconf, imported only in that child process. Not collected by pytest.
 import logging
 
 from celery import shared_task
+from django.db import connection
 from django.urls import path
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
@@ -26,6 +27,8 @@ class BoomView(APIView):
         gate_code = request.data["gate_code"]
         # A local whose name gives nothing away, holding a different secret.
         value = PLANTED["local"]
+        with connection.cursor() as cursor:
+            cursor.execute("select %s", [PLANTED["sql_param"]])
         logger.info("probe request for %s", request.get_full_path())
         raise RuntimeError(f"probe view failed ({len(gate_code)}, {len(value)})")
 
