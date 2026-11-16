@@ -123,6 +123,9 @@ sign-in code is in `fly logs --app pink-glove-staging`. To send real mail,
 verify a single sender in SendGrid (any mailbox, no domain required), then
 `fly secrets set EMAIL_HOST_PASSWORD='SG.…' DEFAULT_FROM_EMAIL='…'` and
 `fly secrets unset EMAIL_BACKEND`.
+That is enough for staging.
+Production authenticates the whole sending domain instead: [Email](#email).
+The app refuses to start with an `example.com` sender, or with the SMTP backend and no `EMAIL_HOST_PASSWORD`, so set both in one `fly secrets set` before unsetting `EMAIL_BACKEND`.
 
 - **Back up `FIELD_ENCRYPTION_KEY` somewhere that is not Fly.** It encrypts
   gate and alarm codes. Lose it and every code is unreadable, permanently.
@@ -163,6 +166,11 @@ and `fly logs` says why; a deploy that stalls waiting on `web` may stop
 before creating `worker`, and the next deploy creates it. If a group has
 more than one *running* machine, `fly scale count web=1 worker=1 beat=1
 --app pink-glove-staging`.
+
+Look at `worker` and `beat` here after every deploy, not only the first.
+`web` is the only group behind a health check, so a worker or beat that dies at start leaves the deploy green while no invoice is emailed and no Stripe event is applied.
+The local rehearsal caught exactly that on 2026-11-16: a freshly built image whose Celery processes could not import their broker transport.
+The image build now fails on it, and with [error tracking](#error-tracking) configured the crash is reported, but neither replaces looking.
 
 ### 7. Verify
 
@@ -296,6 +304,12 @@ no connect button, no pay link, and the pay and webhook endpoints answer
    (`--account`, not `--stripe-account`: the endpoint is the platform's.)
    Or from the dashboard: the event → Resend. Never pay again instead --
    the second charge is real and the invoice ends up overpaid.
+
+   A row that is **FAILED** needs nothing from Stripe: the payload is in the ledger.
+   Sign in to the app as a superuser (the admin only admits a session that cleared the second factor), open `/admin/` → Billing → Stripe events, filter by status *Failed*, read the error, fix the cause, then tick the rows and run **Re-queue the selected FAILED events**.
+   Each row stays FAILED until a worker has applied it, so reload after a few seconds: it reads PROCESSED, or FAILED with the new error.
+   Running the action twice is harmless, rows in any other status are refused and counted on the page, and each replay is recorded against the person who ran it.
+   A RECEIVED row is not replayed this way: the sweep already chases it, and a resend from Stripe (above) is the manual route.
 
 **When a refund does not show up.** The same four steps with
 `--type charge.refunded`. One more way it goes wrong: the refund arrives,
@@ -436,11 +450,373 @@ The same steps with `pink-glove` in place of `pink-glove-staging`, and:
 - a **different** `FIELD_ENCRYPTION_KEY`, `SECRET_KEY` and SendGrid key from
   staging;
 - `SECURE_HSTS_SECONDS=31536000` once TLS is confirmed;
+- mail from an authenticated domain, checked end to end before anyone is invited: [Email](#email);
+- `SENTRY_DSN` and `SENTRY_ENVIRONMENT=production`, so a 500 reaches a person: [Error tracking](#error-tracking);
+- a first backup taken and one restore drill passed before real codes and payments go in: [Backup and restore](#backup-and-restore);
 - deploy by hand: `fly deploy --config deploy/fly.toml --app pink-glove`.
 
 There is no rollback command that undoes a migration. `fly releases` and
 `fly deploy --image <previous>` bring the previous code back; a migration
 that must be undone is a new migration.
+
+---
+
+## Email
+
+Sign-in codes and invoices leave by email, through SendGrid's SMTP relay: `EMAIL_HOST=smtp.sendgrid.net`, `EMAIL_HOST_USER=apikey`, and the API key as `EMAIL_HOST_PASSWORD`.
+Mail from a domain that has not been authenticated is accepted by SendGrid and then junked or refused by Gmail and Outlook, and nothing in the app can see that happen.
+So production sends from a domain you own, with SPF, DKIM and DMARC in place, and step 5 is run before anyone is invited.
+
+The app refuses to start when `DEFAULT_FROM_EMAIL` is not an address or is on `example.com` (the default), and when the SMTP backend is selected with an empty `EMAIL_HOST_PASSWORD`.
+Those are the two failures configuration alone can cause; the steps below cover the ones only DNS can.
+The `dig` commands and `sendtestemail` were run locally when this was written; the SendGrid screens and the `fly` lines were not, so read what SendGrid shows over what is written here.
+
+### 1. Authenticate the domain in SendGrid (SPF and DKIM)
+
+In SendGrid: Settings → Sender Authentication → Authenticate Your Domain.
+Enter the domain mail will come from, the registrable one (`yourdomain`, not `app.yourdomain`), and leave automated security on.
+SendGrid then shows three CNAME records to create at your DNS host.
+Their shape, with the numbers being yours:
+
+| Type | Host | Points to |
+|---|---|---|
+| CNAME | `em1234.yourdomain` | `u1234567.wl123.sendgrid.net` |
+| CNAME | `s1._domainkey.yourdomain` | `s1.domainkey.u1234567.wl123.sendgrid.net` |
+| CNAME | `s2._domainkey.yourdomain` | `s2.domainkey.u1234567.wl123.sendgrid.net` |
+
+Copy the values SendGrid shows, not these.
+The first is the return path: SendGrid publishes the SPF record behind it, so SPF passes with no SPF record of your own, and it aligns because `em1234.yourdomain` is a subdomain of the From domain.
+Do not add a second `v=spf1` TXT record at the root for SendGrid.
+If the root already has one for the company's ordinary mail, leave it as it is.
+The other two are the DKIM keys.
+If the DNS host is Cloudflare, set all three to "DNS only": a proxied CNAME does not verify.
+Back in SendGrid, press Verify.
+
+### 2. DMARC
+
+A TXT record you create yourself; SendGrid does not make it.
+
+| Type | Host | Value |
+|---|---|---|
+| TXT | `_dmarc.yourdomain` | `v=DMARC1; p=none; rua=mailto:dmarc@yourdomain` |
+
+`p=none` asks receivers to report and not to act, which is where to start.
+The reports arrive at the `rua` address daily and show whether anything else is sending as the domain.
+After two weeks of reports in which everything that sends as the domain passes, change it to `p=quarantine`.
+If the domain already has a `_dmarc` record, keep it: there must be exactly one.
+
+### 3. An API key for the app
+
+Settings → API Keys → Create API Key → Restricted Access, with **Mail Send** set to Full Access and nothing else.
+One key per environment, so staging's can be revoked alone.
+The key is shown once.
+
+### 4. Set it on the app
+
+```bash
+fly secrets set --app pink-glove \
+    EMAIL_HOST_PASSWORD='SG.…' \
+    DEFAULT_FROM_EMAIL='Your Company <billing@yourdomain>'
+```
+
+The address must be on the domain from step 1.
+If `fly secrets list --app pink-glove` shows `EMAIL_BACKEND` (staging sets it to the console backend), remove it in a second command, after the one above: `fly secrets unset --app pink-glove EMAIL_BACKEND`.
+In the other order the app would be on SMTP with no password for one release, and it refuses to start that way.
+
+### 5. Verify
+
+The DNS, substituting the hosts SendGrid gave you:
+
+```bash
+dig +short CNAME s1._domainkey.yourdomain
+# s1.domainkey.u1234567.wl123.sendgrid.net.
+dig +short CNAME s2._domainkey.yourdomain
+# s2.domainkey.u1234567.wl123.sendgrid.net.
+dig +short CNAME em1234.yourdomain
+# u1234567.wl123.sendgrid.net.
+dig +short TXT _dmarc.yourdomain
+# "v=DMARC1; p=none; rua=mailto:dmarc@yourdomain"
+```
+
+An empty answer means the record is not there yet, or is under the wrong name.
+The usual wrong name is the DNS host appending the domain a second time (`s1._domainkey.yourdomain.yourdomain`): enter only `s1._domainkey` if the host's form adds the domain itself.
+
+Then a real message, to a Gmail address you can open:
+
+```bash
+fly ssh console --app pink-glove -C "python manage.py sendtestemail you@gmail.com"
+```
+
+It prints nothing and exits 0 when the mail server accepted the message.
+`SMTPAuthenticationError: (535, …)` means the key is wrong or revoked.
+`SMTPDataError: (550, … does not match a verified Sender Identity …)` means `DEFAULT_FROM_EMAIL` is not on the authenticated domain.
+
+In Gmail, open the message, then ⋮ → Show original.
+Expected at the top:
+
+```
+SPF:    PASS with IP 149.72.…
+DKIM:   'PASS' with domain yourdomain
+DMARC:  'PASS'
+```
+
+All three must say PASS, and the DKIM domain must be yours.
+If it reads `sendgrid.net`, step 1 was not verified and DMARC will fail once the policy is tightened.
+Last, sign in to the app as the owner: the code must arrive in the inbox, not in spam, within a minute.
+
+---
+
+## Error tracking
+
+Unhandled exceptions in a request or a Celery task, and anything logged at ERROR, go to Sentry (ADR-029).
+It is optional and off until `SENTRY_DSN` is set; with no DSN the SDK is not even imported.
+Only production settings start it, so development and the test suite cannot report anywhere.
+
+What an event carries, and what is removed before it leaves, is listed in ADR-029 and enforced in `app/app/sentry.py`.
+In short: the stack trace with source lines, the request's method, URL and headers, and the release; no request body, no local variables, no cookies, no user, no client address, and no value stored under a name like a gate code, token or password.
+An exception message or a log line is sent as written, which is why nothing sensitive may be put in either.
+
+### 1. Create the project
+
+In Sentry, in an organization you own: Projects → Create Project → Django.
+One project serves both staging and production; the environment tag tells them apart.
+In the project's Settings → Security & Privacy, leave **Data Scrubber** on and turn **Prevent Storing of IP Addresses** on.
+The app already removes these; this is the same rule held on the other side.
+Copy the DSN from Settings → Client Keys (DSN).
+
+### 2. Set it on the app
+
+```bash
+fly secrets set --app pink-glove-staging \
+    SENTRY_DSN='https://…@o….ingest.us.sentry.io/…' \
+    SENTRY_ENVIRONMENT=staging
+```
+
+Production is the same with `--app pink-glove` and `SENTRY_ENVIRONMENT=production`.
+The two must be set together: the app refuses to start with a DSN and no environment, because staging and production are the same image and an event filed under the wrong one is an error nobody looks at.
+The release is tagged with `FLY_IMAGE_REF`, which Fly sets on every machine and `fly releases --image` lists; set `SENTRY_RELEASE` only to override it.
+
+### 3. Verify
+
+```bash
+fly ssh console --app pink-glove-staging
+```
+
+and in the shell it opens:
+
+```bash
+python manage.py shell -c "import logging; logging.getLogger('ops').error('error tracking check')"
+exit
+```
+
+It prints one line, `ERROR … ops error tracking check`, and within a minute Sentry shows an issue titled "error tracking check" with environment `staging` and a release beginning `registry.fly.io/pink-glove-staging:`.
+Run locally in the production image against a stand-in endpoint, that command sent one envelope holding one error event and nothing else.
+No issue means the DSN is wrong or outbound HTTPS is blocked: `fly logs --app pink-glove-staging` shows the SDK's complaint.
+
+### 4. Be told
+
+A new Sentry project emails its owner on every new issue by default (Alerts → the rule named for the project).
+Check that rule exists and names an address that is read, and add a second rule for "an issue changes state from resolved to unresolved".
+Without a rule, errors are collected and nobody is told, which is where this started.
+
+To turn it off: `fly secrets unset --app … SENTRY_DSN`.
+
+---
+
+## Backup and restore
+
+Three things must survive, and the third is the one that gets forgotten.
+
+| What | Where it lives | Lost means |
+|---|---|---|
+| The database | Fly Postgres | every customer, visit, invoice and payment |
+| The media bucket | Tigris | every job photo, the evidence in a dispute |
+| `FIELD_ENCRYPTION_KEY` | a Fly secret, and your password manager | every gate and alarm code, permanently, even with a perfect database backup |
+
+Redis holds nothing durable (throttle counters and the task queue).
+`SECRET_KEY` need not survive: a new one signs everyone out and breaks the pay links in invoices already emailed, which are resent.
+
+**Where the key lives.**
+On the app as a Fly secret, which `fly secrets list` will not show you, and in your password manager, which is the copy that counts.
+Keep one more offline (printed, in the safe with the company's other papers).
+The key is never stored with the backups: not in the backup bucket, not in a file beside the dump, not in this repository.
+A database backup without the key cannot decrypt a single access code, and a backup stored beside the key protects nothing: whoever takes one has the other.
+While the app still exists the key can be read back from a machine with `fly ssh console --app pink-glove -C "printenv FIELD_ENCRYPTION_KEY"`, which is how to repair a missing password-manager entry and is not a backup.
+
+Everything below marked *rehearsed* was run on 2026-11-16 against the local rehearsal stack, with MinIO as the bucket; the output is in `docs/PLAN.md`, "Ops readiness as built".
+The `fly` lines were not run by the agent that wrote them (agents do not touch a live app).
+Run the whole section once against staging before trusting it with production.
+
+### How often
+
+- **Daily, automatic:** Fly's own volume snapshots of the Postgres machine. Confirm they exist (below) once a month.
+- **Weekly, and before every deploy that carries a migration:** a `pg_dump` and a media copy, taken off Fly. A migration cannot be rolled back, so the dump taken just before it is the only way back.
+- **Before the trial starts, then quarterly:** the restore drill. A backup that has never been restored is a hope.
+
+These are run by hand; nothing schedules them yet.
+With the weekly dump as the only copy off Fly, losing the Fly organization loses up to a week.
+Card payments are the exception: Stripe keeps every event for 30 days and the ledger refuses duplicates, so events since the dump can be resent ("When a payment does not show up", step 4).
+
+### Back up the database
+
+`pg_dump` must be at least as new as the server, or it stops with `aborting because of server version mismatch`.
+The `pg_dump` on PATH on the development Mac is 14 (`/opt/homebrew/opt/postgresql@14`), which is older than any Postgres Fly creates today.
+Install a current one once and use it by path.
+The commands below assume 17, the version the rehearsal runs; `psql "$LOCAL_URL" -Atc 'show server_version'`, once `LOCAL_URL` is set, says what the server really is, and the major versions must match or `pg_dump` be the newer.
+
+```bash
+brew install postgresql@17
+/opt/homebrew/opt/postgresql@17/bin/pg_dump --version
+# pg_dump (PostgreSQL) 17.x
+```
+
+Terminal 1, a tunnel to the database app, left running:
+
+```bash
+fly proxy 15432:5432 --app pink-glove-db
+```
+
+Terminal 2:
+
+```bash
+# The app's own database URL, kept in a variable and never printed.
+DATABASE_URL="$(fly ssh console --app pink-glove -C 'printenv DATABASE_URL' | tr -d '\r')"
+# The same credentials and database, through the tunnel.
+LOCAL_URL="$(printf '%s' "$DATABASE_URL" | sed -E 's#@[^/]+/#@localhost:15432/#')"
+
+DUMP="pink-glove-$(date -u +%Y%m%dT%H%M%SZ).dump"
+/opt/homebrew/opt/postgresql@17/bin/pg_dump "$LOCAL_URL" \
+    --format=custom --no-owner --no-acl --file="$DUMP"
+/opt/homebrew/opt/postgresql@17/bin/pg_restore --list "$DUMP" | grep -c 'TABLE DATA'
+# 40
+```
+
+*Rehearsed:* the `pg_dump` and `pg_restore --list` lines, and the `sed` rewrite on a sample URL. Forty tables as of this writing; the number grows with the schema, and zero means the dump is empty.
+`--no-owner --no-acl` is what lets the dump restore under a different database user, which a rebuilt database will have.
+
+Then move it off the laptop and off Fly, to storage where the key is not: a private, versioned bucket in your own AWS account, for instance.
+
+```bash
+aws s3 cp "$DUMP" "s3://<your-backup-bucket>/pink-glove/db/$DUMP"
+rm "$DUMP"
+```
+
+The dump holds every customer's name, address and email in the clear.
+It holds the access codes as ciphertext only: in the rehearsal, the table's dump contained the Fernet tokens and neither seeded code.
+
+Fly's snapshots, for the monthly check:
+
+```bash
+fly volumes list --app pink-glove-db
+fly volumes snapshots list <volume id>
+```
+
+A snapshot restores a whole new Postgres app (`fly postgres create --snapshot-id <id> …`) and is the fast way back from a dead volume.
+It lives in the same Fly organization as the database, so it is not the copy that survives losing the account.
+If production is on Managed Postgres, the tunnel is `fly mpg proxy` and the backups are in its dashboard; the `pg_dump` is the same.
+
+### Back up the media
+
+Use a **read-only** Tigris key made for backups, not the app's: `fly storage dashboard pink-glove-media` → Access Keys → new key, read-only, this bucket.
+Put it in a named profile so it cannot be confused with your AWS account:
+
+```bash
+aws configure --profile pink-glove-media-ro
+# AWS Access Key ID: tid_…   AWS Secret Access Key: tsec_…   region: auto   output: (blank)
+
+aws s3 sync s3://pink-glove-media ./pink-glove-media \
+    --profile pink-glove-media-ro --endpoint-url https://fly.storage.tigris.dev
+aws s3 sync ./pink-glove-media "s3://<your-backup-bucket>/pink-glove/media/"
+```
+
+*Rehearsed:* the first `sync`, against MinIO.
+No `--delete`, on purpose: the app never overwrites or removes an object, so the copy only ever grows, and a deletion at the source can never propagate into the backup.
+
+### The restore drill
+
+Proves the three things belong together: this dump, this key, these photos.
+It restores into the local rehearsal stack, so nothing live is touched.
+From the repository root, with the dump and the media copy downloaded:
+
+```bash
+docker build -t pink-glove:rehearsal .
+docker compose -f deploy/docker-compose.rehearsal.yml up -d
+
+# A fresh, empty database, and the dump restored into it.
+docker compose -f deploy/docker-compose.rehearsal.yml exec -T db createdb -U pink_glove drill
+docker compose -f deploy/docker-compose.rehearsal.yml exec -T db \
+    pg_restore -U pink_glove -d drill --no-owner --no-acl < pink-glove-YYYYMMDDTHHMMSSZ.dump
+
+# The key, from the password manager. Typed, not pasted into a file; nothing echoes.
+read -rs KEY
+
+docker compose -f deploy/docker-compose.rehearsal.yml run --rm \
+    -e DATABASE_URL=postgres://pink_glove:pink_glove@db:5432/drill \
+    -e FIELD_ENCRYPTION_KEY="$KEY" \
+    web python manage.py check_field_encryption
+```
+
+Expected, with your own counts:
+
+```
+customers.ServiceLocation.gate_code: 2 readable, 0 unreadable
+customers.ServiceLocation.alarm_code: 2 readable, 0 unreadable
+customers.ServiceLocation.key_location: 0 readable, 0 unreadable
+OK: all 4 encrypted values are readable with this FIELD_ENCRYPTION_KEY.
+```
+
+The command decrypts every encrypted column of every row and prints counts only, never a code.
+With the wrong key it exits 1:
+
+```
+customers.ServiceLocation.gate_code: 0 readable, 2 unreadable
+…
+CommandError: 4 of 4 encrypted values cannot be read with this FIELD_ENCRYPTION_KEY. It is not the key this database was written with.
+```
+
+That is the result that matters most: it means the key in the password manager is not production's, and it is found on a quiet afternoon.
+
+Then the schema and the photos:
+
+```bash
+docker compose -f deploy/docker-compose.rehearsal.yml run --rm \
+    -e DATABASE_URL=postgres://pink_glove:pink_glove@db:5432/drill \
+    web python manage.py migrate --check
+echo $?
+# 0: the dump's schema is the one this image expects.
+# 1: the dump is older than the image. Expected if a migration has shipped since; not a failure.
+
+find ./pink-glove-media -type f | wc -l
+```
+
+The file count should be the number of rows in `scheduling_jobphoto`, which the first command below prints.
+Finish, and leave nothing of production on the laptop:
+
+```bash
+docker compose -f deploy/docker-compose.rehearsal.yml exec -T db \
+    psql -U pink_glove -d drill -Atc 'select count(*) from scheduling_jobphoto'
+unset KEY
+docker compose -f deploy/docker-compose.rehearsal.yml down -v
+rm -r pink-glove-*.dump ./pink-glove-media
+```
+
+*Rehearsed:* every `docker compose` line above, and then further than the drill asks: the dump restored into a second, empty Postgres server under a different owner, the media copied into a second bucket, the whole app booted against both, a gate code read back through the app's own reveal over TLS, and the photo fetched through a signed URL with the same SHA-256 as the file uploaded.
+The rehearsal's Postgres is 17: a dump from a newer server will not restore into it, so raise the image tag in `deploy/docker-compose.rehearsal.yml` first if production has moved on.
+
+### Restoring production
+
+Not rehearsed against Fly.
+The order matters more than the exact flags, so check each command's `--help` as you go.
+
+1. Stop writes: `fly scale count web=0 worker=0 beat=0 --app pink-glove`.
+2. A new database: `fly postgres create --name pink-glove-db-2 …` as in "Stand up staging", step 2 (or `--snapshot-id <id>` to start from a Fly snapshot, in which case skip to 5).
+3. `fly secrets unset DATABASE_URL --app pink-glove`, then `fly postgres attach pink-glove-db-2 --app pink-glove`, which creates an empty database and user and sets the new `DATABASE_URL`.
+4. Restore into it through a tunnel, exactly as the dump was taken: `fly proxy 15432:5432 --app pink-glove-db-2`, build `LOCAL_URL` the same way, then `pg_restore --no-owner --no-acl -d "$LOCAL_URL" pink-glove-….dump`.
+5. Media, only if the bucket was lost: `fly storage create`, then `aws s3 sync` the backup into it with the new key.
+6. `FIELD_ENCRYPTION_KEY` only if the app itself was recreated: `fly secrets set` it from the password manager. It must be the old key, not a new one.
+7. `fly deploy --config deploy/fly.toml --app pink-glove`. The release command runs any migration newer than the dump. Then `fly scale count web=1 worker=1 beat=1 --app pink-glove`.
+8. `fly ssh console --app pink-glove -C "python manage.py check_field_encryption"` must end in `OK`. Then sign in, open a job with photos, and reveal one location's codes.
+9. Resend the Stripe events since the dump ("When a payment does not show up", step 4).
 
 ---
 
@@ -462,6 +838,9 @@ that is the point.)
 
 Then:
 
+- `docker compose -f deploy/docker-compose.rehearsal.yml ps` → `web`, `worker`, `beat`, `proxy`, `db`, `redis` and `minio` all `Up`.
+  Read it: `up -d` reports success when `worker` and `beat` start and then exit a second later, and nothing below would notice.
+  That is how a freshly built image with a broken Celery got as far as it did on 2026-11-16; `ps -a` and `logs worker` say why.
 - `curl -k https://localhost/health/ready/` → both checks `ok`
 - `curl -kI https://localhost/schedule` → `200`, `cache-control: no-cache`
 - an asset, named from the *image*, not from a local `ui/dist` that may have
@@ -481,6 +860,17 @@ Then:
   so it is in the web log:
   `docker compose -f deploy/docker-compose.rehearsal.yml logs web`
   (an emailed invoice, sent by Celery, shows up under `logs worker`).
+- as that user, open an issued invoice and press Email, then
+  `docker compose -f deploy/docker-compose.rehearsal.yml logs worker` →
+  the message, and `Task billing.send_invoice_email[…] succeeded`.
+  This is the one check here that goes through Redis to the worker and back.
+- error tracking is off here (no `SENTRY_DSN`), which is the state to confirm:
+
+  ```bash
+  docker compose -f deploy/docker-compose.rehearsal.yml exec -T web \
+      python -c "import django, sys; django.setup(); print('sentry_sdk' in sys.modules)"
+  # False
+  ```
 
 The certificate is signed by Caddy's own internal CA, so the browser will
 object. Chrome sometimes shows no "Proceed" link for `localhost`; typing
@@ -515,7 +905,11 @@ docker compose -f deploy/docker-compose.rehearsal.yml down -v
 | What | How |
 |---|---|
 | `SECRET_KEY` | `fly secrets set SECRET_KEY=…`. Every session is signed out. Nothing else is affected. |
-| `FIELD_ENCRYPTION_KEY` | Do **not** simply replace it: existing ciphertext becomes unreadable. Needs a re-encryption migration (read with old, write with new). Not built; open an issue before it is needed. |
+| `FIELD_ENCRYPTION_KEY` | Do **not** simply replace it: existing ciphertext becomes unreadable. Needs a re-encryption migration (read with old, write with new). Not built; open an issue before it is needed. `python manage.py check_field_encryption` says, in counts and without showing a code, whether the key a process holds reads the database it is connected to. |
+| The database, the bucket, or the key itself | [Backup and restore](#backup-and-restore). |
+| SendGrid key | Create the new key, `fly secrets set EMAIL_HOST_PASSWORD=…`, then delete the old one in SendGrid. [Email](#email), step 5, to check. |
+| `SENTRY_DSN` | Sentry → Client Keys: create a new key, `fly secrets set SENTRY_DSN=…`, revoke the old. A leaked DSN lets someone send junk events, not read any. |
+| A FAILED Stripe event | `/admin/` → Billing → Stripe events → select → "Re-queue the selected FAILED events" ("When a payment does not show up", step 4). |
 | Postgres credentials | `fly postgres users` / `fly secrets set DATABASE_URL=…`; machines restart on the new secret. |
 | Tigris credentials | `fly storage update` or the Tigris console; set the new `AWS_*` secrets. Signed URLs already issued stop working. |
 | A bad deploy | `fly releases --app …` then `fly deploy --image registry.fly.io/…:<previous tag>`. |
