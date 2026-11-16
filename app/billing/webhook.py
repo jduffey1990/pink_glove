@@ -345,6 +345,24 @@ def sweep() -> dict[str, int]:
     return {"requeued": requeued, "abandoned": abandoned, "fees": _backfill_fees(now)}
 
 
+def replay(row: StripeEvent) -> bool:
+    """
+    Re-queue one FAILED event by hand, once its cause is fixed. Returns
+    whether it was queued.
+
+    The admin action behind `/admin/` -> Stripe events. Only FAILED rows: a
+    RECEIVED one is still the sweep's to chase, and PROCESSED and IGNORED are
+    finished. The row stays FAILED until a worker has actually applied it, so
+    a replay that is itself lost leaves the queue telling the truth. Queuing
+    one twice is harmless for the reason a Stripe resend is: `process` leaves
+    a PROCESSED row alone and both ledgers refuse a second write.
+    """
+    if row.status != StripeEventStatus.FAILED or row.organization_id is None:
+        return False
+    _enqueue(row)
+    return True
+
+
 def _backfill_fees(now: dt.datetime) -> int:
     """Fill the fee on Stripe payments that landed before Stripe had it."""
     unfilled = Payment.objects.filter(
