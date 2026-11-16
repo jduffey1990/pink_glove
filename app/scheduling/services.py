@@ -325,6 +325,73 @@ def unassign_user(*, job: Job, user) -> bool:
     return True
 
 
+#: What a dispatcher may do to a visit besides move its status. Published on
+#: the job as `available_actions` and enforced by `JobViewSet` from the same
+#: two functions below, so a page never decides either one (ADR-023, ADR-032).
+ACTION_EDIT = "edit"
+ACTION_DELETE = "delete"
+JOB_ACTIONS = (ACTION_EDIT, ACTION_DELETE)
+
+
+def edit_refusal(job: Job) -> str | None:
+    """
+    Why `job` may not be edited right now, or None if it may.
+
+    A finished visit is the record of what happened: time entries, an invoice
+    line and its dated description may all point at it. Changing one is a
+    correction, and the state machine already has the deliberate step for
+    that, so the answer is "reopen it first" rather than a quiet rewrite.
+    `assign_user` refuses a finished job for the same reason.
+    """
+    if job.is_terminal:
+        return (
+            f"This job is {job.get_status_display().lower()} and cannot be changed. "
+            "Reopen it first."
+        )
+    return None
+
+
+def delete_refusal(job: Job) -> str | None:
+    """
+    Why `job` may not be deleted right now, or None if it may.
+
+    Deletion is for a visit booked by mistake that nothing has happened to
+    yet (ADR-021). Everything else is called off by cancelling, which keeps
+    the row and the reason:
+
+    * recorded time would be orphaned, along with the hours billed against it;
+    * a visit that is under way or finished is history, not a mistake;
+    * a visit a plan created comes straight back, because the materializer
+      only counts live rows. Deleting a *cancelled* one is the worst case: it
+      puts the visit the customer called off back on the board.
+    """
+    if job.time_entries.exists():
+        return "This job has recorded time. Cancel it instead of deleting it."
+
+    if job.status != JobStatus.SCHEDULED:
+        return (
+            "Only a job that is still scheduled can be deleted. "
+            f"This one is {job.get_status_display().lower()}."
+        )
+
+    if job.plan_occurrence is not None:
+        return (
+            "This visit comes from a recurring plan, so deleting it would only "
+            "bring it back. Cancel it instead."
+        )
+
+    return None
+
+
+def job_actions(job: Job, *, is_dispatcher: bool) -> list[str]:
+    """Which of `JOB_ACTIONS` the server will accept for `job` from this caller."""
+    if not is_dispatcher:
+        return []
+
+    refusals = {ACTION_EDIT: edit_refusal, ACTION_DELETE: delete_refusal}
+    return [action for action in JOB_ACTIONS if refusals[action](job) is None]
+
+
 def next_statuses(job: Job, *, is_dispatcher: bool) -> list[str]:
     """
     Where `job` may go next, for this kind of caller.

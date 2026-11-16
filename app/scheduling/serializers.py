@@ -29,7 +29,7 @@ from scheduling.models import (
     TimeEntry,
 )
 from scheduling.models import validate_rrule as _validate_rrule
-from scheduling.services import next_statuses
+from scheduling.services import job_actions, next_statuses
 from users.enums import DISPATCHER_ROLES, Role
 
 
@@ -159,6 +159,7 @@ class JobSerializer(TenantModelSerializer):
     duration_minutes = serializers.IntegerField(read_only=True)
     is_terminal = serializers.BooleanField(read_only=True)
     next_statuses = serializers.SerializerMethodField()
+    available_actions = serializers.SerializerMethodField()
 
     class Meta(TenantModelSerializer.Meta):
         model = Job
@@ -180,6 +181,7 @@ class JobSerializer(TenantModelSerializer):
             "status_changed_at",
             "is_terminal",
             "next_statuses",
+            "available_actions",
             "price_cents",
             "notes",
             "cancellation_reason",
@@ -210,13 +212,7 @@ class JobSerializer(TenantModelSerializer):
         from the server's state machine instead of keeping a copy (ADR-023).
         Read off the request's membership: no query per row on a list.
         """
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        if user is None or not user.is_authenticated:
-            return []
-
-        role = getattr(getattr(request, "membership", None), "role", None)
-        is_dispatcher = user.is_superuser or role in DISPATCHER_ROLES
+        is_dispatcher, role = self._caller()
         if not is_dispatcher and role != Role.CLEANER:
             return []
 
@@ -224,6 +220,27 @@ class JobSerializer(TenantModelSerializer):
             {"status": status, "reason_required": status in REASON_REQUIRED_STATUSES}
             for status in next_statuses(obj, is_dispatcher=is_dispatcher)
         ]
+
+    def get_available_actions(self, obj) -> list[str]:
+        """
+        What this caller may do to the visit besides move its status: `edit`,
+        `delete`, both or neither. The server refuses anything not listed.
+        """
+        # Decided by the functions `JobViewSet` enforces with, so the page and
+        # the server cannot drift (ADR-023, ADR-032). They read the prefetched
+        # time entries: no query per row on a list.
+        is_dispatcher, _ = self._caller()
+        return job_actions(obj, is_dispatcher=is_dispatcher)
+
+    def _caller(self) -> tuple[bool, str | None]:
+        """(dispatcher or higher, role) of whoever is asking, off the request."""
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is None or not user.is_authenticated:
+            return False, None
+
+        role = getattr(getattr(request, "membership", None), "role", None)
+        return user.is_superuser or role in DISPATCHER_ROLES, role
 
     @extend_schema_field(TimeEntrySerializer(allow_null=True))
     def get_open_time_entry(self, obj):

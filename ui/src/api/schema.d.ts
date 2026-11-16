@@ -1972,6 +1972,11 @@ export interface components {
             readonly status_changed_at: string | null;
             readonly is_terminal: boolean;
             readonly next_statuses: components["schemas"]["NextStatus"][];
+            /**
+             * @description What this caller may do to the visit besides move its status: `edit`,
+             *     `delete`, both or neither. The server refuses anything not listed.
+             */
+            readonly available_actions: string[];
             price_cents?: number;
             notes?: string;
             readonly cancellation_reason: string;

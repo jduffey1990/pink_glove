@@ -4573,6 +4573,14 @@ components:
           items:
             $ref: '#/components/schemas/NextStatus'
           readOnly: true
+        available_actions:
+          type: array
+          items:
+            type: string
+          description: |-
+            What this caller may do to the visit besides move its status: `edit`,
+            `delete`, both or neither. The server refuses anything not listed.
+          readOnly: true
         price_cents:
           type: integer
           maximum: 2147483647
@@ -4602,6 +4610,7 @@ components:
           readOnly: true
       required:
       - assignments
+      - available_actions
       - cancellation_reason
       - created_at
       - customer
