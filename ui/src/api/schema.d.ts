@@ -735,6 +735,68 @@ export interface paths {
         patch: operations["customers_customers_partial_update"];
         trace?: never;
     };
+    "/api/customers/customers/import/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview or perform an import of customers from a CSV file
+         * @description Load customers and their service locations from a CSV file (ADR-031).
+         *
+         *     `dry_run` defaults to TRUE: the file is read, every row is validated
+         *     and matched against the customers already here, and the outcome of
+         *     each row comes back with nothing written. Send `dry_run=false` to
+         *     import.
+         *
+         *     A real import is all or nothing. One row that cannot be imported
+         *     means no row is, and the answer is a 400 carrying the same per-row
+         *     outcomes a dry run returns. A file that cannot be read at all
+         *     (wrong encoding, a missing required column, too large) is a 400 of
+         *     the usual `{"file": ["..."]}` shape in either mode.
+         *
+         *     Owner and admin only. A dispatcher can add a customer by hand, but
+         *     loading a whole book, access codes included, in one request is an
+         *     administrative act.
+         *
+         *     The response never carries an access code, and the only thing logged
+         *     is who imported how many rows.
+         */
+        post: operations["customers_customers_import_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/customers/customers/import-template/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The import file's columns, with a template to fill in
+         * @description What an import file looks like: the header row, one example row, which
+         *     columns are required and the limits on a file.
+         *
+         *     Served rather than written into the page so the list of columns has
+         *     one source (ADR-023, ADR-031): `customers.import_columns`.
+         */
+        get: operations["customers_customers_import_template_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/customers/locations/": {
         parameters: {
             query?: never;
@@ -1645,6 +1707,72 @@ export interface components {
             readonly created_at: string;
             /** Format: date-time */
             readonly updated_at: string;
+        };
+        /**
+         * @description * `create_customer` - New customer
+         *     * `add_location` - New location
+         *     * `skip` - Already on file
+         *     * `error` - Needs fixing
+         * @enum {string}
+         */
+        CustomerImportActionEnum: "create_customer" | "add_location" | "skip" | "error";
+        CustomerImportResult: {
+            dry_run: boolean;
+            /** @description False for a dry run, and for an import refused over a row. */
+            committed: boolean;
+            /** @description Whether sending this file again with dry_run false would write something. */
+            can_commit: boolean;
+            message: string;
+            totals: components["schemas"]["CustomerImportTotals"];
+            ignored_columns: string[];
+            rows: components["schemas"]["CustomerImportRow"][];
+        };
+        /** @description One row's outcome. Never carries an access code (ADR-014). */
+        CustomerImportRow: {
+            /** @description As a spreadsheet numbers it: the header is row 1, the first customer row 2. */
+            row: number;
+            action: components["schemas"]["CustomerImportActionEnum"];
+            customer: string;
+            address: string;
+            detail: string;
+            errors: components["schemas"]["CustomerImportRowError"][];
+        };
+        CustomerImportRowError: {
+            /** @description The file's header for the cell; blank for the whole row. */
+            column: string;
+            message: string;
+        };
+        CustomerImportTemplate: {
+            filename: string;
+            /** @description The header row and one example row. */
+            csv: string;
+            columns: components["schemas"]["CustomerImportTemplateColumn"][];
+            max_rows: number;
+            max_megabytes: number;
+        };
+        CustomerImportTemplateColumn: {
+            header: string;
+            required: boolean;
+            hint: string;
+        };
+        CustomerImportTotals: {
+            rows: number;
+            new_customers: number;
+            new_locations: number;
+            skipped: number;
+            errors: number;
+        };
+        CustomerImportUploadRequest: {
+            /**
+             * Format: binary
+             * @description A UTF-8 CSV file with a header row.
+             */
+            file: string;
+            /**
+             * @description True (the default) previews the import and writes nothing.
+             * @default true
+             */
+            dry_run: boolean;
         };
         /**
          * @description Base serializer for tenant-owned models.
@@ -4624,6 +4752,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Customer"];
+                };
+            };
+        };
+    };
+    customers_customers_import_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["CustomerImportUploadRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerImportResult"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerImportResult"];
+                };
+            };
+        };
+    };
+    customers_customers_import_template_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerImportTemplate"];
                 };
             };
         };

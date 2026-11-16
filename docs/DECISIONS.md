@@ -880,3 +880,82 @@ on the view, and the phase gate lists every view that sets it.
 deactivated for billing, the subscription card is absent and the banner has
 nothing to say. Production refuses a price without the platform webhook
 secret, and a price without the key.
+
+---
+
+## ADR-031: A customer import matches on one key, never edits what is on file, and is all or nothing
+
+**Decided (customer import, 2026-11-16).**
+`POST /api/customers/customers/import/` loads a CSV of an existing customer book.
+One row is one customer and one service location.
+Four decisions, taken together because each one is what makes the next one safe.
+
+**1. A customer has exactly one key.**
+The email, compared without case, when the customer has one.
+Without an email, the whole name (first, last, company) plus the digits of the phone number.
+The key is computed the same way from a file row and from a stored customer (`customers.services.customer_key`), so two rows are the same customer when their keys are equal and a row belongs to a stored customer when their keys are equal.
+A row with no email therefore never matches a customer who has one, and the answer never depends on the order rows arrive in.
+Matching reads the caller's organization only, and only live rows: a soft-deleted customer is not "on file".
+
+**2. An import adds; it never edits.**
+A row whose customer is already on file leaves that customer exactly as it is, whatever the row's other cells say.
+Its location is added if that customer has no location at that address, and skipped if they do.
+"That address" is line 1, line 2 and the postal code, compared without case or spacing.
+A skipped location keeps the access codes it already has.
+This is what makes importing the same file twice add nothing, which a test asserts.
+Within one file, the first row for a customer supplies their details and later rows only add locations.
+
+**3. A row that matches two stored customers is an error, not a guess.**
+Email is not unique in this schema, so two customers typed in by hand can share one.
+Attaching the row's location to either would put somebody's alarm code on a record chosen by sort order.
+
+**4. A dry run is the default, and a real import is all or nothing.**
+`dry_run` defaults to true and a dry run plans without opening a transaction or saving anything.
+A real import makes its plan inside the transaction that writes it, behind a lock on the organization's row, and writes nothing if any row is an error: the answer is a 400 carrying every row's outcome.
+A dry run that finds errors is a 200, because the preview worked (the same reasoning as ADR-023's amendment: a healthy path should not look like a failure).
+
+**Also decided here.**
+Every row is validated by `CustomerSerializer` and by `ImportedLocationSerializer`, a subclass of `ServiceLocationSerializer` whose one change is that `customer` is supplied by the importer rather than read from the row.
+Which columns are required is read off those serializers, not listed.
+The header-to-field table is `customers/import_columns.py` and nothing else knows a header; the template endpoint, the unknown-column report and the reader are all built from it.
+That table is a best guess, written before any real export from a business was available.
+Owner and admin only: a dispatcher may add a customer by hand, not load a book.
+The response and the log never carry an access code (ADR-014, ADR-016): a row's outcome has a name, an address, a sentence and error messages, and the one log line is counts.
+
+**Rejected -- email as the only key, with a row that has none always created.**
+The obvious rule, and it makes a second import of the same file duplicate every customer without an email.
+A cleaning company's book is full of them.
+
+**Rejected -- falling through from email to name and phone against anyone.**
+It looks more forgiving ("Dana Wu with no email is surely the Dana Wu who has one") and it makes the outcome depend on row order.
+If the row without the email comes first it creates a customer, and the row with the email then finds nobody with that email and creates a second.
+One key per customer has no such case.
+
+**Rejected -- updating the stored customer from the file (an upsert).**
+A spreadsheet exported last month would silently overwrite a phone number or a gate code corrected by hand since, with nothing in the preview to say which cells changed.
+An import is a loader, not a sync.
+If the business needs bulk edits, that is a different feature with a field-by-field diff in its preview.
+
+**Rejected -- skipping the whole row when the customer exists.**
+Simpler to state, but a customer typed in by hand before the import would never get their locations from the file, and the person importing would have to notice which ones.
+Adding a location is the one write to an existing customer that cannot destroy anything.
+
+**Rejected -- importing the good rows and reporting the bad ones.**
+The person is then holding a file that is half in the system, and the fix is to work out which half.
+With all or nothing the loop is one step: fix the rows the 400 names, upload the same file again.
+
+**Rejected -- a second set of validation rules for import, or parsing the file in the browser.**
+Either is a copy of the create path's rules that is correct until the day a serializer changes.
+The browser sends the file and renders what comes back.
+
+**Rejected -- a background task with progress.**
+The file would have to be stored somewhere between the request and the worker, and it is full of access codes in plaintext.
+Bounding the file instead (1 MB, 2000 rows) keeps it one request: 2000 rows plan in about 3 seconds and write in about 6 on a laptop, against a 60 second worker timeout.
+
+**Consequences accepted.**
+Two different people with the same name, no email and the same phone (or no phone) are one customer to an import; the preview says "Another location for the customer on row N", which is where a person catches it.
+A customer whose email in the file differs from the one on file is a new customer.
+An address written two ways ("1 Elm St", "1 Elm Street") is two locations.
+A blank cell means "not given", so the field's own default applies: an imported customer with no `status` cell is a `lead`, exactly as one created through the API with no status is.
+A validation message for a choice column quotes the cell it refused, so a file whose columns are shifted can have a cell from the wrong column quoted back to the person who uploaded it; the three access-code columns themselves are never quoted.
+The file on the importer's own laptop is outside this system: ADR-014 protects the database, not a spreadsheet of codes in a downloads folder.

@@ -1765,6 +1765,74 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/customers/customers/import/:
+    post:
+      operationId: customers_customers_import_create
+      description: |-
+        Load customers and their service locations from a CSV file (ADR-031).
+
+        `dry_run` defaults to TRUE: the file is read, every row is validated
+        and matched against the customers already here, and the outcome of
+        each row comes back with nothing written. Send `dry_run=false` to
+        import.
+
+        A real import is all or nothing. One row that cannot be imported
+        means no row is, and the answer is a 400 carrying the same per-row
+        outcomes a dry run returns. A file that cannot be read at all
+        (wrong encoding, a missing required column, too large) is a 400 of
+        the usual `{"file": ["..."]}` shape in either mode.
+
+        Owner and admin only. A dispatcher can add a customer by hand, but
+        loading a whole book, access codes included, in one request is an
+        administrative act.
+
+        The response never carries an access code, and the only thing logged
+        is who imported how many rows.
+      summary: Preview or perform an import of customers from a CSV file
+      tags:
+      - customers
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CustomerImportUploadRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerImportResult'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerImportResult'
+          description: ''
+  /api/customers/customers/import-template/:
+    get:
+      operationId: customers_customers_import_template_retrieve
+      description: |-
+        What an import file looks like: the header row, one example row, which
+        columns are required and the limits on a file.
+
+        Served rather than written into the page so the list of columns has
+        one source (ADR-023, ADR-031): `customers.import_columns`.
+      summary: The import file's columns, with a template to fill in
+      tags:
+      - customers
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerImportTemplate'
+          description: ''
   /api/customers/locations/:
     get:
       operationId: customers_locations_list
@@ -3897,6 +3965,155 @@ components:
       - locations
       - organization
       - updated_at
+    CustomerImportActionEnum:
+      enum:
+      - create_customer
+      - add_location
+      - skip
+      - error
+      type: string
+      description: |-
+        * `create_customer` - New customer
+        * `add_location` - New location
+        * `skip` - Already on file
+        * `error` - Needs fixing
+    CustomerImportResult:
+      type: object
+      properties:
+        dry_run:
+          type: boolean
+        committed:
+          type: boolean
+          description: False for a dry run, and for an import refused over a row.
+        can_commit:
+          type: boolean
+          description: Whether sending this file again with dry_run false would write
+            something.
+        message:
+          type: string
+        totals:
+          $ref: '#/components/schemas/CustomerImportTotals'
+        ignored_columns:
+          type: array
+          items:
+            type: string
+        rows:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerImportRow'
+      required:
+      - can_commit
+      - committed
+      - dry_run
+      - ignored_columns
+      - message
+      - rows
+      - totals
+    CustomerImportRow:
+      type: object
+      description: One row's outcome. Never carries an access code (ADR-014).
+      properties:
+        row:
+          type: integer
+          description: 'As a spreadsheet numbers it: the header is row 1, the first
+            customer row 2.'
+        action:
+          $ref: '#/components/schemas/CustomerImportActionEnum'
+        customer:
+          type: string
+        address:
+          type: string
+        detail:
+          type: string
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerImportRowError'
+      required:
+      - action
+      - address
+      - customer
+      - detail
+      - errors
+      - row
+    CustomerImportRowError:
+      type: object
+      properties:
+        column:
+          type: string
+          description: The file's header for the cell; blank for the whole row.
+        message:
+          type: string
+      required:
+      - column
+      - message
+    CustomerImportTemplate:
+      type: object
+      properties:
+        filename:
+          type: string
+        csv:
+          type: string
+          description: The header row and one example row.
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerImportTemplateColumn'
+        max_rows:
+          type: integer
+        max_megabytes:
+          type: integer
+      required:
+      - columns
+      - csv
+      - filename
+      - max_megabytes
+      - max_rows
+    CustomerImportTemplateColumn:
+      type: object
+      properties:
+        header:
+          type: string
+        required:
+          type: boolean
+        hint:
+          type: string
+      required:
+      - header
+      - hint
+      - required
+    CustomerImportTotals:
+      type: object
+      properties:
+        rows:
+          type: integer
+        new_customers:
+          type: integer
+        new_locations:
+          type: integer
+        skipped:
+          type: integer
+        errors:
+          type: integer
+      required:
+      - errors
+      - new_customers
+      - new_locations
+      - rows
+      - skipped
+    CustomerImportUploadRequest:
+      type: object
+      properties:
+        file:
+          type: string
+          format: binary
+          description: A UTF-8 CSV file with a header row.
+        dry_run:
+          type: boolean
+          default: true
+          description: True (the default) previews the import and writes nothing.
+      required:
+      - file
     CustomerRequest:
       type: object
       description: |-

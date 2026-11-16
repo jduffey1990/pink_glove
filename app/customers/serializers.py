@@ -1,6 +1,9 @@
 from rest_framework import serializers
 
+from base.validators import MaxFileSize
 from base.viewsets import TenantModelSerializer
+from customers.enums import ImportAction
+from customers.import_columns import MAX_UPLOAD_MEGABYTES
 from customers.models import Customer, ServiceLocation
 from users.enums import Role
 from users.models import CustomUser
@@ -162,3 +165,92 @@ class CustomerSerializer(TenantModelSerializer):
                 "A customer needs at least a first name, last name, or company name."
             )
         return attrs
+
+
+# --- import (ADR-031) --------------------------------------------------------
+
+
+class ImportedLocationSerializer(ServiceLocationSerializer):
+    """
+    `ServiceLocationSerializer` for a row of an import file.
+
+    Every rule is inherited: this is the create path's validation, not a
+    second copy of it. The one difference is who supplies `customer`. A row
+    names its customer by email or name rather than by id, and in a dry run
+    that customer does not exist yet, so the importer resolves it and passes
+    it to `save()`, exactly as the viewset passes `organization`.
+    """
+
+    class Meta(ServiceLocationSerializer.Meta):
+        read_only_fields = (*ServiceLocationSerializer.Meta.read_only_fields, "customer")
+
+
+class CustomerImportUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(
+        validators=[MaxFileSize(megabytes=MAX_UPLOAD_MEGABYTES)],
+        help_text="A UTF-8 CSV file with a header row.",
+    )
+    # `default=True` is load-bearing, not decoration. A boolean missing from a
+    # multipart form is an unticked checkbox to DRF, which is False unless the
+    # field has a default, and False here means "write to the database". With
+    # the default, a client that forgets the field gets a dry run.
+    dry_run = serializers.BooleanField(
+        default=True,
+        help_text="True (the default) previews the import and writes nothing.",
+    )
+
+
+class CustomerImportRowErrorSerializer(serializers.Serializer):
+    column = serializers.CharField(
+        allow_blank=True, help_text="The file's header for the cell; blank for the whole row."
+    )
+    message = serializers.CharField()
+
+
+class CustomerImportRowSerializer(serializers.Serializer):
+    """One row's outcome. Never carries an access code (ADR-014)."""
+
+    row = serializers.IntegerField(
+        help_text="As a spreadsheet numbers it: the header is row 1, the first customer row 2."
+    )
+    action = serializers.ChoiceField(choices=ImportAction.choices)
+    customer = serializers.CharField(allow_blank=True)
+    address = serializers.CharField(allow_blank=True)
+    detail = serializers.CharField()
+    errors = CustomerImportRowErrorSerializer(many=True)
+
+
+class CustomerImportTotalsSerializer(serializers.Serializer):
+    rows = serializers.IntegerField()
+    new_customers = serializers.IntegerField()
+    new_locations = serializers.IntegerField()
+    skipped = serializers.IntegerField()
+    errors = serializers.IntegerField()
+
+
+class CustomerImportResultSerializer(serializers.Serializer):
+    dry_run = serializers.BooleanField()
+    committed = serializers.BooleanField(
+        help_text="False for a dry run, and for an import refused over a row."
+    )
+    can_commit = serializers.BooleanField(
+        help_text="Whether sending this file again with dry_run false would write something."
+    )
+    message = serializers.CharField()
+    totals = CustomerImportTotalsSerializer()
+    ignored_columns = serializers.ListField(child=serializers.CharField())
+    rows = CustomerImportRowSerializer(many=True)
+
+
+class CustomerImportTemplateColumnSerializer(serializers.Serializer):
+    header = serializers.CharField()
+    required = serializers.BooleanField()
+    hint = serializers.CharField(allow_blank=True)
+
+
+class CustomerImportTemplateSerializer(serializers.Serializer):
+    filename = serializers.CharField()
+    csv = serializers.CharField(help_text="The header row and one example row.")
+    columns = CustomerImportTemplateColumnSerializer(many=True)
+    max_rows = serializers.IntegerField()
+    max_megabytes = serializers.IntegerField()
