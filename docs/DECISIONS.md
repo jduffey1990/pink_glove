@@ -989,3 +989,80 @@ So a file whose columns are shifted can have a cell that was meant to be a code 
 Cells under the three access-code headers themselves are never shown, and nothing from any row is logged.
 A cell that starts with `=`, `+`, `-` or `@` is stored as the text it is, which is harmless in this app (Vue escapes it) and is a spreadsheet formula to any future CSV export that writes it back out unguarded.
 The file on the importer's own laptop is outside this system: ADR-014 protects the database, not a spreadsheet of codes in a downloads folder.
+
+---
+
+## ADR-032: A hand edit to a visit is bounded by the server, and a kept visit still accounts for its day
+
+**Decided (visit booking, 2026-11-16).**
+Until now no page could book, move or delete a visit, so what the API would accept for those was never exercised.
+Two things turned out to be wrong, and both are decided here.
+Amends the consequences of ADR-020 and ADR-021.
+
+### 1. What may be edited and deleted, published as `available_actions`
+
+- **A finished visit (complete, cancelled, no access) is not edited in place.**
+  PATCH and PUT answer 409 and say to reopen it first.
+  Reopening is the deliberate step the state machine already has, and `assign_user` already refuses a finished job the same way.
+- **Delete is for a one-off visit that is still `scheduled` and has no recorded time.**
+  Anything else answers 409: a visit a plan created ("cancel it instead"), one that is under way or finished, one with a time entry.
+- **The job publishes the answer** as `available_actions` (`edit`, `delete`), computed by `scheduling.services.edit_refusal` and `delete_refusal`, which are also what `JobViewSet` enforces with.
+  A test walks every status, both sources and worked or not, and asserts the list and the server agree.
+  The pages draw Edit and Delete from that list and from nothing else (ADR-023).
+
+**Why.**
+Reproduced before the change: DELETE on a cancelled plan visit answered 204, and the next materialization recreated it as `scheduled`, which is the exact failure ADR-021 exists to prevent.
+DELETE on any plan visit only hid it until the nightly run.
+A complete visit on an issued invoice could be handed to another customer, repriced, moved a month, or deleted.
+
+**Rejected -- leaving the API permissive and hiding the buttons.**
+Hiding a button is not a permission, and the nightly materializer does not read the UI.
+
+**Rejected -- deciding it in the client from `status`, `plan` and the role.**
+Whether a visit may be deleted turns on recorded time and on whether a plan created it.
+A client copy is correct until the rule changes and nothing in the UI fails.
+
+**Rejected -- letting a finished visit's notes or price still be edited.**
+Harmless on their own, but it makes "finished" mean two things, and the price of a completed visit is adjusted on the draft invoice line, which is where ADR-026 puts it.
+
+**Rejected -- allowing delete on a plan visit whose plan is paused or gone.**
+It would not come back, so it is safe, but the rule would then read the plan's state rather than the job's.
+Cancelling works in every case and keeps the reason.
+
+**Accepted cost:** a visit marked in progress by mistake cannot be deleted directly.
+It is finished, reopened, then deleted.
+
+### 2. `regenerate_plan` re-keys a kept visit to the same local day
+
+ADR-020 keeps a visit that was moved, cancelled or worked, and finds it again by `plan_occurrence`, an instant.
+Change the plan's time and every occurrence is a different instant, so the kept visit no longer accounted for its day and the rebuild put a new visit beside it.
+
+Reproduced through the API before the change: move next Tuesday's visit to Wednesday, edit the plan from 09:00 to 14:00, and Tuesday 14:00 appears as well.
+Cancel a visit, make the same edit, and it comes back as `scheduled`.
+The nightly run repeated it the next morning.
+
+`regenerate_plan` now runs `_rekey_kept_jobs` between the drop and the rebuild: each live visit of the plan planned for today or later is handed the occurrence the new definition has on the organization-local day it was planned for.
+It reaches back to the start of today so this morning's finished visit still accounts for today.
+So `plan_occurrence` is no longer strictly immutable: no caller can write it, and this is the one thing that changes it.
+
+**Rejected -- keying the materializer on the local date instead of the instant.**
+It is the cleaner model for a rule that fires once a day, but it changes the unique constraint and the idempotency key under every existing row, and an RRULE may legitimately fire more than once a day.
+
+**Rejected -- matching a kept visit to the nearest new occurrence when its day is gone.**
+Tuesdays becoming Thursdays has no honest mapping: the moved Tuesday might be this week's visit or an extra one.
+Such a visit keeps its old key, the new series is built beside it, and `kept` in the response is what tells the dispatcher to look.
+
+**Accepted cost:** after a rule change that moves the day, a kept visit and the new series can both stand in one week.
+That was already true and is now the only case left.
+
+### Left open, on purpose
+
+- **An edit that leaves the start alone does not pin a plan visit.**
+  A longer slot, a note or a price set by hand is rebuilt on the next plan edit, exactly as ADR-020 already accepts for a hand-added assignee.
+  Widening "untouched" needs a record of what the plan last wrote, which is the flag ADR-020 rejected.
+  Tests in `test_rescheduling.py` pin the current behaviour.
+- **There is no double-booking rule.**
+  The same cleaner can be put on overlapping visits by create, assign or a move, and nothing warns.
+  Tests pin that too.
+- **A visit on a live invoice can still be reopened**, and a reopened visit can be edited or deleted.
+  Closing that needs `scheduling` to ask `billing` a question, and the dependency runs the other way by design.

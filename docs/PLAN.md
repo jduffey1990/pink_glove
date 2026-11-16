@@ -2784,3 +2784,50 @@ The deploy audit and rehearsal were not run: no setting that production reads, n
 **6. Branch and production guard.**
 All of it is on `feat/customer-import`, cut from `7843a71` and rebased once onto `main` at `6ef6f78` (2026-11-17, at the orchestrator's instruction, before anything was pushed).
 Nothing was committed to `main`, nothing was pushed or merged, no `fly` command was run, and no migration was made or applied.
+
+---
+
+## Visit booking as built
+
+Branch `feat/visit-booking`.
+A dispatcher can now book a one-off visit from the schedule and edit, move or delete a visit from its page.
+Before this the only way onto the board was a recurring plan, and a visit could not be moved.
+
+**Backend, first.**
+`JobViewSet` already had create, update and delete; no page called them, so what they accepted had never been exercised.
+
+- `Job.available_actions` (`edit`, `delete`) is published per caller and enforced by the same two functions in `scheduling/services.py` (ADR-032).
+  A finished visit answers 409 to PATCH and PUT until it is reopened.
+  DELETE is for a one-off visit that is still scheduled and has no recorded time; a plan visit is cancelled instead.
+- `assignees` on job create: a write-only list of user ids, assigned in the same transaction through `assign_user`.
+  Refused on update.
+- `regenerate_plan` re-keys each kept visit to the new definition's occurrence on the local day it was planned for, so a plan time change no longer adds a second visit to a day that already has a moved or cancelled one (ADR-032).
+
+**Frontend.**
+`VisitDialog` is used by both pages: New visit on `SchedulePage` (and a plus on each day), Edit visit and Delete visit on `JobDetailPage`.
+What the form means lives in `src/lib/visitForm.ts`; `src/lib/datetime.ts` gained `zonedInstant` and `addMinutes`.
+The dialog and both pages are mounted in vitest (jsdom), which needed `server.deps.inline: ['vuetify']` in `vite.config.mts`.
+
+**Answers the brief asked for.**
+
+1. A one-off job is stamped with the caller's organization whatever the payload says; another organization's customer, location or service is a 400; a cleaner or customer gets 403 on create, update and delete.
+2. A plan visit moved by hand stays linked to the plan, survives `regenerate` and a plan edit, and its old slot is not refilled.
+   The plan-edit case was broken for a time change and is fixed (above).
+3. DELETE soft-deletes. On a plan visit it only hid the visit until the nightly run, and on a cancelled plan visit it un-cancelled it. Both are now 409.
+4. A finished visit could be moved, repriced, handed to another customer or deleted, including one on an issued invoice. Now 409 until reopened.
+   A visit that is not finished stays editable with recorded time on it.
+5. Double booking is accepted silently on create, assign and move. No rule was added.
+
+**Not verified in a browser.**
+No browser has looked at `VisitDialog`, the New visit button and per-day plus on the schedule, the booked notice, or Edit visit, Delete visit and the delete confirmation on the job page.
+That includes the 390px layout and the full-screen dialog.
+The jsdom specs cover which controls exist and what they send, not how anything looks.
+
+### Phase gate
+
+1. **Test coverage.** Backend 1049 to 1167 (+118): `test_job_actions.py`, `test_booking.py`, `test_rescheduling.py`, `test_plan_edit_days.py`. Frontend 131 to 228 (+97): `datetime`, `errors`, `jobStatus`, `visitForm`, `VisitDialog`, `JobDetailPage`, `SchedulePage` specs. Cross-tenant tests for job create (customer, location, service, assignee), update, delete, and the plan `regenerate` action; role tests on each side of the line for create, update, delete and `available_actions` (owner, admin, dispatcher, cleaner, customer). Gaps: no test drives the customer autocomplete or any Vuetify menu (jsdom does not do them faithfully, the two picks are made through the handlers); the 250ms customer-search debounce and its stale-response guard have no spec; `removeNote` and the rest of `JobDetailPage` remain as untested as before; no test covers `_rekey_kept_jobs` for a rule that fires more than once a day; nothing was run in a browser.
+2. **DRY.** Date and time conversion is only in `lib/datetime.ts`; money only through `lib/money.ts`; one dialog serves create and edit; `JobSerializer._caller` replaced a block that `available_actions` would have duplicated from `next_statuses`. The spec files repeat a small jsdom setup (ResizeObserver and visualViewport stubs, a session patch) three times; left, pending a shared test helper.
+3. **Modularity.** Pages reach the backend through `src/api/endpoints.ts` only. The rules are in `scheduling/services.py`; the view and serializer call them. `JobSerializer.create` assigns through `services.assign_user`.
+4. **Orthogonality.** No new cross-app import. New couplings, noted in code: `FIELD_FOR` in `ui/src/lib/visitForm.ts` maps the API's field names (and the pricing 400's `square_feet`) to form inputs; `JobAction` in `ui/src/api/types.ts` mirrors `JOB_ACTIONS` in `scheduling/services.py`; `zonedInstant` resolves a skipped or repeated wall-clock time the way `expand_occurrences` does (`fold=0`), and the two must keep agreeing.
+5. **Security.** No new model, endpoint, task or `AllowAny`. `organization` is still stamped from the tenant, tested with a forged payload. `assignees` resolves user ids outside the tenant scope by necessity (`CustomUser` is not a `TenantModel`) and is admitted only through `assert_can_be_assigned`; an unknown id and another organization's cleaner get the same message. Update and delete are stricter than before, never looser. Edit and Delete are enforced server-side and only drawn from `available_actions`. No secrets, nothing logged, no access-code path touched. Settings, image and `deploy/` untouched, so no deploy audit or rehearsal was due. `/security-review` was NOT run as a skill; the diff was reviewed by hand against this list. Open finding, not fixed: a visit on a live invoice can be reopened and then edited or deleted (ADR-032, left open).
+6. **Branch and production guard.** All work is on `feat/visit-booking`, cut from 7843a71. Nothing committed to `main`, nothing pushed, merged or rebased, no `--no-verify`. No `fly`, staging or production access, and no `migrate` against the dev database. No migration was added.
