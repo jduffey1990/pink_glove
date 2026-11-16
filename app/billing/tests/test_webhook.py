@@ -26,18 +26,6 @@ pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("stripe_on")]
 URL = "/api/billing/stripe/webhook/"
 
 
-@pytest.fixture
-def enqueue():
-    with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-        yield delay
-
-
-@pytest.fixture
-def no_fee():
-    with mock.patch.object(connect, "fee_cents_for", return_value=None) as fee:
-        yield fee
-
-
 def post(client, body: bytes, header: str):
     return client.post(
         URL, data=body, content_type="application/json", HTTP_STRIPE_SIGNATURE=header

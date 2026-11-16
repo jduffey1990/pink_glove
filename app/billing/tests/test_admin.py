@@ -11,8 +11,6 @@ The admin itself admits only a session that has cleared the second factor
 open a way round that.
 """
 
-from unittest import mock
-
 import pytest
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.contrib.auth.models import Permission
@@ -32,18 +30,6 @@ from scheduling.tests.factories import OrganizationFactory, UserFactory
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("stripe_on")]
 
 CHANGELIST = reverse("admin:billing_stripeevent_changelist")
-
-
-@pytest.fixture
-def enqueue():
-    with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-        yield delay
-
-
-@pytest.fixture
-def no_fee():
-    with mock.patch("billing.connect.fee_cents_for", return_value=None) as fee:
-        yield fee
 
 
 def cleared(client, user):
