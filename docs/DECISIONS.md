@@ -1116,5 +1116,71 @@ A test pins it so it stays a decision.
 - **There is no double-booking rule.**
   The same cleaner can be put on overlapping visits by create, assign or a move, and nothing warns.
   Tests pin that too.
-- **A visit on a live invoice can still be reopened**, and a reopened visit can be edited or deleted.
-  Closing that needs `scheduling` to ask `billing` a question, and the dependency runs the other way by design.
+- **A visit on a live invoice could still be reopened**, and a reopened visit edited or deleted.
+  Closing that needed `scheduling` to ask `billing` a question, and the dependency runs the other way by design.
+  Closed by ADR-033.
+
+---
+
+## ADR-033: An app that depends on scheduling holds a visit by registering a check, not by being imported
+
+**Decided (2026-11-16).**
+A visit that a live invoice line points at is not reopened, edited or deleted.
+The rule is billing's.
+The status action, the update and the delete are scheduling's, and `scheduling` may not import `billing`: the dependency runs one way, and CLAUDE.md names the cycle as the thing to avoid.
+
+**The mechanism.**
+`scheduling.services.register_job_claim_check(check)` takes a function from a batch of jobs to `{job id: sentence}` for the ones the caller has a claim on.
+`BillingConfig.ready()` registers `billing.services.visit_claims`.
+Scheduling asks whoever has registered and never learns who they are:
+
+- `next_statuses` offers a claimed finished visit nothing, and `transition_job` refuses the reopen with a 409 whose `detail` is the claimant's sentence and whose `allowed` list is empty;
+- `edit_refusal` and `delete_refusal` return the claim first, so `available_actions` and the 409s from PATCH and DELETE agree (ADR-032);
+- the job list asks once for the page, through `JobListSerializer`, never once per row, and the ordinary forward moves do not ask at all.
+
+With nothing registered, nothing is ever claimed, and a test pins that scheduling then behaves exactly as it did before the hook.
+Another test fails if any module under `scheduling/` imports `billing`.
+
+**Why.**
+Reproduced through the API before the change: issue an invoice over a complete visit, reopen it through the status action, delete it.
+Each step answered 2xx and the invoice was left billing a visit that no longer existed.
+
+**What counts as a claim** is `billing.services.live_lines()` and nothing looser.
+A removed line, a deleted draft and a voided invoice all let the visit go, because voiding is how a mistaken invoice gives its visits back.
+The line's organization must be the job's own, stated in the check as well as in `TenantModel.save()`.
+
+**A draft holds a visit too.**
+A draft is not a sent document, so this was a real choice.
+But nothing at issue checks that a draft's visits are still finished: reproduced, a visit reopened while on a draft was issued as INV-0001 with the visit `scheduled`, billing work nobody had done.
+The reopened visit also stayed off the ready-to-invoice list once it was completed again, because the draft's line still claimed it.
+The remedy for the dispatcher is one click (remove the line, or delete the draft), so the draft refuses, and says "take it off the draft first" where an issued invoice says "void the invoice first".
+
+**Rejected -- `scheduling` importing `billing`, even lazily inside a function.**
+It works on the day it is written.
+It closes the cycle that keeps scheduling testable and deployable without billing, and a lazy import hides that from everything except the test this ADR adds.
+
+**Rejected -- reading the reverse relation (`job.invoice_lines`) from scheduling.**
+No import, same coupling: scheduling would restate "not soft-deleted, invoice not soft-deleted, invoice not void", which is `live_lines()` and is billing's to change.
+
+**Rejected -- a stored marker on the job (`is_billed`, or an invoice id).**
+It is a second copy of a fact billing already derives, and every billing path would have to keep it right: draft, add a line, remove a line, delete a draft, void.
+ADR-025 refuses to store "paid" for exactly that reason.
+A marker that goes stale either locks a free visit or frees a billed one, and neither fails loudly.
+
+**Rejected -- a Django signal (`pre_save` on `Job`, or a custom "about to reopen" signal).**
+A signal can veto by raising, but it cannot answer a question: `next_statuses` and `available_actions` have to *publish* whether a reopen will be accepted, for a page of jobs at once, before anyone tries it.
+A signal fires per instance at write time, which gives a refusal with no way to stop offering the button, and one query per row if it were bent into answering.
+`pre_save` also fires for every save of a job, including the ones that are fine.
+
+**Rejected -- refusing in billing's own endpoints instead.**
+Billing has no endpoint in the path: the reopen is a scheduling request from start to finish.
+
+**Accepted cost:** load order matters.
+The check is registered in `ready()`, so code that runs scheduling without Django's app registry populated (there is none today) would see no claims.
+And the registry is process-global state, which tests must patch rather than append to; `test_claim_guard.py` shows the pattern.
+
+**Other paths to a billed visit, checked and left alone.**
+Clock-in and assign already answer 409 on any finished visit.
+Clock-out of an entry that was left open, unassign, a dispatcher's time-entry correction and a new job note all still succeed on a billed visit.
+None changes what the invoice bills (the line amount is a snapshot, ADR-026), so none is this bug.
+The Django admin edits a job directly and passes through none of this, as it passes through none of the state machine.
