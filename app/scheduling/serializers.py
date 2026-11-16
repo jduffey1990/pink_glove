@@ -12,15 +12,19 @@ What is never nested is the access codes. Those come only from the audited
 reveal action (ADR-016).
 """
 
+import datetime as dt
+
 from django.db import models, transaction
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from base.serializers import DateRangeQuerySerializer
 from base.viewsets import TenantModelSerializer
 from catalog.models import Service
 from customers.models import ServiceLocation
 from customers.serializers import CustomerSummarySerializer
 from scheduling.enums import REASON_REQUIRED_STATUSES, JobStatus
+from scheduling.filters import MAX_RANGE_DAYS
 from scheduling.models import (
     Job,
     JobAssignment,
@@ -521,3 +525,52 @@ class MaterializeResponseSerializer(serializers.Serializer):
 class RegenerateResponseSerializer(serializers.Serializer):
     regenerated = serializers.IntegerField()
     kept = serializers.IntegerField()
+
+
+# --- Reports ---------------------------------------------------------------
+# Shapes for `scheduling.reports`. Plain serializers over plain dicts: a report
+# is computed, not stored, and these exist so the frontend reads generated
+# types rather than guessing (ADR-019).
+
+
+class TimesheetQuerySerializer(DateRangeQuerySerializer):
+    #: The cap the schedule itself uses. A pay period is a week, a fortnight
+    #: or a month; two months leaves room for one that straddles.
+    max_days = MAX_RANGE_DAYS
+
+
+class TimesheetEntrySerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    job = serializers.UUIDField()
+    customer_name = serializers.CharField()
+    local_date = serializers.DateField(
+        help_text=(
+            "The organization-local day this entry is filed under: the day of "
+            "its clock-in, however late it ran (ADR-030)."
+        )
+    )
+    clock_in = serializers.DateTimeField(default_timezone=dt.UTC)
+    clock_out = serializers.DateTimeField(default_timezone=dt.UTC, allow_null=True)
+    seconds = serializers.IntegerField(
+        allow_null=True, help_text="Elapsed seconds. Null while the entry is open, never zero."
+    )
+    is_open = serializers.BooleanField()
+
+
+class TimesheetStaffSerializer(serializers.Serializer):
+    user = serializers.UUIDField()
+    name = serializers.CharField()
+    total_seconds = serializers.IntegerField(help_text="Closed entries only.")
+    entry_count = serializers.IntegerField(help_text="Every entry listed, open ones included.")
+    open_entry_count = serializers.IntegerField()
+    entries = TimesheetEntrySerializer(many=True)
+
+
+class TimesheetSerializer(serializers.Serializer):
+    date_from = serializers.DateField()
+    date_to = serializers.DateField()
+    timezone = serializers.CharField(help_text="The zone the period's days were reckoned in.")
+    total_seconds = serializers.IntegerField(help_text="Closed entries only.")
+    entry_count = serializers.IntegerField()
+    open_entry_count = serializers.IntegerField()
+    staff = TimesheetStaffSerializer(many=True)

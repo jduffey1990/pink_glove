@@ -1361,6 +1361,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scheduling/reports/timesheet/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hours worked per staff member in a period
+         * @description An entry is filed under the organization-local day it was clocked in on, whole, however late it ran. An entry still open is listed and flagged and adds nothing to a total.
+         */
+        get: operations["scheduling_reports_timesheet_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scheduling/reports/timesheet/csv/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The timesheet as CSV
+         * @description One row per entry. `seconds` is exact; `hours_decimal` is the same figure in hours, rounded half up to two places. Text cells that a spreadsheet would run as a formula are prefixed with an apostrophe.
+         */
+        get: operations["scheduling_reports_timesheet_csv_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scheduling/time-entries/": {
         parameters: {
             query?: never;
@@ -3323,6 +3363,49 @@ export interface components {
             readonly duration_minutes: number | null;
             /** Format: date-time */
             readonly created_at: string;
+        };
+        Timesheet: {
+            /** Format: date */
+            date_from: string;
+            /** Format: date */
+            date_to: string;
+            /** @description The zone the period's days were reckoned in. */
+            timezone: string;
+            /** @description Closed entries only. */
+            total_seconds: number;
+            entry_count: number;
+            open_entry_count: number;
+            staff: components["schemas"]["TimesheetStaff"][];
+        };
+        TimesheetEntry: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            job: string;
+            customer_name: string;
+            /**
+             * Format: date
+             * @description The organization-local day this entry is filed under: the day of its clock-in, however late it ran (ADR-030).
+             */
+            local_date: string;
+            /** Format: date-time */
+            clock_in: string;
+            /** Format: date-time */
+            clock_out: string | null;
+            /** @description Elapsed seconds. Null while the entry is open, never zero. */
+            seconds: number | null;
+            is_open: boolean;
+        };
+        TimesheetStaff: {
+            /** Format: uuid */
+            user: string;
+            name: string;
+            /** @description Closed entries only. */
+            total_seconds: number;
+            /** @description Every entry listed, open ones included. */
+            entry_count: number;
+            open_entry_count: number;
+            entries: components["schemas"]["TimesheetEntry"][];
         };
         /** @description Somewhere to send the browser: Stripe onboarding, or Checkout. */
         Url: {
@@ -5980,6 +6063,86 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegenerateResponse"];
+                };
+            };
+        };
+    };
+    scheduling_reports_timesheet_retrieve: {
+        parameters: {
+            query: {
+                /** @description First day of the period, as the organization reckons days. Inclusive. */
+                date_from: string;
+                /** @description Last day of the period, as the organization reckons days. Inclusive. */
+                date_to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Timesheet"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    scheduling_reports_timesheet_csv_retrieve: {
+        parameters: {
+            query: {
+                /** @description First day of the period, as the organization reckons days. Inclusive. */
+                date_from: string;
+                /** @description Last day of the period, as the organization reckons days. Inclusive. */
+                date_to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
                 };
             };
         };

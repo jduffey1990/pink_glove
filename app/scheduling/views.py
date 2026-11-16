@@ -14,20 +14,24 @@ import datetime as dt
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
 from app.exceptions import ConflictError
-from base.permissions import IsDispatcherOrHigher, IsOrgMember, IsStaff
+from base.exports import AnyAcceptNegotiation, csv_response
+from base.permissions import IsAdminOrHigher, IsDispatcherOrHigher, IsOrgMember, IsStaff
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
 from scheduling.filters import JobFilterSet, TimeEntryFilterSet
 from scheduling.models import Job, JobNote, JobPhoto, RecurringPlan, TimeEntry, assigned_to
 from scheduling.permissions import IsAssignedCleaner
+from scheduling.reports import TIMESHEET_CSV_HEADER, timesheet, timesheet_csv_rows
 from scheduling.serializers import (
     AssignSerializer,
     CustomerJobSerializer,
@@ -40,6 +44,8 @@ from scheduling.serializers import (
     RegenerateResponseSerializer,
     StatusChangeSerializer,
     TimeEntrySerializer,
+    TimesheetQuerySerializer,
+    TimesheetSerializer,
 )
 from scheduling.services import (
     assign_user,
@@ -510,3 +516,66 @@ class JobNoteViewSet(JobRelatedViewSet):
 class JobPhotoViewSet(JobRelatedViewSet):
     queryset = JobPhoto.objects.select_related("job", "user", "organization")
     serializer_class = JobPhotoSerializer
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+# Owner and admin only. What a person was paid for is payroll, and a
+# dispatcher runs the board without it. The organization comes from the
+# resolved tenant like everywhere else; `scheduling.reports` takes it as an
+# argument and reads nothing from the request.
+
+
+def _timesheet_for(request) -> dict:
+    query = TimesheetQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    return timesheet(request.organization, **query.validated_data)
+
+
+class TimesheetReportView(APIView):
+    """Hours worked per staff member over a period of organization-local days."""
+
+    permission_classes = [IsAdminOrHigher]
+
+    @extend_schema(
+        parameters=[TimesheetQuerySerializer],
+        responses={200: TimesheetSerializer, 400: DetailSerializer, 403: DetailSerializer},
+        summary="Hours worked per staff member in a period",
+        description=(
+            "An entry is filed under the organization-local day it was clocked in "
+            "on, whole, however late it ran. An entry still open is listed and "
+            "flagged and adds nothing to a total."
+        ),
+    )
+    def get(self, request):
+        return Response(TimesheetSerializer(_timesheet_for(request)).data)
+
+
+class TimesheetCSVView(APIView):
+    """The same timesheet as a file, one row per entry."""
+
+    permission_classes = [IsAdminOrHigher]
+    content_negotiation_class = AnyAcceptNegotiation
+
+    @extend_schema(
+        parameters=[TimesheetQuerySerializer],
+        responses={
+            (200, "text/csv"): OpenApiTypes.STR,
+            400: DetailSerializer,
+            403: DetailSerializer,
+        },
+        summary="The timesheet as CSV",
+        description=(
+            "One row per entry. `seconds` is exact; `hours_decimal` is the same "
+            "figure in hours, rounded half up to two places. Text cells that a "
+            "spreadsheet would run as a formula are prefixed with an apostrophe."
+        ),
+    )
+    def get(self, request):
+        report = _timesheet_for(request)
+        return csv_response(
+            f"timesheet_{report['date_from']}_{report['date_to']}.csv",
+            TIMESHEET_CSV_HEADER,
+            timesheet_csv_rows(report, request.organization.tz),
+        )

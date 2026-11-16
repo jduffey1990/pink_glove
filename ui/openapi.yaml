@@ -3322,6 +3322,96 @@ paths:
               schema:
                 $ref: '#/components/schemas/RegenerateResponse'
           description: ''
+  /api/scheduling/reports/timesheet/:
+    get:
+      operationId: scheduling_reports_timesheet_retrieve
+      description: An entry is filed under the organization-local day it was clocked
+        in on, whole, however late it ran. An entry still open is listed and flagged
+        and adds nothing to a total.
+      summary: Hours worked per staff member in a period
+      parameters:
+      - in: query
+        name: date_from
+        schema:
+          type: string
+          format: date
+        description: First day of the period, as the organization reckons days. Inclusive.
+        required: true
+      - in: query
+        name: date_to
+        schema:
+          type: string
+          format: date
+        description: Last day of the period, as the organization reckons days. Inclusive.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Timesheet'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/scheduling/reports/timesheet/csv/:
+    get:
+      operationId: scheduling_reports_timesheet_csv_retrieve
+      description: One row per entry. `seconds` is exact; `hours_decimal` is the same
+        figure in hours, rounded half up to two places. Text cells that a spreadsheet
+        would run as a formula are prefixed with an apostrophe.
+      summary: The timesheet as CSV
+      parameters:
+      - in: query
+        name: date_from
+        schema:
+          type: string
+          format: date
+        description: First day of the period, as the organization reckons days. Inclusive.
+        required: true
+      - in: query
+        name: date_to
+        schema:
+          type: string
+          format: date
+        description: Last day of the period, as the organization reckons days. Inclusive.
+        required: true
+      tags:
+      - scheduling
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
   /api/scheduling/time-entries/:
     get:
       operationId: scheduling_time_entries_list
@@ -7184,6 +7274,102 @@ components:
       - job
       - user
       - user_name
+    Timesheet:
+      type: object
+      properties:
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        timezone:
+          type: string
+          description: The zone the period's days were reckoned in.
+        total_seconds:
+          type: integer
+          description: Closed entries only.
+        entry_count:
+          type: integer
+        open_entry_count:
+          type: integer
+        staff:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimesheetStaff'
+      required:
+      - date_from
+      - date_to
+      - entry_count
+      - open_entry_count
+      - staff
+      - timezone
+      - total_seconds
+    TimesheetEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        job:
+          type: string
+          format: uuid
+        customer_name:
+          type: string
+        local_date:
+          type: string
+          format: date
+          description: 'The organization-local day this entry is filed under: the
+            day of its clock-in, however late it ran (ADR-030).'
+        clock_in:
+          type: string
+          format: date-time
+        clock_out:
+          type: string
+          format: date-time
+          nullable: true
+        seconds:
+          type: integer
+          nullable: true
+          description: Elapsed seconds. Null while the entry is open, never zero.
+        is_open:
+          type: boolean
+      required:
+      - clock_in
+      - clock_out
+      - customer_name
+      - id
+      - is_open
+      - job
+      - local_date
+      - seconds
+    TimesheetStaff:
+      type: object
+      properties:
+        user:
+          type: string
+          format: uuid
+        name:
+          type: string
+        total_seconds:
+          type: integer
+          description: Closed entries only.
+        entry_count:
+          type: integer
+          description: Every entry listed, open ones included.
+        open_entry_count:
+          type: integer
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimesheetEntry'
+      required:
+      - entries
+      - entry_count
+      - name
+      - open_entry_count
+      - total_seconds
+      - user
     Url:
       type: object
       description: 'Somewhere to send the browser: Stripe onboarding, or Checkout.'
