@@ -13,11 +13,12 @@
 # backend with a sender and a password that are only checked for being there;
 # nothing is sent.
 #
-# STRIPE_SECRET_KEY is set EMPTY for another reason: python-decouple fills
-# anything the environment leaves out from app/.env, so a developer's Stripe
-# key (with no Connect webhook secret beside it) failed the audit on their
-# machine while CI, which has no .env, passed. Empty here means the optional
-# integration is off, whatever the .env says.
+# STRIPE_SECRET_KEY and SENTRY_DSN are set EMPTY for the other reason: python-
+# decouple fills anything the environment leaves out from app/.env, so a
+# developer's Stripe key (with no Connect webhook secret beside it) failed the
+# audit on their machine while CI, which has no .env, passed. Empty here means
+# the optional integrations are off, whatever the .env says, and an audit run
+# can never start error reporting.
 #
 # The Dockerfile's collectstatic layer and deploy/docker-compose.rehearsal.yml
 # import production settings too and carry their own copies of this list.
@@ -36,6 +37,7 @@ DEFAULT_FROM_EMAIL=audit-only@pink-glove.invalid \
 EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend \
 EMAIL_HOST_PASSWORD=audit-only-not-a-key \
 STRIPE_SECRET_KEY= \
+SENTRY_DSN= \
 MEDIA_BACKEND=s3 \
 MEDIA_BUCKET=audit-only \
 UI_DIST_DIR= \
