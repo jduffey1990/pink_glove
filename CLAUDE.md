@@ -238,8 +238,13 @@ trusted-device session is refused on purpose.
 New work happens on a branch, never directly on `main`. Cut one per phase or
 per coherent piece of work (`phase-4-billing`, `fix-reveal-buffer`), commit
 there, and leave merging into `main` to Jordan. Agents never commit on, merge
-into, or push to `main`, and never force-push anything. Push a branch only
-when Jordan asks.
+into, or push to `main`, and never force-push anything. Agents never push at
+all: this repo is gated by no-mistakes (`.no-mistakes.yaml`), and Jordan
+pushes a finished branch to the `no-mistakes` remote himself. The gate reviews,
+runs the backend suite and ruff, forwards the branch to `origin`, and opens the
+PR with its Risk Assessment and Testing sections; the frontend checks and the
+schema contract run in CI, which the gate waits on. The config is honored only
+from the copy on `main`.
 
 The deploy target is Fly.io (ADR-027, `docs/DEPLOY.md`); staging and
 production are stood up by Jordan, and both are Jordan's alone: agents do not
