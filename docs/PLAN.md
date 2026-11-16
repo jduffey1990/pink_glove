@@ -2662,3 +2662,102 @@ Staging exists and was not touched: no `fly` command was run, no secret
 set; the platform price and secret are not set there, so staging runs
 this branch with the subscription off until Jordan follows
 `docs/DEPLOY.md` step 10.
+
+---
+
+## Customer import as built
+
+Branch `feat/customer-import`, 2026-11-16, ahead of the work trial.
+The decisions and what was rejected are ADR-031; this is what exists.
+
+**The column set is a best guess.**
+No real export from the business was available when this was written.
+The header-to-field table is `app/customers/import_columns.py` and it is the only place a header is named, so the first real file is expected to change that table and nothing else.
+The template, the required-column check and the unknown-column report are all built from it.
+
+**Backend.**
+`POST /api/customers/customers/import/`: multipart, a `file` and a `dry_run` that defaults to true, owner and admin only.
+`GET /api/customers/customers/import-template/`: the template CSV as text, each column with whether it is required and a hint, and the limits, as JSON.
+`customers/services.py` reads the file, plans every row, and writes the plan only for a real import with no error row.
+Rows are validated by `CustomerSerializer` and `ImportedLocationSerializer` (a `ServiceLocationSerializer` whose `customer` is supplied by the importer); required columns are read off those serializers.
+A real import plans and writes in one transaction behind a lock on the organization's row.
+No migration: no model changed.
+
+**Columns.**
+Customer: `first_name`, `last_name`, `company_name`, `email`, `phone`, `preferred_contact_method`, `status`, `source`, `customer_notes`, `billing_line1`, `billing_line2`, `billing_city`, `billing_state`, `billing_postal_code`.
+Location: `location_label`, `address_line1`, `address_line2`, `city`, `state`, `postal_code`, `square_feet`, `bedrooms`, `bathrooms`, `parking_notes`, `access_notes`, `gate_code`, `alarm_code`, `key_location`, `has_pets`, `pet_notes`.
+Required: `address_line1`, `city`, `state`, `postal_code`, and at least one of the three name columns per row.
+Headers match without case, with spaces and hyphens read as underscores.
+
+**Matching.**
+One key per customer: the email without case, or with no email the whole name plus the phone's digits.
+A customer on file is never edited; they gain a location only at an address (line 1, line 2, postal code) they do not already have.
+A row that matches two stored customers is an error.
+Importing the same file twice adds nothing.
+
+**Limits.**
+1 MB and 2000 rows, UTF-8 with or without a byte order mark.
+Measured once on a laptop at 2000 rows with access codes: 2.8 s to preview, 6.2 s to import, 2.7 s to re-import, a 330 KB response.
+The worker timeout is 60 s.
+
+**Frontend.**
+An Import button on the Customers page for owner and admin opens `components/CustomerImportDialog.vue`: choose a file, preview, confirm, result, and the list reloads.
+The file is uploaded, never parsed in the browser.
+The flow is `useCustomerImport` in `lib/customerImport.ts`; the template is saved by `lib/download.ts` from the text the API returns, because a plain link could not carry `X-Organization`.
+
+**Not looked at in a browser.**
+Nothing in this section was seen in a running browser: not the Import button, not the dialog, not the download, not 390px.
+The dialog has a mounted spec that proves the markup is wired to the flow and shows the server's wording; it says nothing about layout.
+
+Backend 1049 → 1140. Frontend 131 → 180.
+
+### Phase gate
+
+**1. Test coverage.**
+`customers/tests/test_import.py`, 91 tests: each role on each side of the line for both endpoints (owner and admin in; dispatcher, cleaner, customer and anonymous out, for a dry run as well as a real import), a deactivated organization, the dry-run default with row counts before and after, all-or-nothing including a failure half way through the write, matching, re-import, the tenant boundary (an import in A creates nothing in B, matching never sees B, a forged `organization` in the form or as a column is inert), access codes absent from the response and the captured logs and present through the model, the raw column and the audited reveal, the file hygiene cases, the template (which must import as it stands), and two identical runs compared byte for byte.
+Each safeguard was broken on purpose once to confirm a test goes red: the dry-run default, the transaction, the tenant filter in matching, writing on a dry run, writing despite an error row, logging a row, echoing a code, reading `organization` from the form.
+Frontend: `lib/customerImport.spec.ts` (the flow and the arranging), `lib/download.spec.ts`, `api/endpoints.spec.ts` (what `dry_run` puts on the wire), `components/CustomerImportDialog.spec.ts` (mounted).
+*Gaps left open:*
+no browser has seen any of the UI, at any width;
+`CustomersPage.vue` has no spec, like every page, so the role gate on the Import button and the reload after an import are untested;
+the organization row lock is untested, because two imports at once need two connections and the suite runs each test in one transaction;
+the 2000-row timing was measured by hand and is not asserted;
+a superuser importing is untested;
+the real multipart request from a browser was never sent to a running API (the spec pins the form, the backend tests use DRF's encoder);
+a file of exactly 1 MB is untested (over it is).
+
+**2. DRY.**
+Validation is the create path's serializers and nothing else: "required" and the column hints are read off them, and a test compares an import error with the serializer's own message.
+The header table is one tuple; the test file imports it rather than restating it.
+The customer and address shown for a row come from the models' `display_name` and `one_line_address`.
+The upload size cap reuses `base.validators.MaxFileSize`.
+The UI's failure message goes through `api/errors.errorDetail`.
+*Accepted:* the three group headings in the dialog ("Needs fixing", "Will be imported", "Already on file") are the UI's own words beside the enum's labels; every sentence about a row and every error is the server's.
+
+**3. Modularity.**
+The view parses the upload form and returns the result; everything else is `customers/services.py`.
+The page reaches the API through `api/endpoints.ts` only, and the dialog's logic is in `lib/`.
+`customers/services.py` imports `organizations.models` for the row lock; `organizations` imports nothing from `customers`, so the dependency runs one way.
+
+**4. Orthogonality.**
+Couplings this adds, for `CLAUDE.md`:
+`ENUM_NAME_OVERRIDES` gains `CustomerImportActionEnum`, which would otherwise generate as `ActionEnum`;
+`lib/customerImport.ts` groups rows by the `ImportAction` values, so a new action touches the enum, the schema and `groupRows`;
+the Import button on `CustomersPage.vue` is one more mirror of the admin tier (`session.isAdminOrHigher`);
+a spec that mounts a Vuetify component needs `server.deps.inline: ['vuetify']` in `vite.config.mts` and stand-ins for `visualViewport` and `ResizeObserver`.
+A change to a serializer rule needs no edit here, which a test asserts.
+
+**5. Security.**
+Both actions state `IsAdminOrHigher`; nothing is `AllowAny`.
+`organization` comes from `get_organization()` and is stamped in `_write` (invariant 2); no model was added (invariant 1) and no task (invariant 3).
+No column maps to `user`, `organization` or `customer`, and a test pins that.
+Access codes go from the cell to the serializer to the encrypted field; a row's outcome has no field for one, the log line is counts, and an existing location's codes are never overwritten.
+`/security-review` on the branch diff: no finding at high or medium.
+It did turn up one correctness bug, fixed: an error on a field with no column was dropped, so the row previewed as importable and the real import answered 500 (nothing was written).
+*Accepted (the first two are in ADR-031):* a file with shifted columns can have a misplaced cell shown back to the person who uploaded it; a cell starting with `=` is stored as text and would be a formula to a future unguarded CSV export; the import holds the organization's row lock for its duration, which blocks that one tenant's settings writes for a few seconds.
+No error tracker that captures local variables is configured; if one is added, `customers/services.py` holds plaintext codes in locals while it runs and needs scrubbing there.
+The deploy audit and rehearsal were not run: no setting that production reads, no image or `deploy/` file changed (the one settings edit is a schema enum name).
+
+**6. Branch and production guard.**
+All of it is on `feat/customer-import`, cut from `7843a71`.
+Nothing was committed to `main`, nothing was pushed, merged or rebased, no `fly` command was run, and no migration was made or applied.

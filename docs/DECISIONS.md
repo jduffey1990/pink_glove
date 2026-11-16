@@ -957,5 +957,8 @@ Two different people with the same name, no email and the same phone (or no phon
 A customer whose email in the file differs from the one on file is a new customer.
 An address written two ways ("1 Elm St", "1 Elm Street") is two locations.
 A blank cell means "not given", so the field's own default applies: an imported customer with no `status` cell is a `lead`, exactly as one created through the API with no status is.
-A validation message for a choice column quotes the cell it refused, so a file whose columns are shifted can have a cell from the wrong column quoted back to the person who uploaded it; the three access-code columns themselves are never quoted.
+A row's outcome shows its name and address cells, and a validation message for a choice column quotes the cell it refused.
+So a file whose columns are shifted can have a cell that was meant to be a code shown back, once, to the person who uploaded it: the server cannot tell a code from an address when it arrives under the wrong header.
+Cells under the three access-code headers themselves are never shown, and nothing from any row is logged.
+A cell that starts with `=`, `+`, `-` or `@` is stored as the text it is, which is harmless in this app (Vue escapes it) and is a spreadsheet formula to any future CSV export that writes it back out unguarded.
 The file on the importer's own laptop is outside this system: ADR-014 protects the database, not a spreadsheet of codes in a downloads folder.
