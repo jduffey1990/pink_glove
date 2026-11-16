@@ -13,7 +13,7 @@ from django.core.management.base import CommandError
 from catalog.models import Service
 from customers.models import Customer, ServiceLocation
 from organizations.models import Organization
-from scheduling.models import Job, JobAssignment, RecurringPlan
+from scheduling.models import Job, JobAssignment, RecurringPlan, TimeEntry
 from users.enums import Role
 from users.models import CustomUser, Membership
 
@@ -121,6 +121,27 @@ class TestSeededSchedule:
             assert job.location.organization_id == job.organization_id
             assert job.service.organization_id == job.organization_id
 
+    def test_the_finished_crewed_visits_have_hours_on_them(self, seeded):
+        """
+        Without these the timesheet report opens empty on a seeded database,
+        which reads as a report that does not work.
+        """
+        from scheduling.enums import JobStatus
+
+        for organization in Organization.objects.all():
+            cleaner = CustomUser.objects.get(email=f"cleaner@{organization.slug}.test")
+            entries = TimeEntry.objects.filter(organization=organization)
+            crewed_and_done = Job.objects.filter(
+                organization=organization, status=JobStatus.COMPLETE, assignments__user=cleaner
+            )
+
+            assert entries.count() == crewed_and_done.count() >= 2
+            for entry in entries.select_related("job"):
+                assert entry.user_id == cleaner.pk
+                assert entry.job.organization_id == organization.pk
+                assert entry.job.scheduled_start < entry.clock_in < entry.clock_out
+                assert entry.clock_out < entry.job.scheduled_end
+
 
 @pytest.mark.django_db
 class TestSeedGuards:
@@ -132,11 +153,25 @@ class TestSeedGuards:
 
     def test_force_makes_it_idempotent_rather_than_duplicating(self, seeded, settings):
         settings.DEBUG = True
-        before = (Organization.objects.count(), Job.objects.count())
+        before = (Organization.objects.count(), Job.objects.count(), TimeEntry.objects.count())
 
         call_command("seed_demo", "--force", verbosity=0)
 
-        assert (Organization.objects.count(), Job.objects.count()) == before
+        after = (Organization.objects.count(), Job.objects.count(), TimeEntry.objects.count())
+        assert after == before
+
+    def test_force_gives_an_older_seed_its_hours(self, seeded, settings):
+        """
+        A database seeded before the seed recorded time has finished visits
+        and no entries. Running again fills them in, and adds nothing else.
+        """
+        settings.DEBUG = True
+        recorded = TimeEntry.objects.count()
+        TimeEntry.all_objects.all().hard_delete()
+
+        call_command("seed_demo", "--force", verbosity=0)
+
+        assert TimeEntry.objects.count() == recorded > 0
 
     def test_it_refuses_to_run_with_debug_off(self, db, settings):
         settings.DEBUG = False
@@ -263,3 +298,57 @@ class TestSeededSubscription:
             assert organization.stripe_customer_id == ""
             assert organization.stripe_subscription_id == ""
             assert organization.subscription_status == ""
+
+
+@pytest.mark.django_db
+class TestSeededReports:
+    """
+    The reports are the first thing an owner opens, and the seed is what
+    they are first opened against. Each one has to have something in it, and
+    the two tenants have to disagree, or the demo proves nothing about either.
+    """
+
+    def _reports(self, organization):
+        import datetime as dt
+
+        from django.urls import reverse
+        from rest_framework.test import APIClient
+
+        client = APIClient()
+        client.force_login(CustomUser.objects.get(email=f"owner@{organization.slug}.test"))
+
+        today = organization.today()
+        recent = {
+            "date_from": (today - dt.timedelta(days=45)).isoformat(),
+            "date_to": today.isoformat(),
+        }
+        responses = {
+            "timesheet": client.get(reverse("scheduling:report-timesheet"), recent),
+            "receivables": client.get(reverse("billing:report-receivables")),
+            "collections": client.get(reverse("billing:report-collections"), recent),
+        }
+        assert {name: r.status_code for name, r in responses.items()} == dict.fromkeys(
+            responses, 200
+        )
+        return {name: response.json() for name, response in responses.items()}
+
+    def test_every_report_has_something_in_it(self, seeded):
+        for organization in Organization.objects.all():
+            reports = self._reports(organization)
+
+            assert reports["timesheet"]["total_seconds"] > 0
+            assert reports["timesheet"]["staff"][0]["name"].startswith("Cleaner")
+            assert reports["receivables"]["totals"]["total_cents"] > 0
+            assert reports["collections"]["totals"]["payment_count"] >= 2
+            assert reports["collections"]["totals"]["tip_cents"] > 0
+
+    def test_each_timesheet_names_its_own_cleaner_and_nobody_elses(self, seeded):
+        """
+        The staff are what tells the two seeded reports apart. The money does
+        not: every seeded invoice is one untaxed Standard Clean, so both
+        tenants are owed the same amount whatever their tax settings say.
+        """
+        for organization in Organization.objects.all():
+            names = [person["name"] for person in self._reports(organization)["timesheet"]["staff"]]
+
+            assert names == [f"Cleaner {organization.name.split()[0]}"]

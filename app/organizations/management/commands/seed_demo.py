@@ -23,7 +23,7 @@ from customers.models import Customer, ServiceLocation
 from organizations.enums import NoAccessFeeType
 from organizations.models import Organization
 from scheduling.enums import JobStatus
-from scheduling.models import Job, RecurringPlan
+from scheduling.models import Job, RecurringPlan, TimeEntry
 from scheduling.services import materialize_plan, transition_job
 from scheduling.tasks import materialize_organization
 from users.enums import Role
@@ -168,6 +168,7 @@ class Command(BaseCommand):
             self.stdout.write(f"  materialized {created} jobs")
 
             self._close_the_past(organization, actor=users[Role.OWNER])
+            self._record_time(organization)
             self._billing(organization, actor=users[Role.DISPATCHER])
 
         self.stdout.write("")
@@ -391,6 +392,46 @@ class Command(BaseCommand):
                 transition_job(job=job, to_status=JobStatus.COMPLETE, actor=actor)
 
         self.stdout.write(f"  closed {len(past)} past visits ({1} of them no-access)")
+
+    def _record_time(self, organization) -> None:
+        """
+        Put hours on the finished visits that had a crew.
+
+        Closing a visit through the state machine clocks nobody in, so a
+        seeded board had a fortnight of completed work and a timesheet with
+        nothing on it. Each assigned cleaner gets one entry per completed
+        visit: on site five minutes after the slot began, away ten minutes
+        before it ended, because a timesheet of exact two-hour blocks reads
+        as invented.
+
+        Written directly rather than through `clock_in`, which stamps the
+        present and refuses a finished job: this is history. Additive, and
+        its own pass rather than part of `_close_the_past`, so a database
+        seeded before this existed gains its hours on a `--force` run. A
+        visit that already has an entry for that person is left alone.
+        """
+        finished = Job.objects.filter(
+            organization=organization,
+            status=JobStatus.COMPLETE,
+            scheduled_end__lt=timezone.now(),
+        ).prefetch_related("assignments", "time_entries")
+
+        recorded = 0
+        for job in finished:
+            already = {entry.user_id for entry in job.time_entries.all()}
+            for assignment in job.assignments.all():
+                if assignment.user_id in already:
+                    continue
+                TimeEntry.objects.create(
+                    organization=organization,
+                    job=job,
+                    user_id=assignment.user_id,
+                    clock_in=job.scheduled_start + dt.timedelta(minutes=5),
+                    clock_out=job.scheduled_end - dt.timedelta(minutes=10),
+                )
+                recorded += 1
+
+        self.stdout.write(f"  recorded time on {recorded} finished visits")
 
     def _billing(self, organization, *, actor) -> None:
         """
