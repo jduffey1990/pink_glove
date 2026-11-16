@@ -12,6 +12,7 @@ What is never nested is the access codes. Those come only from the audited
 reveal action (ADR-016).
 """
 
+from django.db import transaction
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -160,6 +161,16 @@ class JobSerializer(TenantModelSerializer):
     is_terminal = serializers.BooleanField(read_only=True)
     next_statuses = serializers.SerializerMethodField()
     available_actions = serializers.SerializerMethodField()
+    assignees = serializers.ListField(
+        child=serializers.UUIDField(),
+        write_only=True,
+        required=False,
+        help_text=(
+            "User ids to put on a new job, so booking a visit with its crew is "
+            "one request that either wholly happens or does not. Create only: "
+            "the crew of an existing job changes through assign and unassign."
+        ),
+    )
 
     class Meta(TenantModelSerializer.Meta):
         model = Job
@@ -186,6 +197,7 @@ class JobSerializer(TenantModelSerializer):
             "notes",
             "cancellation_reason",
             "assignments",
+            "assignees",
             "open_time_entry",
             "created_at",
             "updated_at",
@@ -275,9 +287,57 @@ class JobSerializer(TenantModelSerializer):
 
         return attrs
 
+    def validate_assignees(self, value):
+        if self.instance is not None:
+            raise serializers.ValidationError(
+                "The crew of an existing job is changed with the assign and unassign actions."
+            )
+        # Order kept, repeats dropped: naming somebody twice is not an error.
+        return list(dict.fromkeys(value))
+
+    @transaction.atomic
     def create(self, validated_data):
+        assignee_ids = validated_data.pop("assignees", [])
         validated_data.setdefault("price_cents", self._quote(validated_data))
-        return super().create(validated_data)
+
+        job = super().create(validated_data)
+        self._assign(job, assignee_ids)
+        return job
+
+    def _assign(self, job, user_ids) -> None:
+        """
+        Put the chosen crew on a job that was just created.
+
+        Through `assign_user`, the one sanctioned way to create an assignment,
+        so the staff-of-this-organization check is not restated here. A refusal
+        raises out of `create`'s transaction and takes the job with it: a
+        visit is never left booked with half the crew that was asked for.
+        """
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        from scheduling.services import assign_user
+        from users.models import CustomUser
+
+        if not user_ids:
+            return
+
+        users = CustomUser.objects.in_bulk(user_ids)
+        assigned_by = getattr(self.context.get("request"), "user", None)
+
+        # A missing id is refused in the same words as somebody else's cleaner,
+        # so the answer does not say which accounts exist.
+        refused = serializers.ValidationError(
+            {"assignees": "One of those people is not active staff in this organization."}
+        )
+
+        for user_id in user_ids:
+            user = users.get(user_id)
+            if user is None:
+                raise refused
+            try:
+                assign_user(job=job, user=user, assigned_by=assigned_by)
+            except DjangoValidationError as exc:
+                raise refused from exc
 
     def _quote(self, validated_data) -> int:
         """
@@ -314,7 +374,7 @@ class CustomerJobSerializer(JobSerializer):
         fields = tuple(
             field
             for field in JobSerializer.Meta.fields
-            if field not in ("assignments", "notes", "open_time_entry")
+            if field not in ("assignments", "assignees", "notes", "open_time_entry")
         )
         read_only_fields = fields
 

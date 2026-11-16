@@ -4812,6 +4812,15 @@ components:
           minimum: 0
         notes:
           type: string
+        assignees:
+          type: array
+          items:
+            type: string
+            format: uuid
+          writeOnly: true
+          description: 'User ids to put on a new job, so booking a visit with its
+            crew is one request that either wholly happens or does not. Create only:
+            the crew of an existing job changes through assign and unassign.'
       required:
       - customer
       - location
@@ -5791,6 +5800,15 @@ components:
           minimum: 0
         notes:
           type: string
+        assignees:
+          type: array
+          items:
+            type: string
+            format: uuid
+          writeOnly: true
+          description: 'User ids to put on a new job, so booking a visit with its
+            crew is one request that either wholly happens or does not. Create only:
+            the crew of an existing job changes through assign and unassign.'
     PatchedOrganizationRequest:
       type: object
       description: |-

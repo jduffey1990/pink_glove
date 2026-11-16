@@ -2088,6 +2088,8 @@ export interface components {
             scheduled_end: string;
             price_cents?: number;
             notes?: string;
+            /** @description User ids to put on a new job, so booking a visit with its crew is one request that either wholly happens or does not. Create only: the crew of an existing job changes through assign and unassign. */
+            assignees?: string[];
         };
         /**
          * @description * `scheduled` - Scheduled
@@ -2627,6 +2629,8 @@ export interface components {
             scheduled_end?: string;
             price_cents?: number;
             notes?: string;
+            /** @description User ids to put on a new job, so booking a visit with its crew is one request that either wholly happens or does not. Create only: the crew of an existing job changes through assign and unassign. */
+            assignees?: string[];
         };
         /**
          * @description The organization as its own admins see it.
