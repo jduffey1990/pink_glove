@@ -38,6 +38,8 @@ _BASELINE = {
     "AWS_ACCESS_KEY_ID": "tid_test",
     "AWS_SECRET_ACCESS_KEY": "tsec_test",
     "NUM_PROXIES": "1",
+    "DEFAULT_FROM_EMAIL": "pink glove <billing@pink-glove.test>",
+    "EMAIL_HOST_PASSWORD": "SG.not-a-real-key",
 }
 
 
@@ -228,6 +230,71 @@ class TestEmail:
         production = load(unset=("EMAIL_BACKEND",))
 
         assert production.EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+
+    @pytest.mark.parametrize(
+        "sender",
+        [
+            "support@example.com",
+            "pink glove <support@example.com>",
+            "Support@EXAMPLE.COM",
+            "billing@mail.example.org",
+            "noreply@example.net",
+            # Not an address at all.
+            "",
+            "pink glove",
+            "@pink-glove.test",
+        ],
+    )
+    def test_a_sender_nobody_accepts_mail_from_fails_the_start(self, load, sender):
+        """Sign-in codes and invoices would be dropped without a sound."""
+        with pytest.raises(ImproperlyConfigured, match="DEFAULT_FROM_EMAIL"):
+            load(DEFAULT_FROM_EMAIL=sender)
+
+    def test_the_example_sender_is_the_default_and_so_refused_when_unset(self, load):
+        with pytest.raises(ImproperlyConfigured, match="DEFAULT_FROM_EMAIL"):
+            load(unset=("DEFAULT_FROM_EMAIL",))
+
+    def test_a_real_sender_loads_with_or_without_a_display_name(self, load):
+        assert load(DEFAULT_FROM_EMAIL="billing@pink-glove.test").DEFAULT_FROM_EMAIL
+        assert load(DEFAULT_FROM_EMAIL="pink glove <billing@pink-glove.test>").DEFAULT_FROM_EMAIL
+
+    def test_a_domain_that_merely_ends_like_the_example_is_not_refused(self, load):
+        load(DEFAULT_FROM_EMAIL="billing@notexample.com")
+
+    def test_smtp_without_a_password_fails_the_start(self, load):
+        with pytest.raises(ImproperlyConfigured, match="EMAIL_HOST_PASSWORD"):
+            load(unset=("EMAIL_BACKEND",), EMAIL_HOST_PASSWORD="")
+
+    def test_a_backend_that_sends_nothing_needs_no_password(self, load):
+        """A rehearsal, or staging before there is a mail account."""
+        load(
+            EMAIL_BACKEND="django.core.mail.backends.console.EmailBackend",
+            EMAIL_HOST_PASSWORD="",
+        )
+
+
+class TestDeployAudit:
+    def test_the_audit_script_comes_back_clean(self):
+        """
+        `bin/deploy-audit.sh` carries the placeholders production settings
+        need to import at all. A check added to production.py without its
+        placeholder there fails here, and not first in CI.
+        """
+        import subprocess
+
+        from django.conf import settings
+
+        completed = subprocess.run(  # noqa: S603
+            [str(settings.BASE_DIR / "bin" / "deploy-audit.sh")],
+            env={**os.environ, "PYTHON": sys.executable},
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert "System check identified no issues" in completed.stdout
 
 
 class TestHsts:

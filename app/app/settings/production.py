@@ -6,11 +6,16 @@ at the first request. `manage.py check --deploy --settings=app.settings.producti
 should come back clean.
 """
 
+from email.utils import parseaddr
+
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403
 from .base import (
     ALLOWED_HOSTS,
+    DEFAULT_FROM_EMAIL,
+    EMAIL_BACKEND,
+    EMAIL_HOST_PASSWORD,
     FIELD_ENCRYPTION_KEY,
     FRONTEND_BASE_URL,
     MEDIA_BUCKET,
@@ -77,6 +82,35 @@ if STRIPE_PLATFORM_PRICE_ID and not STRIPE_ENABLED:
     raise ImproperlyConfigured(
         "STRIPE_PLATFORM_PRICE_ID is set but STRIPE_SECRET_KEY is not. The subscription is "
         "charged through the platform account's key."
+    )
+
+# --------------------------------------------------------------------------
+# Email
+# --------------------------------------------------------------------------
+# Sign-in codes and invoices leave by email, and mail that is never accepted
+# fails without a sound: the owner waits for a code that is not coming. The
+# two ways that happens by configuration alone are refused here.
+
+_from_local, _from_at, _from_domain = parseaddr(DEFAULT_FROM_EMAIL)[1].rpartition("@")
+_from_domain = _from_domain.lower()
+if (
+    not (_from_local and _from_at and _from_domain)
+    # base.py's default, and reserved (RFC 2606): no receiver accepts it.
+    or _from_domain in {"example.com", "example.net", "example.org"}
+    or _from_domain.endswith((".example.com", ".example.net", ".example.org"))
+):
+    raise ImproperlyConfigured(
+        f"DEFAULT_FROM_EMAIL={DEFAULT_FROM_EMAIL!r} is not an address mail can be sent from. "
+        "Set it to a sender on a domain you have authenticated (docs/DEPLOY.md, 'Email')."
+    )
+
+# Only the backend that needs it: a rehearsal or a first staging deploy
+# prints mail with the console backend and has no key to give.
+if EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend" and not EMAIL_HOST_PASSWORD:
+    raise ImproperlyConfigured(
+        "EMAIL_BACKEND is SMTP but EMAIL_HOST_PASSWORD is empty, so every sign-in code and "
+        "invoice would be refused by the mail server. Set EMAIL_HOST_PASSWORD (the SendGrid "
+        "API key), or set EMAIL_BACKEND to the console backend to print mail instead."
     )
 
 # --------------------------------------------------------------------------

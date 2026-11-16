@@ -9,13 +9,18 @@
 # on first use, not at import. SECURE_SSL_REDIRECT is forced on because the
 # audit warns without it, though Fly redirects at the edge and the deploy
 # leaves it off. UI_DIST_DIR is set EMPTY, the explicit "frontend is not
-# here", so the audit needs no build.
+# here", so the audit needs no build. The mail values are the default SMTP
+# backend with a sender and a password that are only checked for being there;
+# nothing is sent.
 #
 # STRIPE_SECRET_KEY is set EMPTY for another reason: python-decouple fills
 # anything the environment leaves out from app/.env, so a developer's Stripe
 # key (with no Connect webhook secret beside it) failed the audit on their
 # machine while CI, which has no .env, passed. Empty here means the optional
 # integration is off, whatever the .env says.
+#
+# The Dockerfile's collectstatic layer and deploy/docker-compose.rehearsal.yml
+# import production settings too and carry their own copies of this list.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -27,6 +32,9 @@ SECURE_SSL_REDIRECT=True \
 ALLOWED_HOSTS=example.com \
 FRONTEND_BASE_URL=https://example.com \
 FIELD_ENCRYPTION_KEY=audit-only-not-a-key \
+DEFAULT_FROM_EMAIL=audit-only@pink-glove.invalid \
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend \
+EMAIL_HOST_PASSWORD=audit-only-not-a-key \
 STRIPE_SECRET_KEY= \
 MEDIA_BACKEND=s3 \
 MEDIA_BUCKET=audit-only \
