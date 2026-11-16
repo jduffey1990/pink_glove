@@ -16,6 +16,35 @@ export type OrganizationSummary = Schemas['OrganizationSummary']
 export type Organization = Schemas['Organization']
 export type Role = Schemas['RoleEnum']
 
+/**
+ * Team management (ADR-028). A `TeamMember` is a membership as the directory
+ * endpoint returns it: with where it stands and what the caller may do to it.
+ * The session's own `Membership` rows carry neither.
+ */
+export type TeamMember = Schemas['TeamMember']
+export type InvitedTeamMember = Schemas['InvitedTeamMember']
+export type MembershipState = Schemas['MembershipStateEnum']
+/** Every role but customer: what the team page may invite or grant. */
+export type StaffRole = Schemas['StaffRoleEnum']
+export type InviteRequest = Schemas['InviteRequest']
+export type InviteOptions = Schemas['InviteOptions']
+export type Invitation = Schemas['Invitation']
+export type InvitationAcceptRequest = Schemas['InvitationAcceptRequest']
+export type PasswordResetSent = Schemas['PasswordResetSent']
+
+/**
+ * What the server says may be done to a team row right now.
+ *
+ * A string list on the wire, as an invoice's `available_actions` is; narrowed
+ * here so a page cannot check for an action that does not exist. The server
+ * is the only place they are decided (ADR-023).
+ */
+export type TeamAction
+  = | 'change_role'
+    | 'deactivate'
+    | 'reactivate'
+    | 'resend_invite'
+
 export type Job = Schemas['Job']
 export type JobStatus = Schemas['JobStatusEnum']
 export type JobAssignment = Schemas['JobAssignment']
