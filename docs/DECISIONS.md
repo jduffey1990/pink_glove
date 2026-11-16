@@ -885,6 +885,91 @@ secret, and a price without the key.
 
 ---
 
+## ADR-029: Errors go to Sentry, and what may leave is decided twice
+
+**Decided (ops readiness, 2026-11-16).**
+Before a work trial with real door codes and real card payments, a 500 has to reach a person.
+Logging goes to stdout and nothing reads it, so today the first report of a failure is a customer.
+
+**The vendor is Sentry, hosted, through `sentry-sdk` with its Django and Celery integrations.**
+It reports three things: an unhandled exception in a request, an unhandled exception in a task, and any log record at ERROR.
+The third matters here more than usual, because the code already logs its worst moments at that level and carries on: an invoice email that would not send, a Stripe event that failed, an event abandoned after an hour.
+Those become alerts with no code change.
+It is backend only.
+
+**It is optional as a whole, in the shape Stripe set (ADR-024).**
+With no `SENTRY_DSN` nothing is initialised and `sentry_sdk` is never imported: `app/sentry.py` imports it inside `init()`.
+Only `settings/production.py` calls `init()`, as the last thing it does, so a configuration that is refused never gets as far as reporting, and development and the test suite cannot send an event whatever a `.env` says.
+A DSN without `SENTRY_ENVIRONMENT` is refused at import.
+Staging and production are one image under one settings module, so nothing in the code can tell them apart, and an event filed under the wrong one is a production error nobody looks at.
+The release is `FLY_IMAGE_REF`, which Fly sets on every machine and which is unique per deploy; `SENTRY_RELEASE` overrides it.
+It is never left unset, because the SDK then shells out to `git` to guess one.
+
+**What may leave is decided twice, on purpose.**
+First the SDK is told not to collect it: `send_default_pii` off, request bodies never read, no local variables in stack frames, no auto-discovered integrations, and nothing but error events (no traces, profiles, logs, metrics, release-health sessions or client reports, and no trace headers added to outgoing calls to Stripe or the bucket).
+Then `before_send` removes the request body, cookies, the user and every local variable again, and redacts any value stored under a sensitive name wherever in the event it sits.
+Sensitive names are access, gate and alarm codes, key locations, tokens, passwords, secrets, cookies, sessions, CSRF and Authorization values, signatures, keys, and the caller's address.
+The second layer is there so that one option flipped later, or a default that changes in an SDK upgrade, does not put a gate code on someone else's server.
+It is not decoration: run once with `before_send` made a no-op and every shipped option untouched, a CSRF token, a query-string token, the pay link's and the magic link's path tokens, a log record's `extra` and the client address all still left.
+No SDK option covers a credential that travels in a URL, and here two do (`/pay/<token>`, `/sign-in/<token>`), in the request URL, the Referer header and "Not Found:" log lines.
+The rule for those is by length: an identifier is a UUID (ADR-010), 36 characters, so a longer path segment is a bearer credential and is redacted.
+If `before_send` raises, the SDK drops the event; it fails closed.
+
+**Exactly what an event carries when it leaves.**
+
+- The exception: its type, its message, and the stack trace with file paths, function names, line numbers and a few lines of source around each frame.
+- For a request: the method, the URL and query string after redaction, the route pattern, the server name and port, and the headers that are not redacted (`User-Agent`, `Referer` after redaction, `Content-Type`, `Content-Length`, `Host`, `Accept*`, and `X-Organization`, which is a tenant's UUID).
+- For a task: its name and its Celery task id. Its arguments are replaced with `[Filtered]`.
+- For an ERROR log record: the logger's name, the message and its arguments, and any `extra`, redacted by name.
+- Breadcrumbs: up to a hundred log lines at INFO or above from the same process before the error, and the text of each SQL statement with placeholders in place of every value. gunicorn's access log is excluded.
+- About the process: the environment and release tags, the machine's hostname, the Python version, the command line, the names and versions of installed packages, the SDK's own name and version, and trace ids.
+
+It never carries a request body, a cookie, a local variable, a user's id or email, a client address, a SQL parameter, a task argument, or a value under one of the names above.
+
+**What this cannot do.**
+An exception message and a log line are sent as written.
+A code interpolated into either leaves with it.
+"Nothing sensitive is logged" (`CLAUDE.md`, phase gate 5) is the rule that covers that, and it now has a second reader.
+Redaction by name also depends on the name: a gate code stored under `notes` in a log record's `extra` is not caught.
+
+**Rejected -- stdout and a log drain only.**
+Fly can ship logs to a drain, and a drain can alert on a pattern.
+It is the cheapest thing that could be called monitoring.
+It alerts on text, so every new failure needs its pattern written in advance, which is the opposite of what an unexpected 500 is; it does not group, so one bug during a busy morning is four hundred lines; and the full log stream, including every request line, would leave the system, where this sends one scrubbed event per error.
+Logs stay on stdout for reading after the fact.
+
+**Rejected -- a self-hosted collector (Sentry self-hosted, GlitchTip).**
+Nothing would leave the system at all, which is the strongest answer to the question this ADR spends most of its length on.
+But it is a second production: Postgres, Redis, workers, upgrades and its own backups, on the same Fly organization as the thing it watches, so the outage most worth hearing about takes the alarm down with it.
+For a one-person platform that is the trade ADR-027 already declined for the app itself.
+The SDK speaks the same protocol to either, so moving later is a DSN.
+
+**Rejected -- a frontend SDK now.**
+A browser error is real signal, and Sentry's Vue SDK would catch it.
+It would also ship a third-party script to every customer's browser, from pages that show access codes after a reveal and card flows that hand off to Stripe, with breadcrumbs of clicks and DOM text that no server-side scrubber sees.
+It needs a public DSN in the bundle, a Content-Security-Policy decision, and its own list of what may leave.
+The failures that hurt in a trial (a 500, a dead worker, a lost payment event) are all visible from the backend.
+Revisit after the trial with its own ADR.
+
+**Rejected -- tagging events with the user and the organization.**
+"Whose error was this?" is the first question in support, and a UUID is not personal data on its own.
+It is still a join key from a third party's database back to a customer, and the request URL, the time and the server's own log already answer the question for the person who has access to both.
+Left out until it is missed.
+
+**Rejected -- baking the git commit into the image as the release.**
+It is the more useful tag.
+It needs a build argument on every `fly deploy`, the CI one and the one typed by hand, and a release that reads `unknown` the day one of them forgets it.
+`FLY_IMAGE_REF` is set by the platform, and `fly releases --image` maps it back to a deploy.
+
+**Consequences.**
+`sentry-sdk` is a dependency.
+The SDK patches Django for the life of the process, so the suite never starts it: the tests that need a real event read the report of a child interpreter (`app/tests/sentry_probe.py`) whose transport keeps envelopes in a list and whose DSN host is under `.invalid`.
+Because `init()` runs when settings are imported, a worker or beat that dies at start is reported too, which a health check that only watches `web` does not do.
+A new integration that carries a secret under a new name adds that name to `app/sentry.py`; the tests name the ones that exist today.
+Sentry's own project settings (the data scrubber, not storing IP addresses) are set in `docs/DEPLOY.md` as the same rule held on the other side, and are not relied on.
+
+---
+
 ## ADR-030: What the reports mean: which day an entry is on, which date a payment is on, and whose balance it is
 
 **Decided (2026-11-16).**
