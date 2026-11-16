@@ -65,9 +65,14 @@ class SessionSerializer(serializers.ModelSerializer):
 
     Includes every membership so a multi-organization user can be offered a
     switcher; the active one is echoed back as `current_organization`.
+
+    "Every membership" means every one the middleware would resolve: a
+    deactivated membership is not an organization this person can act in, so
+    it is not offered. Listing one made the app count it, show it in the
+    switcher and send its id in a header the middleware then refused.
     """
 
-    memberships = MembershipSerializer(many=True, read_only=True)
+    memberships = serializers.SerializerMethodField()
     current_organization = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()
 
@@ -86,6 +91,17 @@ class SessionSerializer(serializers.ModelSerializer):
             "current_role",
         )
         read_only_fields = fields
+
+    @extend_schema_field(MembershipSerializer(many=True))
+    def get_memberships(self, obj):
+        # The same filter as TenantMiddleware, so the two cannot disagree
+        # about which organizations this person holds.
+        memberships = (
+            obj.memberships.filter(is_active=True)
+            .select_related("user", "organization")
+            .order_by("created_at")
+        )
+        return MembershipSerializer(memberships, many=True, context=self.context).data
 
     @extend_schema_field(OrganizationSummarySerializer(allow_null=True))
     def get_current_organization(self, obj):

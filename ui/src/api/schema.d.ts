@@ -3441,6 +3441,11 @@ export interface components {
          *
          *     Includes every membership so a multi-organization user can be offered a
          *     switcher; the active one is echoed back as `current_organization`.
+         *
+         *     "Every membership" means every one the middleware would resolve: a
+         *     deactivated membership is not an organization this person can act in, so
+         *     it is not offered. Listing one made the app count it, show it in the
+         *     switcher and send its id in a header the middleware then refused.
          */
         Session: {
             /** Format: uuid */
