@@ -43,6 +43,7 @@ from scheduling.serializers import (
 )
 from scheduling.services import (
     assign_user,
+    claim_on,
     clock_in,
     clock_out,
     delete_refusal,
@@ -274,7 +275,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
         rule is `services.edit_refusal`, which is also what the job publishes
         as `available_actions`, so the page and the server cannot disagree.
         """
-        refusal = edit_refusal(serializer.instance)
+        refusal = edit_refusal(serializer.instance, claim=claim_on(serializer.instance))
         if refusal:
             raise ConflictError(refusal, {"status": serializer.instance.status})
         super().perform_update(serializer)
@@ -285,7 +286,7 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
         under way or finished, or came from a plan is cancelled instead: the
         row and the reason stay (ADR-021). See `services.delete_refusal`.
         """
-        refusal = delete_refusal(instance)
+        refusal = delete_refusal(instance, claim=claim_on(instance))
         if refusal:
             raise ConflictError(refusal, {"status": instance.status})
         instance.delete()
