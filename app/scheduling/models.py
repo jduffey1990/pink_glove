@@ -7,7 +7,9 @@ Two things here are load-bearing and easy to "simplify" wrongly:
 * `Job.plan_occurrence` -- the instant an occurrence was *originally* planned
   for, not where it ended up. It is the idempotency key for materialization,
   which is what stops a rescheduled visit being re-created at its old slot the
-  next morning. See docs/DECISIONS.md ADR-020.
+  next morning. See docs/DECISIONS.md ADR-020. No caller can write it; the one
+  thing that changes it is `regenerate_plan`, which re-keys a kept visit to
+  the same local day when the plan's time moves (ADR-032).
 * `Job.price_cents` -- a snapshot taken at materialization, never read live
   from `Service`. Raising your prices must not retroactively change what last
   month's completed work was worth.

@@ -259,9 +259,69 @@ def regenerate_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> dic
     if untouched:
         Job.objects.filter(pk__in=untouched).delete()  # soft delete
 
-    regenerated = materialize_plan(plan, today=today) if plan.is_active else 0
+    regenerated = 0
+    if plan.is_active:
+        _rekey_kept_jobs(plan, today=today or organization_today(plan.organization))
+        regenerated = materialize_plan(plan, today=today)
 
     return {"regenerated": regenerated, "kept": kept}
+
+
+def _rekey_kept_jobs(plan: RecurringPlan, *, today: dt.date) -> None:
+    """
+    Give each visit that survived a plan edit the occurrence the plan's
+    *current* definition has on the local day it was planned for (ADR-032).
+
+    `plan_occurrence` is an instant, and it is how the materializer knows an
+    occurrence already has its visit. Move the plan from 9am to 2pm and every
+    occurrence is a different instant: a kept visit, still keyed to 9am, no
+    longer accounts for its day, so the rebuild puts a new 2pm visit beside
+    it. The visit a customer asked to move turns up twice, and the one they
+    cancelled comes back. Re-keying to the same local day is what makes
+    "kept" mean "this is still that day's visit".
+
+    Runs between the drop and the rebuild, so the only live rows are the kept
+    ones and no key it hands out can collide with an untouched job. A visit
+    whose day the new definition no longer has (Tuesdays became Thursdays)
+    has nothing to claim and keeps its old key.
+
+    Reaches back to the start of today, not just to now: this morning's
+    finished visit must still account for today when the plan moves to the
+    afternoon.
+    """
+    tz = plan.organization.tz
+    occurrences = expand_occurrences(
+        plan, window_start=today, window_end=today + MATERIALIZATION_HORIZON
+    )
+    if not occurrences:
+        return
+
+    current = set(occurrences)
+    by_day: dict[dt.date, list[dt.datetime]] = {}
+    for occurrence in occurrences:
+        by_day.setdefault(occurrence.astimezone(tz).date(), []).append(occurrence)
+
+    # Ordered, so which visit claims which occurrence is the same on every run.
+    kept = list(
+        Job.objects.filter(
+            plan=plan,
+            plan_occurrence__gte=dt.datetime.combine(today, dt.time.min, tzinfo=tz),
+        ).order_by("plan_occurrence", "pk")
+    )
+    taken = {job.plan_occurrence for job in kept}
+
+    for job in kept:
+        if job.plan_occurrence in current:
+            continue
+
+        planned_day = job.plan_occurrence.astimezone(tz).date()
+        free = [o for o in by_day.get(planned_day, ()) if o not in taken]
+        if not free:
+            continue
+
+        taken.add(free[0])
+        job.plan_occurrence = free[0]
+        job.save(update_fields=["plan_occurrence", "updated_at"])
 
 
 # ---------------------------------------------------------------------------
