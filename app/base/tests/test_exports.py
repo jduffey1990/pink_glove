@@ -87,6 +87,27 @@ class TestCsvResponse:
 
         assert self._rows(response)[1] == [awkward, "1"]
 
+    @pytest.mark.parametrize("delimiter", [";", "\t"])
+    def test_a_typed_value_is_one_cell_whatever_the_reader_splits_on(self, delimiter):
+        """
+        The file is comma-separated, but a spreadsheet set to split on
+        semicolons or tabs does not ask. Unquoted, the name below becomes
+        two cells there and the second is a formula nothing looked at.
+        """
+        name = f"Hale{delimiter}=1+1"
+
+        response = csv_response("a.csv", ["name"], [[name]])
+        text = response.content.decode("utf-8-sig")
+        as_that_reader_sees_it = list(csv.reader(io.StringIO(text), delimiter=delimiter))
+
+        assert as_that_reader_sees_it[1] == [name]
+        assert not any(cell.startswith("=") for row in as_that_reader_sees_it for cell in row)
+
+    def test_text_is_quoted_and_numbers_are_bare(self):
+        response = csv_response("a.csv", ["name", "n", "usd"], [["Dana", 2, cents_as_dollars(-5)]])
+
+        assert response.content.decode("utf-8-sig") == ('"name","n","usd"\r\n"Dana",2,-0.05\r\n')
+
     def test_it_opens_with_a_bom_so_excel_reads_utf8(self):
         response = csv_response("a.csv", ["name"], [["Renée"]])
 

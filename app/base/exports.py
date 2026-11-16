@@ -32,7 +32,7 @@ FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
 
 #: Excel reads a CSV without this as the machine's legacy code page, and
 #: "Renée" arrives as "RenÃ©e". Sheets and Numbers ignore it.
-UTF8_BOM = "﻿"
+UTF8_BOM = "\ufeff"
 
 
 def neutralise(value) -> str | int | Decimal:
@@ -73,9 +73,16 @@ def csv_response(filename: str, header: Sequence[str], rows: Iterable[Sequence])
 
     A plain `HttpResponse`, not a DRF `Response`: the body is already bytes
     and no renderer should have a second opinion about it.
+
+    Every text cell is quoted, not only the ones a comma would break. The
+    file is comma-separated, but a spreadsheet set to split on semicolons or
+    tabs does not ask: unquoted, a customer called `x;=1+1` becomes two
+    cells there and the second one is a formula that `neutralise`, which
+    only sees the start of the value, never looked at. Quoted, a typed value
+    is one cell whatever the reader splits on. Numbers stay bare.
     """
     buffer = io.StringIO()
-    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer = csv.writer(buffer, lineterminator="\r\n", quoting=csv.QUOTE_STRINGS)
 
     writer.writerow([neutralise(cell) for cell in header])
     for row in rows:
