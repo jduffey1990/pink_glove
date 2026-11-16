@@ -565,10 +565,12 @@ class TestChangeRole:
         assert team[Role.CUSTOMER].role == Role.CUSTOMER
 
     def test_nobody_is_made_a_customer_here(self, team):
+        """Not a choice at all, so it is refused as a bad value, not as a rank."""
         response = self._patch(team[Role.OWNER], team[Role.CLEANER], Role.CUSTOMER)
 
         team[Role.CLEANER].refresh_from_db()
-        assert response.status_code == 403
+        assert response.status_code == 400
+        assert "role" in response.json()
         assert team[Role.CLEANER].role == Role.CLEANER
 
     def test_a_made_up_role_is_a_400(self, team):

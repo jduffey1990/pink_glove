@@ -22,6 +22,10 @@ ADMIN_ROLES = (*OWNER_ROLES, Role.ADMIN)
 DISPATCHER_ROLES = (*ADMIN_ROLES, Role.DISPATCHER)
 STAFF_ROLES = (*DISPATCHER_ROLES, Role.CLEANER)
 
+#: The roles the team page can hand out, as a choice set: every role but
+#: customer. Named in ENUM_NAME_OVERRIDES so the schema calls it one thing.
+STAFF_ROLE_CHOICES = [(role.value, role.label) for role in STAFF_ROLES]
+
 #: Roles that must clear a 2FA challenge on every login. Cleaners are
 #: challenged only on an untrusted device; customers use magic links.
 ALWAYS_TWO_FACTOR_ROLES = DISPATCHER_ROLES

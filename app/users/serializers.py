@@ -4,7 +4,7 @@ from rest_framework import serializers
 from organizations.models import Organization
 from organizations.serializers import BillingNoticeSerializer
 from users import services
-from users.enums import STAFF_ROLES, MembershipState, Role
+from users.enums import STAFF_ROLE_CHOICES, MembershipState, Role
 from users.models import CustomUser, Membership
 
 
@@ -118,7 +118,9 @@ class TeamMemberSerializer(MembershipSerializer):
         actor, sole_owner_id = self._rules()
         return services.available_actions(actor, obj, sole_owner_id)
 
-    @extend_schema_field(serializers.ListField(child=serializers.ChoiceField(choices=Role.choices)))
+    @extend_schema_field(
+        serializers.ListField(child=serializers.ChoiceField(choices=STAFF_ROLE_CHOICES))
+    )
     def get_assignable_roles(self, obj):
         actor, sole_owner_id = self._rules()
         return services.assignable_roles(actor, obj, sole_owner_id)
@@ -147,23 +149,22 @@ class InviteSerializer(serializers.Serializer):
     """
 
     email = serializers.EmailField()
-    role = serializers.ChoiceField(
-        choices=[(role.value, role.label) for role in STAFF_ROLES],
-    )
+    role = serializers.ChoiceField(choices=STAFF_ROLE_CHOICES)
 
 
 class MembershipRoleSerializer(serializers.Serializer):
     """
     The one thing a PATCH may change. `user`, `organization` and `is_active`
     are not fields here, so sending them does nothing: activation has its own
-    actions, with their own rules.
+    actions, with their own rules. Nobody is made a customer here, so that is
+    not a choice either.
     """
 
-    role = serializers.ChoiceField(choices=Role.choices)
+    role = serializers.ChoiceField(choices=STAFF_ROLE_CHOICES)
 
 
 class InviteOptionsSerializer(serializers.Serializer):
-    roles = serializers.ListField(child=serializers.ChoiceField(choices=Role.choices))
+    roles = serializers.ListField(child=serializers.ChoiceField(choices=STAFF_ROLE_CHOICES))
 
 
 class InvitationInspectSerializer(serializers.Serializer):

@@ -5091,7 +5091,7 @@ components:
         roles:
           type: array
           items:
-            $ref: '#/components/schemas/RoleEnum'
+            $ref: '#/components/schemas/StaffRoleEnum'
       required:
       - roles
     InviteRequest:
@@ -5108,22 +5108,10 @@ components:
           format: email
           minLength: 1
         role:
-          $ref: '#/components/schemas/InviteRoleEnum'
+          $ref: '#/components/schemas/StaffRoleEnum'
       required:
       - email
       - role
-    InviteRoleEnum:
-      enum:
-      - owner
-      - admin
-      - dispatcher
-      - cleaner
-      type: string
-      description: |-
-        * `owner` - Owner
-        * `admin` - Admin
-        * `dispatcher` - Dispatcher
-        * `cleaner` - Cleaner
     InvitedTeamMember:
       type: object
       description: A team row, with the invitation link when the API is running locally.
@@ -5181,7 +5169,7 @@ components:
         assignable_roles:
           type: array
           items:
-            $ref: '#/components/schemas/RoleEnum'
+            $ref: '#/components/schemas/StaffRoleEnum'
           readOnly: true
         dev_link:
           type: string
@@ -6855,10 +6843,11 @@ components:
       description: |-
         The one thing a PATCH may change. `user`, `organization` and `is_active`
         are not fields here, so sending them does nothing: activation has its own
-        actions, with their own rules.
+        actions, with their own rules. Nobody is made a customer here, so that is
+        not a choice either.
       properties:
         role:
-          $ref: '#/components/schemas/RoleEnum'
+          $ref: '#/components/schemas/StaffRoleEnum'
     PatchedOrganizationRequest:
       type: object
       description: |-
@@ -8158,6 +8147,18 @@ components:
       - last_name
       - memberships
       - phone
+    StaffRoleEnum:
+      enum:
+      - owner
+      - admin
+      - dispatcher
+      - cleaner
+      type: string
+      description: |-
+        * `owner` - Owner
+        * `admin` - Admin
+        * `dispatcher` - Dispatcher
+        * `cleaner` - Cleaner
     StatusChangeRequest:
       type: object
       properties:
@@ -8273,7 +8274,7 @@ components:
         assignable_roles:
           type: array
           items:
-            $ref: '#/components/schemas/RoleEnum'
+            $ref: '#/components/schemas/StaffRoleEnum'
           readOnly: true
       required:
       - accepted_at

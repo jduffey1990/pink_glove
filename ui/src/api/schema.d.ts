@@ -2261,7 +2261,7 @@ export interface components {
             token: string;
         };
         InviteOptions: {
-            roles: components["schemas"]["RoleEnum"][];
+            roles: components["schemas"]["StaffRoleEnum"][];
         };
         /**
          * @description An invitation: an address and a role, and nothing else.
@@ -2273,16 +2273,8 @@ export interface components {
         InviteRequest: {
             /** Format: email */
             email: string;
-            role: components["schemas"]["InviteRoleEnum"];
+            role: components["schemas"]["StaffRoleEnum"];
         };
-        /**
-         * @description * `owner` - Owner
-         *     * `admin` - Admin
-         *     * `dispatcher` - Dispatcher
-         *     * `cleaner` - Cleaner
-         * @enum {string}
-         */
-        InviteRoleEnum: "owner" | "admin" | "dispatcher" | "cleaner";
         /** @description A team row, with the invitation link when the API is running locally. */
         InvitedTeamMember: {
             /** Format: uuid */
@@ -2303,7 +2295,7 @@ export interface components {
             /** Format: date-time */
             readonly deactivated_at: string | null;
             readonly available_actions: string[];
-            readonly assignable_roles: components["schemas"]["RoleEnum"][];
+            readonly assignable_roles: components["schemas"]["StaffRoleEnum"][];
             /** @description Local development only. Never present in a deployed environment. */
             dev_link?: string;
         };
@@ -3144,10 +3136,11 @@ export interface components {
         /**
          * @description The one thing a PATCH may change. `user`, `organization` and `is_active`
          *     are not fields here, so sending them does nothing: activation has its own
-         *     actions, with their own rules.
+         *     actions, with their own rules. Nobody is made a customer here, so that is
+         *     not a choice either.
          */
         PatchedMembershipRoleRequest: {
-            role?: components["schemas"]["RoleEnum"];
+            role?: components["schemas"]["StaffRoleEnum"];
         };
         /**
          * @description The organization as its own admins see it.
@@ -3801,6 +3794,14 @@ export interface components {
             readonly current_organization: components["schemas"]["OrganizationSummary"] | null;
             readonly current_role: (components["schemas"]["RoleEnum"] | components["schemas"]["NullEnum"]) | null;
         };
+        /**
+         * @description * `owner` - Owner
+         *     * `admin` - Admin
+         *     * `dispatcher` - Dispatcher
+         *     * `cleaner` - Cleaner
+         * @enum {string}
+         */
+        StaffRoleEnum: "owner" | "admin" | "dispatcher" | "cleaner";
         StatusChangeRequest: {
             status: components["schemas"]["JobStatusEnum"];
             /** @default  */
@@ -3860,7 +3861,7 @@ export interface components {
             /** Format: date-time */
             readonly deactivated_at: string | null;
             readonly available_actions: string[];
-            readonly assignable_roles: components["schemas"]["RoleEnum"][];
+            readonly assignable_roles: components["schemas"]["StaffRoleEnum"][];
         };
         /**
          * @description Base serializer for tenant-owned models.

@@ -262,6 +262,9 @@ SPECTACULAR_SETTINGS = {
         # A third field called "state": where a membership stands. Unnamed
         # it would collide with the two above.
         "MembershipStateEnum": "users.enums.MembershipState.choices",
+        # Every role but customer: what the team page may invite or grant.
+        # Three fields share it; unnamed, each would get its own enum.
+        "StaffRoleEnum": "users.enums.STAFF_ROLE_CHOICES",
         # A row's outcome in a customer import is a field called "action",
         # which would generate as "ActionEnum".
         "CustomerImportActionEnum": "customers.enums.ImportAction.choices",
