@@ -35,7 +35,12 @@ from billing.tests.factories import (
 )
 from organizations.enums import NoAccessFeeType
 from organizations.models import Organization
-from scheduling.tests.factories import CustomerFactory, OrganizationFactory, ServiceFactory
+from scheduling.tests.factories import (
+    CustomerFactory,
+    MembershipFactory,
+    OrganizationFactory,
+    ServiceFactory,
+)
 from users.enums import Role
 
 RECEIVABLES = reverse("billing:report-receivables")
@@ -131,6 +136,45 @@ class TestPermissions:
     @pytest.mark.parametrize(("url", "query"), ALL_REPORTS)
     def test_nobody_signed_in_is_refused(self, url, query, api_client):
         assert api_client.get(url, query).status_code == 403
+
+    @pytest.mark.parametrize(("url", "query"), ALL_REPORTS)
+    def test_the_role_that_counts_is_the_one_held_in_the_organization_asked_for(
+        self, url, query, org
+    ):
+        """
+        An owner here who also cleans for someone else is a cleaner there.
+        Naming the other organization in the header must not carry the
+        ownership across with it.
+        """
+        elsewhere = OrganizationFactory()
+        person = staff_in(org, Role.OWNER)
+        MembershipFactory(user=person, organization=elsewhere, role=Role.CLEANER)
+        client = client_for(person)
+
+        here = client.get(url, query, headers={"X-Organization": str(org.pk)})
+        there = client.get(url, query, headers={"X-Organization": str(elsewhere.pk)})
+
+        assert here.status_code == 200
+        assert there.status_code == 403
+
+    @pytest.mark.parametrize(("url", "query"), ALL_REPORTS)
+    def test_a_superuser_reads_one_organization_at_a_time(self, url, query, org, superuser):
+        """Platform administration, never a way round the tenant: no header, no report."""
+        client = client_for(superuser)
+
+        assert client.get(url, query).status_code == 403
+        assert client.get(url, query, headers={"X-Organization": str(org.pk)}).status_code == 200
+
+    @pytest.mark.parametrize(("url", "query"), ALL_REPORTS)
+    def test_a_deactivated_organization_can_still_read_them(self, url, query, org):
+        """
+        Suspended is read-only, not locked out: a tenant behind on its
+        subscription still has to be able to see who owes it money.
+        """
+        org.is_active = False
+        org.save()
+
+        assert client_for(staff_in(org, Role.OWNER)).get(url, query).status_code == 200
 
 
 # --- tenant isolation ------------------------------------------------------

@@ -25,6 +25,7 @@ from scheduling.models import JobAssignment, TimeEntry
 from scheduling.tests.factories import (
     CustomerFactory,
     JobFactory,
+    MembershipFactory,
     OrganizationFactory,
     TimeEntryFactory,
     UserFactory,
@@ -104,6 +105,46 @@ class TestPermissions:
         assert response.status_code == 403
         assert response["Content-Type"] == "application/json"
         assert "Content-Disposition" not in response
+
+    @pytest.mark.parametrize("url", [URL, CSV_URL])
+    def test_the_role_that_counts_is_the_one_held_in_the_organization_asked_for(
+        self, url, organization, other_organization, owner, make_client
+    ):
+        """
+        An owner here who also cleans for someone else is a cleaner there.
+        Naming the other organization in the header must not carry the
+        ownership across with it.
+        """
+        MembershipFactory(user=owner, organization=other_organization, role=Role.CLEANER)
+        client = make_client(owner)
+        query = period("2027-06-14")
+
+        here = client.get(url, query, headers={"X-Organization": str(organization.pk)})
+        there = client.get(url, query, headers={"X-Organization": str(other_organization.pk)})
+
+        assert here.status_code == 200
+        assert there.status_code == 403
+
+    @pytest.mark.parametrize("url", [URL, CSV_URL])
+    def test_a_superuser_reads_one_organization_at_a_time(
+        self, url, organization, superuser, make_client
+    ):
+        """Platform administration, never a way round the tenant: no header, no report."""
+        client = make_client(superuser)
+        query = period("2027-06-14")
+
+        assert client.get(url, query).status_code == 403
+        assert (
+            client.get(url, query, headers={"X-Organization": str(organization.pk)}).status_code
+            == 200
+        )
+
+    @pytest.mark.parametrize("url", [URL, CSV_URL])
+    def test_a_deactivated_organization_can_still_read_it(self, url, organization, owner_client):
+        organization.is_active = False
+        organization.save()
+
+        assert owner_client.get(url, period("2027-06-14")).status_code == 200
 
 
 # --- tenant isolation ------------------------------------------------------
