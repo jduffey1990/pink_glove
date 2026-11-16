@@ -177,6 +177,20 @@ class ResendView(APIView):
 
     def post(self, request):
         challenge = VerifyView._pending_challenge(request)
+
+        # A pending sign-in records that a password was accepted, not which
+        # one. A password reset withdraws every outstanding code
+        # (`services.forget_devices`), and that has to end the sign-in they
+        # belonged to as well: otherwise whoever started it with the old
+        # password asks here for a fresh code and finishes without ever being
+        # asked for the new one (ADR-028). A spent code with a sign-in still
+        # pending behind it only ever means that, because a code spent by
+        # verifying takes the pending sign-in with it. An expired code is not
+        # spent, so the ordinary "send me another" is untouched.
+        if challenge is not None and challenge.consumed_at is not None:
+            del request.session[PENDING_CHALLENGE_SESSION_KEY]
+            challenge = None
+
         if challenge is None:
             return Response(
                 {"detail": "No sign-in is in progress. Please start again."},

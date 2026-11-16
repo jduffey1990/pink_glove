@@ -21,7 +21,7 @@ from rest_framework.test import APIClient
 from rest_framework.throttling import SimpleRateThrottle
 
 from two_factor import tasks
-from two_factor.models import TrustedDevice
+from two_factor.models import TrustedDevice, TwoFactorCode
 from two_factor.services import INVALID_RESET_LINK, TRUSTED_DEVICE_COOKIE
 from two_factor.views import RESET_REQUESTED
 from users.enums import AccountTokenPurpose, Role
@@ -33,6 +33,7 @@ REQUEST = reverse("two_factor:password-reset")
 CONFIRM = reverse("two_factor:password-reset-confirm")
 LOGIN = reverse("two_factor:login")
 VERIFY = reverse("two_factor:verify")
+RESEND = reverse("two_factor:resend")
 SESSION = reverse("users:session")
 DIRECTORY = reverse("users:membership-list")
 
@@ -552,6 +553,45 @@ class TestEverythingFromBeforeTheResetIsGone:
 
         assert verify.status_code == 401
         assert api_client.get(SESSION).json() == {}
+
+    def test_nor_can_it_ask_for_a_fresh_code_and_finish_with_that(
+        self, api_client, owner, settings
+    ):
+        """
+        The way round the test above. The pending sign-in remembers only that
+        *a* password was accepted, so asking for a new code used to hand the
+        old password's holder a live challenge after the reset, and with it
+        a sign-in the new password was never asked for.
+        """
+        settings.LOCAL = True
+        api_client.post(LOGIN, {"email": owner.email, "password": OLD_PASSWORD}, format="json")
+
+        _confirm(APIClient(), _token_for(owner))
+        resend = api_client.post(RESEND)
+
+        assert resend.status_code == 400
+        assert "dev_code" not in resend.json()
+        # Nothing was issued, and the pending sign-in is over: start again.
+        assert TwoFactorCode.objects.filter(user=owner, consumed_at__isnull=True).count() == 0
+        assert api_client.post(RESEND).status_code == 400
+        assert api_client.post(VERIFY, {"code": "000000"}, format="json").status_code == 400
+        assert api_client.get(SESSION).json() == {}
+
+    def test_asking_for_a_fresh_code_still_works_when_there_was_no_reset(
+        self, api_client, owner, settings
+    ):
+        """The ordinary resend, including after the first code has expired."""
+        settings.LOCAL = True
+        api_client.post(LOGIN, {"email": owner.email, "password": OLD_PASSWORD}, format="json")
+        TwoFactorCode.objects.filter(user=owner).update(
+            expires_at=timezone.now() - timedelta(seconds=1)
+        )
+
+        resend = api_client.post(RESEND)
+
+        assert resend.status_code == 202
+        verify = api_client.post(VERIFY, {"code": resend.json()["dev_code"]}, format="json")
+        assert verify.status_code == 200
 
 
 class TestThrottles:
