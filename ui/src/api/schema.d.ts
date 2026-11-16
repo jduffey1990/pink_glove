@@ -1531,6 +1531,52 @@ export interface paths {
         patch: operations["scheduling_time_entries_partial_update"];
         trace?: never;
     };
+    "/api/users/invitations/accept/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invitation
+         * @description Accept an invitation. Public, and it signs nobody in: the response is a
+         *     sentence, and the person then signs in the ordinary way and meets the
+         *     ordinary challenge (ADR-008).
+         */
+        post: operations["users_invitations_accept_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/invitations/inspect/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Look at an invitation
+         * @description What an invitation link opens, so the page can say which organization is
+         *     asking and whether a password is needed.
+         *
+         *     Public: the token is the credential. A POST with the token in the body,
+         *     like the magic link, so it is never part of a URL this API logs.
+         */
+        post: operations["users_invitations_inspect_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/logout/": {
         parameters: {
             query?: never;
@@ -1595,10 +1641,35 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Who belongs to the current organization. Read-only in Phase 1. */
+        /**
+         * Who belongs to this organization
+         * @description Who belongs to the current organization, and the team page's writes.
+         *
+         *     Reading is the staff directory it has been since Phase 1. Writing is for
+         *     admins and owners, and the role tier is only the first gate: who may be
+         *     managed by whom is decided per row in `users.services`, which is also
+         *     where each row's `available_actions` come from (ADR-028).
+         *
+         *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+         *     switching someone off or on is an action with its own rules, and a
+         *     membership is never deleted from here.
+         */
         get: operations["users_memberships_list"];
         put?: never;
-        post?: never;
+        /**
+         * Invite someone to the team
+         * @description Who belongs to the current organization, and the team page's writes.
+         *
+         *     Reading is the staff directory it has been since Phase 1. Writing is for
+         *     admins and owners, and the role tier is only the first gate: who may be
+         *     managed by whom is decided per row in `users.services`, which is also
+         *     where each row's `available_actions` come from (ADR-028).
+         *
+         *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+         *     switching someone off or on is an action with its own rules, and a
+         *     membership is never deleted from here.
+         */
+        post: operations["users_memberships_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1612,8 +1683,122 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Who belongs to the current organization. Read-only in Phase 1. */
+        /**
+         * @description Who belongs to the current organization, and the team page's writes.
+         *
+         *     Reading is the staff directory it has been since Phase 1. Writing is for
+         *     admins and owners, and the role tier is only the first gate: who may be
+         *     managed by whom is decided per row in `users.services`, which is also
+         *     where each row's `available_actions` come from (ADR-028).
+         *
+         *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+         *     switching someone off or on is an action with its own rules, and a
+         *     membership is never deleted from here.
+         */
         get: operations["users_memberships_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change someone's role
+         * @description Who belongs to the current organization, and the team page's writes.
+         *
+         *     Reading is the staff directory it has been since Phase 1. Writing is for
+         *     admins and owners, and the role tier is only the first gate: who may be
+         *     managed by whom is decided per row in `users.services`, which is also
+         *     where each row's `available_actions` come from (ADR-028).
+         *
+         *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+         *     switching someone off or on is an action with its own rules, and a
+         *     membership is never deleted from here.
+         */
+        patch: operations["users_memberships_partial_update"];
+        trace?: never;
+    };
+    "/api/users/memberships/{id}/deactivate/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch someone's membership off
+         * @description Who belongs to the current organization, and the team page's writes.
+         *
+         *     Reading is the staff directory it has been since Phase 1. Writing is for
+         *     admins and owners, and the role tier is only the first gate: who may be
+         *     managed by whom is decided per row in `users.services`, which is also
+         *     where each row's `available_actions` come from (ADR-028).
+         *
+         *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+         *     switching someone off or on is an action with its own rules, and a
+         *     membership is never deleted from here.
+         */
+        post: operations["users_memberships_deactivate_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/memberships/{id}/reactivate/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Switch someone's membership back on
+         * @description Someone who had accepted is active again at once. A withdrawn invitation becomes an invitation again and a fresh link is sent.
+         */
+        post: operations["users_memberships_reactivate_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/memberships/{id}/resend-invite/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send the invitation again
+         * @description The link in the earlier email stops working.
+         */
+        post: operations["users_memberships_resend_invite_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/users/memberships/invite-options/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The roles the caller may invite someone as
+         * @description Served rather than derived on the page from the caller's own role:
+         *     which tiers an admin may hand out is the server's rule (ADR-023).
+         */
+        get: operations["users_memberships_invite_options_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2003,6 +2188,73 @@ export interface components {
             customer: string;
             jobs: string[];
         };
+        /** @description What an invitation link opens, shown to whoever holds it. */
+        Invitation: {
+            organization_name: string;
+            /** Format: email */
+            email: string;
+            role: components["schemas"]["RoleEnum"];
+            /** @description True when this address has never had a password. The accept call then needs a first name and a password; otherwise it needs neither. */
+            must_set_password: boolean;
+            first_name: string;
+            last_name: string;
+        };
+        InvitationAcceptRequest: {
+            token: string;
+            password?: string;
+            first_name?: string;
+            last_name?: string;
+        };
+        InvitationInspectRequest: {
+            token: string;
+        };
+        InviteOptions: {
+            roles: components["schemas"]["RoleEnum"][];
+        };
+        /**
+         * @description An invitation: an address and a role, and nothing else.
+         *
+         *     No name: an invited address may already belong to someone, and this
+         *     organization does not get to name them. They name themselves when they
+         *     accept. `customer` is not a choice; the portal is not handed out here.
+         */
+        InviteRequest: {
+            /** Format: email */
+            email: string;
+            role: components["schemas"]["InviteRoleEnum"];
+        };
+        /**
+         * @description * `owner` - Owner
+         *     * `admin` - Admin
+         *     * `dispatcher` - Dispatcher
+         *     * `cleaner` - Cleaner
+         * @enum {string}
+         */
+        InviteRoleEnum: "owner" | "admin" | "dispatcher" | "cleaner";
+        /** @description A team row, with the invitation link when the API is running locally. */
+        InvitedTeamMember: {
+            /** Format: uuid */
+            readonly id: string;
+            readonly organization: components["schemas"]["OrganizationSummary"];
+            /** Format: uuid */
+            readonly user: string;
+            readonly user_name: string;
+            /** Format: email */
+            readonly user_email: string;
+            readonly role: components["schemas"]["RoleEnum"];
+            readonly is_active: boolean;
+            readonly state: components["schemas"]["MembershipStateEnum"];
+            /** Format: date-time */
+            readonly invited_at: string | null;
+            /** Format: date-time */
+            readonly accepted_at: string | null;
+            /** Format: date-time */
+            readonly deactivated_at: string | null;
+            readonly available_actions: string[];
+            readonly assignable_roles: components["schemas"]["RoleEnum"][];
+            /** @description Local development only. Never present in a deployed environment. */
+            dev_link?: string;
+        };
         /**
          * @description The dispatcher's view of an invoice.
          *
@@ -2341,6 +2593,13 @@ export interface components {
             readonly role: components["schemas"]["RoleEnum"];
             readonly is_active: boolean;
         };
+        /**
+         * @description * `invited` - Invited
+         *     * `active` - Active
+         *     * `deactivated` - Deactivated
+         * @enum {string}
+         */
+        MembershipStateEnum: "invited" | "active" | "deactivated";
         MethodCollections: {
             payment_count: number;
             /** @description What settled invoices. Tips excluded. */
@@ -2621,21 +2880,6 @@ export interface components {
             previous?: string | null;
             results: components["schemas"]["JobPhoto"][];
         };
-        PaginatedMembershipList: {
-            /** @example 123 */
-            count: number;
-            /**
-             * Format: uri
-             * @example http://api.example.org/accounts/?offset=400&limit=100
-             */
-            next?: string | null;
-            /**
-             * Format: uri
-             * @example http://api.example.org/accounts/?offset=200&limit=100
-             */
-            previous?: string | null;
-            results: components["schemas"]["Membership"][];
-        };
         PaginatedPaymentList: {
             /** @example 123 */
             count: number;
@@ -2695,6 +2939,21 @@ export interface components {
              */
             previous?: string | null;
             results: components["schemas"]["ServiceLocation"][];
+        };
+        PaginatedTeamMemberList: {
+            /** @example 123 */
+            count: number;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=400&limit=100
+             */
+            next?: string | null;
+            /**
+             * Format: uri
+             * @example http://api.example.org/accounts/?offset=200&limit=100
+             */
+            previous?: string | null;
+            results: components["schemas"]["TeamMember"][];
         };
         PaginatedTimeEntryList: {
             /** @example 123 */
@@ -2812,6 +3071,14 @@ export interface components {
             notes?: string;
             /** @description User ids to put on a new job, so booking a visit with its crew is one request that either wholly happens or does not. Create only: the crew of an existing job changes through assign and unassign. */
             assignees?: string[];
+        };
+        /**
+         * @description The one thing a PATCH may change. `user`, `organization` and `is_active`
+         *     are not fields here, so sending them does nothing: activation has its own
+         *     actions, with their own rules.
+         */
+        PatchedMembershipRoleRequest: {
+            role?: components["schemas"]["RoleEnum"];
         };
         /**
          * @description The organization as its own admins see it.
@@ -3493,6 +3760,38 @@ export interface components {
             details_submitted: boolean;
             /** Format: date-time */
             connected_at: string | null;
+        };
+        /**
+         * @description A membership as the team page sees it: where it stands, and what the
+         *     caller may do to it.
+         *
+         *     `available_actions` and `assignable_roles` are worked out for whoever is
+         *     asking, from the same rules the writes enforce (`users.services`), so the
+         *     page draws its buttons from them and keeps no table of who outranks whom
+         *     (ADR-023, ADR-028). The session payload keeps the plain
+         *     `MembershipSerializer`: a person's own memberships have no caller to
+         *     judge them by.
+         */
+        TeamMember: {
+            /** Format: uuid */
+            readonly id: string;
+            readonly organization: components["schemas"]["OrganizationSummary"];
+            /** Format: uuid */
+            readonly user: string;
+            readonly user_name: string;
+            /** Format: email */
+            readonly user_email: string;
+            readonly role: components["schemas"]["RoleEnum"];
+            readonly is_active: boolean;
+            readonly state: components["schemas"]["MembershipStateEnum"];
+            /** Format: date-time */
+            readonly invited_at: string | null;
+            /** Format: date-time */
+            readonly accepted_at: string | null;
+            /** Format: date-time */
+            readonly deactivated_at: string | null;
+            readonly available_actions: string[];
+            readonly assignable_roles: components["schemas"]["RoleEnum"][];
         };
         /**
          * @description Base serializer for tenant-owned models.
@@ -6535,6 +6834,80 @@ export interface operations {
             };
         };
     };
+    users_invitations_accept_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationAcceptRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["InvitationAcceptRequest"];
+                "multipart/form-data": components["schemas"]["InvitationAcceptRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    users_invitations_inspect_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitationInspectRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["InvitationInspectRequest"];
+                "multipart/form-data": components["schemas"]["InvitationInspectRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitation"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
     users_logout_create: {
         parameters: {
             query?: never;
@@ -6619,6 +6992,7 @@ export interface operations {
                 limit?: number;
                 /** @description The initial index from which to return the results. */
                 offset?: number;
+                staff?: boolean;
             };
             header?: never;
             path?: never;
@@ -6631,7 +7005,48 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PaginatedMembershipList"];
+                    "application/json": components["schemas"]["PaginatedTeamMemberList"];
+                };
+            };
+        };
+    };
+    users_memberships_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["InviteRequest"];
+                "multipart/form-data": components["schemas"]["InviteRequest"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitedTeamMember"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
                 };
             };
         };
@@ -6653,7 +7068,184 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Membership"];
+                    "application/json": components["schemas"]["TeamMember"];
+                };
+            };
+        };
+    };
+    users_memberships_partial_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Membership. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PatchedMembershipRoleRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PatchedMembershipRoleRequest"];
+                "multipart/form-data": components["schemas"]["PatchedMembershipRoleRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMember"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    users_memberships_deactivate_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Membership. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMember"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    users_memberships_reactivate_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Membership. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitedTeamMember"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    users_memberships_resend_invite_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description A UUID string identifying this Membership. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitedTeamMember"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    users_memberships_invite_options_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InviteOptions"];
                 };
             };
         };

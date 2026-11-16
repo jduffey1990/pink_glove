@@ -1,0 +1,29 @@
+{% autoescape on %}
+<div style="font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; padding: 24px; color: #333; max-width: 640px;">
+  <p>Hi there,</p>
+
+  <p>{% if invited_by %}{{ invited_by }} has invited you{% else %}You have been invited{% endif %}
+     to join <strong>{{ organization_name }}</strong> on {{ site_name }}.
+     Your role will be <strong>{{ role }}</strong>.</p>
+
+  <p style="margin: 24px 0;">
+    <a href="{{ link }}"
+       style="background: #333; color: #fff; padding: 12px 20px; border-radius: 6px;
+              text-decoration: none; font-weight: 600; display: inline-block;">
+      Accept the invitation
+    </a>
+  </p>
+
+  <p>Or paste this into your browser:<br>
+     <span style="word-break: break-all;">{{ link }}</span></p>
+
+  <p>The link works once and expires in {{ ttl_days }} days. Accepting does
+     not sign you in: you will sign in afterwards with your email and
+     password.</p>
+
+  <p>If you were not expecting this, you can ignore this email. Nothing
+     happens unless the link is followed.</p>
+
+  <p>The {{ site_name }} team</p>
+</div>
+{% endautoescape %}

@@ -3700,6 +3700,90 @@ paths:
               schema:
                 $ref: '#/components/schemas/TimeEntry'
           description: ''
+  /api/users/invitations/accept/:
+    post:
+      operationId: users_invitations_accept_create
+      description: |-
+        Accept an invitation. Public, and it signs nobody in: the response is a
+        sentence, and the person then signs in the ordinary way and meets the
+        ordinary challenge (ADR-008).
+      summary: Accept an invitation
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationAcceptRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InvitationAcceptRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InvitationAcceptRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/invitations/inspect/:
+    post:
+      operationId: users_invitations_inspect_create
+      description: |-
+        What an invitation link opens, so the page can say which organization is
+        asking and whether a password is needed.
+
+        Public: the token is the credential. A POST with the token in the body,
+        like the magic link, so it is never part of a URL this API logs.
+      summary: Look at an invitation
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InvitationInspectRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InvitationInspectRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InvitationInspectRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invitation'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
   /api/users/logout/:
     post:
       operationId: users_logout_create
@@ -3785,7 +3869,18 @@ paths:
   /api/users/memberships/:
     get:
       operationId: users_memberships_list
-      description: Who belongs to the current organization. Read-only in Phase 1.
+      description: |-
+        Who belongs to the current organization, and the team page's writes.
+
+        Reading is the staff directory it has been since Phase 1. Writing is for
+        admins and owners, and the role tier is only the first gate: who may be
+        managed by whom is decided per row in `users.services`, which is also
+        where each row's `available_actions` come from (ADR-028).
+
+        There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+        switching someone off or on is an action with its own rules, and a
+        membership is never deleted from here.
+      summary: Who belongs to this organization
       parameters:
       - name: limit
         required: false
@@ -3799,6 +3894,10 @@ paths:
         description: The initial index from which to return the results.
         schema:
           type: integer
+      - in: query
+        name: staff
+        schema:
+          type: boolean
       tags:
       - users
       security:
@@ -3808,12 +3907,71 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedMembershipList'
+                $ref: '#/components/schemas/PaginatedTeamMemberList'
+          description: ''
+    post:
+      operationId: users_memberships_create
+      description: |-
+        Who belongs to the current organization, and the team page's writes.
+
+        Reading is the staff directory it has been since Phase 1. Writing is for
+        admins and owners, and the role tier is only the first gate: who may be
+        managed by whom is decided per row in `users.services`, which is also
+        where each row's `available_actions` come from (ADR-028).
+
+        There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+        switching someone off or on is an action with its own rules, and a
+        membership is never deleted from here.
+      summary: Invite someone to the team
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InviteRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/InviteRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/InviteRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitedTeamMember'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
           description: ''
   /api/users/memberships/{id}/:
     get:
       operationId: users_memberships_retrieve
-      description: Who belongs to the current organization. Read-only in Phase 1.
+      description: |-
+        Who belongs to the current organization, and the team page's writes.
+
+        Reading is the staff directory it has been since Phase 1. Writing is for
+        admins and owners, and the role tier is only the first gate: who may be
+        managed by whom is decided per row in `users.services`, which is also
+        where each row's `available_actions` come from (ADR-028).
+
+        There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+        switching someone off or on is an action with its own rules, and a
+        membership is never deleted from here.
       parameters:
       - in: path
         name: id
@@ -3831,7 +3989,200 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Membership'
+                $ref: '#/components/schemas/TeamMember'
+          description: ''
+    patch:
+      operationId: users_memberships_partial_update
+      description: |-
+        Who belongs to the current organization, and the team page's writes.
+
+        Reading is the staff directory it has been since Phase 1. Writing is for
+        admins and owners, and the role tier is only the first gate: who may be
+        managed by whom is decided per row in `users.services`, which is also
+        where each row's `available_actions` come from (ADR-028).
+
+        There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+        switching someone off or on is an action with its own rules, and a
+        membership is never deleted from here.
+      summary: Change someone's role
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Membership.
+        required: true
+      tags:
+      - users
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedMembershipRoleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedMembershipRoleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedMembershipRoleRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMember'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/memberships/{id}/deactivate/:
+    post:
+      operationId: users_memberships_deactivate_create
+      description: |-
+        Who belongs to the current organization, and the team page's writes.
+
+        Reading is the staff directory it has been since Phase 1. Writing is for
+        admins and owners, and the role tier is only the first gate: who may be
+        managed by whom is decided per row in `users.services`, which is also
+        where each row's `available_actions` come from (ADR-028).
+
+        There is no PUT and no DELETE. A PATCH changes the role and nothing else;
+        switching someone off or on is an action with its own rules, and a
+        membership is never deleted from here.
+      summary: Switch someone's membership off
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Membership.
+        required: true
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamMember'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/memberships/{id}/reactivate/:
+    post:
+      operationId: users_memberships_reactivate_create
+      description: Someone who had accepted is active again at once. A withdrawn invitation
+        becomes an invitation again and a fresh link is sent.
+      summary: Switch someone's membership back on
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Membership.
+        required: true
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitedTeamMember'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/memberships/{id}/resend-invite/:
+    post:
+      operationId: users_memberships_resend_invite_create
+      description: The link in the earlier email stops working.
+      summary: Send the invitation again
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this Membership.
+        required: true
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitedTeamMember'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/users/memberships/invite-options/:
+    get:
+      operationId: users_memberships_invite_options_retrieve
+      description: |-
+        Served rather than derived on the page from the caller's own role:
+        which tiers an admin may hand out is the server's rule (ADR-023).
+      summary: The roles the caller may invite someone as
+      tags:
+      - users
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteOptions'
           description: ''
   /api/users/session/:
     get:
@@ -4605,6 +4956,172 @@ components:
       required:
       - customer
       - jobs
+    Invitation:
+      type: object
+      description: What an invitation link opens, shown to whoever holds it.
+      properties:
+        organization_name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/RoleEnum'
+        must_set_password:
+          type: boolean
+          description: True when this address has never had a password. The accept
+            call then needs a first name and a password; otherwise it needs neither.
+        first_name:
+          type: string
+        last_name:
+          type: string
+      required:
+      - email
+      - first_name
+      - last_name
+      - must_set_password
+      - organization_name
+      - role
+    InvitationAcceptRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+      required:
+      - token
+    InvitationInspectRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          minLength: 1
+      required:
+      - token
+    InviteOptions:
+      type: object
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleEnum'
+      required:
+      - roles
+    InviteRequest:
+      type: object
+      description: |-
+        An invitation: an address and a role, and nothing else.
+
+        No name: an invited address may already belong to someone, and this
+        organization does not get to name them. They name themselves when they
+        accept. `customer` is not a choice; the portal is not handed out here.
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        role:
+          $ref: '#/components/schemas/InviteRoleEnum'
+      required:
+      - email
+      - role
+    InviteRoleEnum:
+      enum:
+      - owner
+      - admin
+      - dispatcher
+      - cleaner
+      type: string
+      description: |-
+        * `owner` - Owner
+        * `admin` - Admin
+        * `dispatcher` - Dispatcher
+        * `cleaner` - Cleaner
+    InvitedTeamMember:
+      type: object
+      description: A team row, with the invitation link when the API is running locally.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          allOf:
+          - $ref: '#/components/schemas/OrganizationSummary'
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/MembershipStateEnum'
+          readOnly: true
+        invited_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        accepted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        deactivated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        available_actions:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        assignable_roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+        dev_link:
+          type: string
+          description: Local development only. Never present in a deployed environment.
+      required:
+      - accepted_at
+      - assignable_roles
+      - available_actions
+      - deactivated_at
+      - id
+      - invited_at
+      - is_active
+      - organization
+      - role
+      - state
+      - user
+      - user_email
+      - user_name
     Invoice:
       type: object
       description: |-
@@ -5367,6 +5884,16 @@ components:
       - user
       - user_email
       - user_name
+    MembershipStateEnum:
+      enum:
+      - invited
+      - active
+      - deactivated
+      type: string
+      description: |-
+        * `invited` - Invited
+        * `active` - Active
+        * `deactivated` - Deactivated
     MethodCollections:
       type: object
       properties:
@@ -5903,29 +6430,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/JobPhoto'
-    PaginatedMembershipList:
-      type: object
-      required:
-      - count
-      - results
-      properties:
-        count:
-          type: integer
-          example: 123
-        next:
-          type: string
-          nullable: true
-          format: uri
-          example: http://api.example.org/accounts/?offset=400&limit=100
-        previous:
-          type: string
-          nullable: true
-          format: uri
-          example: http://api.example.org/accounts/?offset=200&limit=100
-        results:
-          type: array
-          items:
-            $ref: '#/components/schemas/Membership'
     PaginatedPaymentList:
       type: object
       required:
@@ -6018,6 +6522,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ServiceLocation'
+    PaginatedTeamMemberList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=400&limit=100
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?offset=200&limit=100
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TeamMember'
     PaginatedTimeEntryList:
       type: object
       required:
@@ -6210,6 +6737,15 @@ components:
           description: 'User ids to put on a new job, so booking a visit with its
             crew is one request that either wholly happens or does not. Create only:
             the crew of an existing job changes through assign and unassign.'
+    PatchedMembershipRoleRequest:
+      type: object
+      description: |-
+        The one thing a PATCH may change. `user`, `organization` and `is_active`
+        are not fields here, so sending them does nothing: activation has its own
+        actions, with their own rules.
+      properties:
+        role:
+          $ref: '#/components/schemas/RoleEnum'
     PatchedOrganizationRequest:
       type: object
       description: |-
@@ -7558,6 +8094,88 @@ components:
       - connected_at
       - details_submitted
       - state
+    TeamMember:
+      type: object
+      description: |-
+        A membership as the team page sees it: where it stands, and what the
+        caller may do to it.
+
+        `available_actions` and `assignable_roles` are worked out for whoever is
+        asking, from the same rules the writes enforce (`users.services`), so the
+        page draws its buttons from them and keeps no table of who outranks whom
+        (ADR-023, ADR-028). The session payload keeps the plain
+        `MembershipSerializer`: a person's own memberships have no caller to
+        judge them by.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        organization:
+          allOf:
+          - $ref: '#/components/schemas/OrganizationSummary'
+          readOnly: true
+        user:
+          type: string
+          format: uuid
+          readOnly: true
+        user_name:
+          type: string
+          readOnly: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+        role:
+          allOf:
+          - $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/MembershipStateEnum'
+          readOnly: true
+        invited_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        accepted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        deactivated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        available_actions:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        assignable_roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoleEnum'
+          readOnly: true
+      required:
+      - accepted_at
+      - assignable_roles
+      - available_actions
+      - deactivated_at
+      - id
+      - invited_at
+      - is_active
+      - organization
+      - role
+      - state
+      - user
+      - user_email
+      - user_name
     TimeEntry:
       type: object
       description: |-

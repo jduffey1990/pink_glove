@@ -56,5 +56,7 @@ REST_FRAMEWORK = {  # noqa: F405
         "login_account": "10000/hour",
         "pay_page": "10000/hour",
         "pay_checkout": "10000/hour",
+        "team_invite": "10000/hour",
+        "invite_accept": "10000/hour",
     },
 }

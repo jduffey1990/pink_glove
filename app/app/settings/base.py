@@ -195,6 +195,14 @@ REST_FRAMEWORK = {
         # opening Checkout sessions does not.
         "pay_page": "120/hour",
         "pay_checkout": "10/hour",
+        # Team management (ADR-028). Inviting, resending and re-inviting each
+        # put an email in a mailbox the caller names; keyed on the signed-in
+        # user. An owner setting up a crew sends a dozen, not hundreds.
+        "team_invite": "60/hour",
+        # The public invitation page, keyed on client IP: one look at the
+        # invitation and one acceptance per person, with room for a password
+        # the validators send back a few times.
+        "invite_accept": "30/hour",
     },
     # How many proxies sit in front of the app, which is how DRF decides which
     # entry of X-Forwarded-For to believe. Left unset, DRF keys throttles on the
@@ -243,6 +251,9 @@ SPECTACULAR_SETTINGS = {
         "StripeStateEnum": "organizations.enums.StripeState.choices",
         "BillingStateEnum": "organizations.enums.BillingState.choices",
         "NoticeLevelEnum": "organizations.enums.NoticeLevel.choices",
+        # A third field called "state": where a membership stands. Unnamed
+        # it would collide with the two above.
+        "MembershipStateEnum": "users.enums.MembershipState.choices",
         # A row's outcome in a customer import is a field called "action",
         # which would generate as "ActionEnum".
         "CustomerImportActionEnum": "customers.enums.ImportAction.choices",
