@@ -40,6 +40,17 @@ export type PaymentMethod = Schemas['PaymentMethodEnum']
 export type PaymentState = Schemas['PaymentStateEnum']
 export type BillableJob = Schemas['BillableJob']
 
+/** Reports: computed on the server, read here and never recomputed. */
+export type Timesheet = Schemas['Timesheet']
+export type TimesheetStaff = Schemas['TimesheetStaff']
+export type TimesheetEntry = Schemas['TimesheetEntry']
+export type Receivables = Schemas['Receivables']
+export type CustomerReceivable = Schemas['CustomerReceivable']
+export type Aging = Schemas['Aging']
+export type Collections = Schemas['Collections']
+export type MethodCollections = Schemas['MethodCollections']
+export type CollectionsTotals = Schemas['CollectionsTotals']
+
 /** Stripe Connect (Phase 4b). */
 export type StripeStatus = Schemas['StripeStatus']
 
