@@ -25,6 +25,7 @@ import type {
   JobStatus,
   MaterializeResult,
   Membership,
+  NewJobRequest,
   Organization,
   OrganizationRequest,
   Paginated,
@@ -81,7 +82,7 @@ export async function getJob (id: string): Promise<Job> {
   return data
 }
 
-export async function createJob (payload: JobRequest): Promise<Job> {
+export async function createJob (payload: NewJobRequest): Promise<Job> {
   const { data } = await api.post<Job>('/api/scheduling/jobs/', payload)
   return data
 }

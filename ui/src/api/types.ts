@@ -69,6 +69,13 @@ export type InvoiceAction
     | 'send'
     | 'record_payment'
 
+/**
+ * What the server says a dispatcher may do to this visit besides move its
+ * status. Same arrangement as `InvoiceAction`: the list arrives on the job as
+ * `available_actions` and is decided nowhere else (ADR-023, ADR-032).
+ */
+export type JobAction = 'edit' | 'delete'
+
 export type Customer = Schemas['Customer']
 export type ServiceLocation = Schemas['ServiceLocation']
 
@@ -93,6 +100,8 @@ export type ServiceLocationRequest = Schemas['PatchedServiceLocationRequest']
 export type CustomerRequest = Schemas['PatchedCustomerRequest']
 export type ServiceRequest = Schemas['PatchedServiceRequest']
 export type JobRequest = Schemas['PatchedJobRequest']
+/** Booking a visit: the same fields, with the ones a new job cannot lack required. */
+export type NewJobRequest = Schemas['JobRequest']
 export type InvoiceRequest = Schemas['PatchedInvoiceRequest']
 export type InvoiceLineRequest = Schemas['InvoiceLineRequest']
 export type PatchedInvoiceLineRequest = Schemas['PatchedInvoiceLineRequest']
