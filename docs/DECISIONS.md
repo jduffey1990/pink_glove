@@ -922,6 +922,24 @@ That table is a best guess, written before any real export from a business was a
 Owner and admin only: a dispatcher may add a customer by hand, not load a book.
 The response and the log never carry an access code (ADR-014, ADR-016): a row's outcome has a name, an address, a sentence and error messages, and the one log line is counts.
 
+**Amended (2026-11-16, decided by Jordan, before first use): a blank status imports as `active`.**
+A blank cell means "not given", so the serializer field's own default applies, with one exception.
+A blank `status` cell, or a file with no `status` column at all, makes the customer `active`, where the API's default is `lead`.
+A file of an existing customer book is a list of customers, and importing two hundred of them as leads would have every one of them to correct by hand.
+The default is one attribute on one row of the column table (`when_blank` in `customers/import_columns.py`), not a rule in the importer: the value is put in the row's data before the cells are read and then validated by `CustomerSerializer` like any typed one.
+A status that is given is kept as written, so `lead` stays `lead`, and one that is not a status is still a row error.
+It reaches only a customer the import creates: a customer already on file is never edited (decision 2), so an existing `lead` stays one.
+The template's hint for the column says so ("Blank is imported as active."), which is the server's copy.
+
+**Rejected -- leaving a blank status as `lead`.**
+What this first shipped with, on the reasoning that an import should behave exactly as the create path does.
+The create path's default answers "what is somebody who was just typed in", which is usually an enquiry.
+An import answers a different question.
+
+**Rejected -- changing the model's or the serializer's default to `active`.**
+It would make the import right by making the create path wrong: a customer added by hand from a phone call would become `active` with nobody having decided so.
+The default is the import's alone.
+
 **Rejected -- email as the only key, with a row that has none always created.**
 The obvious rule, and it makes a second import of the same file duplicate every customer without an email.
 A cleaning company's book is full of them.
@@ -956,7 +974,7 @@ Bounding the file instead (1 MB, 2000 rows) keeps it one request: 2000 rows plan
 Two different people with the same name, no email and the same phone (or no phone) are one customer to an import; the preview says "Another location for the customer on row N", which is where a person catches it.
 A customer whose email in the file differs from the one on file is a new customer.
 An address written two ways ("1 Elm St", "1 Elm Street") is two locations.
-A blank cell means "not given", so the field's own default applies: an imported customer with no `status` cell is a `lead`, exactly as one created through the API with no status is.
+A blank cell means "not given", so the field's own default applies, except `status` (see the amendment above): the same customer is `active` when imported with no status and `lead` when created through the API with none.
 A row's outcome shows its name and address cells, and a validation message for a choice column quotes the cell it refused.
 So a file whose columns are shifted can have a cell that was meant to be a code shown back, once, to the person who uploaded it: the server cannot tell a code from an address when it arrives under the wrong header.
 Cells under the three access-code headers themselves are never shown, and nothing from any row is logged.

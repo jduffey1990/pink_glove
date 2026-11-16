@@ -135,6 +135,21 @@ export function templateSummary (template: CustomerImportTemplate): string {
   return `${columns}Up to ${template.max_rows} rows and ${template.max_megabytes} MB, saved as CSV UTF-8.`
 }
 
+/**
+ * The columns the server has something to say about, with what it says.
+ *
+ * This is where a person learns the rules a file is held to, in the server's
+ * words: the choices a column takes, and what leaving one blank does (a blank
+ * status is imported as active, ADR-031). Columns with no hint are left out.
+ */
+export function columnHints (
+  template: CustomerImportTemplate,
+): { header: string, hint: string }[] {
+  return template.columns
+    .filter(column => column.hint !== '')
+    .map(column => ({ header: column.header, hint: column.hint }))
+}
+
 /** `importCustomers` from `api/endpoints`, passed in so the flow has a spec. */
 export type ImportUpload = (file: File, dryRun: boolean) => Promise<CustomerImportResult>
 

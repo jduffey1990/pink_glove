@@ -67,14 +67,22 @@ def required_headers() -> list[str]:
     return [column.header for column in COLUMNS if fields[column.target][column.field].required]
 
 
-def _hint(serializer_field) -> str:
+def _hint(column: Column, serializer_field) -> str:
+    """What to put in a column, and what leaving it blank does when that is not obvious."""
     if serializer_field.write_only:
-        return "Stored encrypted. It is not shown again after the import."
-    if isinstance(serializer_field, serializers.ChoiceField):
-        return "One of: " + ", ".join(str(choice) for choice in serializer_field.choices) + "."
-    if isinstance(serializer_field, serializers.BooleanField):
-        return "yes or no."
-    return str(serializer_field.help_text or "")
+        hint = "Stored encrypted. It is not shown again after the import."
+    elif isinstance(serializer_field, serializers.ChoiceField):
+        hint = "One of: " + ", ".join(str(choice) for choice in serializer_field.choices) + "."
+    elif isinstance(serializer_field, serializers.BooleanField):
+        hint = "yes or no."
+    else:
+        hint = str(serializer_field.help_text or "")
+
+    if column.when_blank:
+        # The import's own default (import_columns.py), told to the person
+        # filling the file in rather than discovered after the import.
+        hint = f"{hint} Blank is imported as {column.when_blank}.".strip()
+    return hint
 
 
 def template() -> dict:
@@ -98,7 +106,7 @@ def template() -> dict:
             {
                 "header": column.header,
                 "required": fields[column.target][column.field].required,
-                "hint": _hint(fields[column.target][column.field]),
+                "hint": _hint(column, fields[column.target][column.field]),
             }
             for column in COLUMNS
         ],
@@ -416,8 +424,15 @@ def _plan_row(
     context: dict,
 ) -> RowOutcome:
     data: dict[str, dict] = {CUSTOMER: {}, LOCATION: {}}
+    # The import's own defaults first (ADR-031: a blank status is `active`).
+    # Taken from the table rather than from the file's header, so a file with
+    # no such column gets them too. They go through the serializer like a
+    # typed value, and only reach a customer this import creates.
+    for column in COLUMNS:
+        if column.when_blank:
+            data[column.target][column.field] = column.when_blank
     for column, cell in zip(columns, cells, strict=False):
-        # A blank cell is "not given", so the field's own default applies.
+        # Otherwise a blank cell is "not given": the field's own default applies.
         if column is not None and cell:
             data[column.target][column.field] = cell
 

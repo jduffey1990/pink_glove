@@ -2689,6 +2689,14 @@ Location: `location_label`, `address_line1`, `address_line2`, `city`, `state`, `
 Required: `address_line1`, `city`, `state`, `postal_code`, and at least one of the three name columns per row.
 Headers match without case, with spaces and hyphens read as underscores.
 
+**Blank cells.**
+A blank cell is "not given", so the field's own default applies.
+One exception, decided by Jordan on 2026-11-16: a blank `status`, or a file with no `status` column, imports as `active`, because a customer book is customers and not leads.
+The API's own default for a customer created the normal way is still `lead`; the model and `CustomerSerializer` were not touched.
+It is one attribute, `when_blank`, on the `status` row of the column table in `customers/import_columns.py`.
+The value goes through the serializer like a typed one, a status that is given is kept as written, a bad one is still a row error, and a customer already on file is never made active.
+The template's hint for the column tells the person filling it in: "Blank is imported as active."
+
 **Matching.**
 One key per customer: the email without case, or with no email the whole name plus the phone's digits.
 A customer on file is never edited; they gain a location only at an address (line 1, line 2, postal code) they do not already have.
@@ -2703,19 +2711,20 @@ The worker timeout is 60 s.
 **Frontend.**
 An Import button on the Customers page for owner and admin opens `components/CustomerImportDialog.vue`: choose a file, preview, confirm, result, and the list reloads.
 The file is uploaded, never parsed in the browser.
+Under the file picker a closed "What goes in each column" disclosure lists the server's hint for each column that has one, which is where the uploader reads that a blank status is imported as active.
 The flow is `useCustomerImport` in `lib/customerImport.ts`; the template is saved by `lib/download.ts` from the text the API returns, because a plain link could not carry `X-Organization`.
 
 **Not looked at in a browser.**
-Nothing in this section was seen in a running browser: not the Import button, not the dialog, not the download, not 390px.
+Nothing in this section was seen in a running browser: not the Import button, not the dialog, not the column hints disclosure, not the download, not 390px.
 The dialog has a mounted spec that proves the markup is wired to the flow and shows the server's wording; it says nothing about layout.
 
-Backend 1049 → 1140. Frontend 131 → 180.
+Backend 1049 → 1154. Frontend 131 → 183.
 
 ### Phase gate
 
 **1. Test coverage.**
-`customers/tests/test_import.py`, 91 tests: each role on each side of the line for both endpoints (owner and admin in; dispatcher, cleaner, customer and anonymous out, for a dry run as well as a real import), a deactivated organization, the dry-run default with row counts before and after, all-or-nothing including a failure half way through the write, matching, re-import, the tenant boundary (an import in A creates nothing in B, matching never sees B, a forged `organization` in the form or as a column is inert), access codes absent from the response and the captured logs and present through the model, the raw column and the audited reveal, the file hygiene cases, the template (which must import as it stands), and two identical runs compared byte for byte.
-Each safeguard was broken on purpose once to confirm a test goes red: the dry-run default, the transaction, the tenant filter in matching, writing on a dry run, writing despite an error row, logging a row, echoing a code, reading `organization` from the form.
+`customers/tests/test_import.py`, 105 tests: each role on each side of the line for both endpoints (owner and admin in; dispatcher, cleaner, customer and anonymous out, for a dry run as well as a real import), a deactivated organization, the dry-run default with row counts before and after, all-or-nothing including a failure half way through the write, the import's status default (blank and missing are `active`, a given status is kept, the preview and the import agree, an existing customer is untouched, the create path still says `lead`), matching, re-import, the tenant boundary (an import in A creates nothing in B, matching never sees B, a forged `organization` in the form or as a column is inert), access codes absent from the response and the captured logs and present through the model, the raw column and the audited reveal, the file hygiene cases, the template (which must import as it stands), and two identical runs compared byte for byte.
+Each safeguard was broken on purpose once to confirm a test goes red: the dry-run default, the transaction, the tenant filter in matching, writing on a dry run, writing despite an error row, logging a row, echoing a code, reading `organization` from the form, removing the status default, and letting that default override a status that was given.
 Frontend: `lib/customerImport.spec.ts` (the flow and the arranging), `lib/download.spec.ts`, `api/endpoints.spec.ts` (what `dry_run` puts on the wire), `components/CustomerImportDialog.spec.ts` (mounted).
 *Gaps left open:*
 no browser has seen any of the UI, at any width;

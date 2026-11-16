@@ -17,6 +17,15 @@ What is deliberately NOT here:
 - **`organization` and `user`.** The tenant is stamped from the request
   (invariant 2) and a portal login is never linked by a spreadsheet.
 
+What IS here, besides the headers, is the one rule an import has that the
+create path does not: `when_blank`. A blank cell normally means "not given",
+so the field's own default applies. A column may instead name the value an
+import gives it, and one does: a blank or missing `status` is `active`, where
+the API's default is `lead`, because a file of an existing customer book is a
+list of customers, not of leads (decided by Jordan, ADR-031). That value still
+goes through the serializer like any typed one; this is a default, not a
+second copy of the validation.
+
 One row is one customer and one service location. The three access columns are
 encrypted and write-only (ADR-014): the example cells for them are blank on
 purpose, so a template passed around the office never carries a real code.
@@ -24,6 +33,8 @@ purpose, so a template passed around the office never carries a real code.
 
 import re
 from dataclasses import dataclass
+
+from customers.enums import CustomerStatus
 
 CUSTOMER = "customer"
 LOCATION = "location"
@@ -45,6 +56,10 @@ class Column:
     field: str
     #: The cell in the template's one example row.
     example: str = ""
+    #: What a blank cell, or a file without this column, imports as. Empty
+    #: means "not given": the serializer field's own default applies. Only
+    #: for a customer the import creates; one already on file is never edited.
+    when_blank: str = ""
 
 
 COLUMNS: tuple[Column, ...] = (
@@ -54,7 +69,9 @@ COLUMNS: tuple[Column, ...] = (
     Column("email", CUSTOMER, "email", "sample.customer@example.com"),
     Column("phone", CUSTOMER, "phone", "303-555-0100"),
     Column("preferred_contact_method", CUSTOMER, "preferred_contact_method", "email"),
-    Column("status", CUSTOMER, "status", "active"),
+    # The one import default (see the module docstring). An explicit `lead`
+    # is honoured; only a blank or missing cell becomes `active`.
+    Column("status", CUSTOMER, "status", "active", when_blank=CustomerStatus.ACTIVE.value),
     Column("source", CUSTOMER, "source", "Referral"),
     Column("customer_notes", CUSTOMER, "notes", "Prefers mornings."),
     Column("billing_line1", CUSTOMER, "billing_line1"),

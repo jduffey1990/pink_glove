@@ -27,6 +27,11 @@ const TEMPLATE: CustomerImportTemplate = {
   csv: 'first_name,address_line1\r\nSample,100 Example St\r\n',
   columns: [
     { header: 'first_name', required: false, hint: '' },
+    {
+      header: 'status',
+      required: false,
+      hint: 'One of: lead, active, inactive, archived. Blank is imported as active.',
+    },
     { header: 'address_line1', required: true, hint: '' },
   ],
   max_rows: 2000,
@@ -126,6 +131,17 @@ describe('CustomerImportDialog', () => {
     expect(screen()).toContain('Up to 2000 rows and 1 MB')
     expect(button('Preview').disabled).toBe(true)
     expect(importCustomers).not.toHaveBeenCalled()
+  })
+
+  it('says what a blank status does, in the server\'s words', async () => {
+    await open()
+
+    const hints = document.body.querySelector('details')
+    expect(hints?.textContent).toContain(
+      'status: One of: lead, active, inactive, archived. Blank is imported as active.',
+    )
+    // Only the columns the server has a hint for.
+    expect(hints?.textContent).not.toContain('first_name')
   })
 
   it('downloads the template the server sent', async () => {

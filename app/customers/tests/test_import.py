@@ -27,7 +27,7 @@ from rest_framework import serializers as drf_serializers
 from rest_framework.test import APIClient
 
 from customers import services
-from customers.enums import ImportAction
+from customers.enums import CustomerStatus, ImportAction
 from customers.import_columns import BY_HEADER, COLUMNS, CUSTOMER, LOCATION, MAX_ROWS
 from customers.models import Customer, ServiceLocation
 from customers.serializers import CustomerSerializer, ImportedLocationSerializer
@@ -281,11 +281,11 @@ class TestRealImport:
 
     def test_a_blank_cell_takes_the_fields_own_default(self, authed_client):
         """Blank is "not given", not an empty string pushed at a choice field."""
-        send(authed_client, [row(status="", preferred_contact_method="")], dry_run=False)
+        send(authed_client, [row(preferred_contact_method="", has_pets="")], dry_run=False)
 
-        customer = Customer.objects.get()
-        assert customer.status == Customer._meta.get_field("status").default
-        assert customer.preferred_contact_method == "email"
+        field = Customer._meta.get_field("preferred_contact_method")
+        assert Customer.objects.get().preferred_contact_method == field.default
+        assert ServiceLocation.objects.get().has_pets is False
 
     def test_one_bad_row_means_nothing_is_written(self, authed_client):
         response = send(
@@ -392,6 +392,115 @@ class TestRealImport:
 
         assert response.status_code == 400
         assert "file" in response.json()
+
+
+@pytest.mark.django_db
+class TestImportedStatus:
+    """
+    The one default an import has that the create path does not (ADR-031): a
+    blank or missing status is `active`, because a customer book is customers.
+    The API's own default stays `lead`.
+    """
+
+    def test_a_blank_status_cell_is_an_active_customer(self, authed_client):
+        response = send(authed_client, [row(status="")], dry_run=False)
+
+        assert response.status_code == 200
+        assert Customer.objects.get().status == CustomerStatus.ACTIVE
+
+    def test_a_file_with_no_status_column_is_active_customers_too(self, authed_client):
+        book = [row()]
+        assert "status" not in as_csv(book).splitlines()[0]
+
+        send(authed_client, book, dry_run=False)
+
+        assert Customer.objects.get().status == CustomerStatus.ACTIVE
+
+    @pytest.mark.parametrize("status", ["lead", "active", "inactive", "archived"])
+    def test_a_status_that_is_given_is_kept_as_written(self, authed_client, status):
+        send(authed_client, [row(status=status)], dry_run=False)
+
+        assert Customer.objects.get().status == status
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_a_status_that_is_not_one_is_still_a_row_error(self, authed_client, dry_run):
+        response = send(authed_client, [row(status="vip")], dry_run=dry_run)
+
+        assert actions(response) == [ImportAction.ERROR]
+        assert response.json()["rows"][0]["errors"] == [
+            {"column": "status", "message": '"vip" is not a valid choice.'}
+        ]
+        assert stored() == (0, 0)
+
+    def test_the_preview_and_the_import_say_the_same_thing(self, authed_client):
+        book = [row(status=""), row(email="b@example.com", status="lead")]
+
+        preview = send(authed_client, book, dry_run=True)
+        assert stored() == (0, 0)
+        real = send(authed_client, book, dry_run=False)
+
+        assert preview.status_code == real.status_code == 200
+        assert preview.json()["rows"] == real.json()["rows"]
+        assert preview.json()["totals"] == real.json()["totals"]
+        assert list(
+            Customer.objects.order_by("created_at", "id").values_list("email", "status")
+        ) == [("dana@example.com", "active"), ("b@example.com", "lead")]
+
+    def test_importing_a_file_of_blank_statuses_twice_adds_and_changes_nothing(self, authed_client):
+        book = [row(status=""), row(email="b@example.com", status="")]
+        send(authed_client, book, dry_run=False)
+        before = list(Customer.objects.order_by("id").values_list("id", "status", "updated_at"))
+
+        second = send(authed_client, book, dry_run=False)
+
+        assert actions(second) == [ImportAction.SKIP, ImportAction.SKIP]
+        assert stored() == (2, 2)
+        assert (
+            list(Customer.objects.order_by("id").values_list("id", "status", "updated_at"))
+            == before
+        )
+
+    def test_a_customer_already_on_file_is_not_made_active(self, authed_client, organization):
+        """The default is for customers the import creates. It never edits one."""
+        existing = Customer.objects.create(
+            organization=organization,
+            first_name="Dana",
+            email="dana@example.com",
+            status=CustomerStatus.LEAD,
+        )
+
+        response = send(authed_client, [row(status="")], dry_run=False)
+
+        assert actions(response) == [ImportAction.ADD_LOCATION]
+        existing.refresh_from_db()
+        assert existing.status == CustomerStatus.LEAD
+
+    def test_the_create_path_still_defaults_to_lead(self, authed_client):
+        """Imports only: the API's own default is untouched."""
+        response = authed_client.post(
+            reverse("customers:customer-list"), {"first_name": "Dana"}, format="json"
+        )
+
+        assert response.status_code == 201
+        assert response.json()["status"] == CustomerStatus.LEAD
+        assert Customer._meta.get_field("status").default == CustomerStatus.LEAD
+
+    def test_the_template_says_what_a_blank_status_means(self, authed_client):
+        hints = {
+            column["header"]: column["hint"]
+            for column in authed_client.get(TEMPLATE_URL).json()["columns"]
+        }
+
+        assert hints["status"] == (
+            "One of: lead, active, inactive, archived. Blank is imported as active."
+        )
+
+    def test_status_is_the_only_import_default_and_it_is_a_valid_one(self):
+        """A second one is a decision, and a default must pass its own field."""
+        defaults = {column.header: column.when_blank for column in COLUMNS if column.when_blank}
+
+        assert defaults == {"status": CustomerStatus.ACTIVE.value}
+        assert defaults["status"] in CustomerSerializer().fields["status"].choices
 
 
 @pytest.mark.django_db
@@ -982,7 +1091,7 @@ class TestTemplate:
             for column in authed_client.get(TEMPLATE_URL).json()["columns"]
         }
 
-        assert hints["status"] == "One of: lead, active, inactive, archived."
+        assert hints["preferred_contact_method"] == "One of: email, sms, phone."
         assert hints["has_pets"] == "yes or no."
         assert hints["gate_code"] == "Stored encrypted. It is not shown again after the import."
 

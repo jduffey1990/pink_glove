@@ -6,6 +6,7 @@ import type {
 import { AxiosError, type AxiosResponse } from 'axios'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  columnHints,
   errorText,
   groupRows,
   importFailure,
@@ -235,6 +236,35 @@ describe('templateSummary', () => {
   it('says nothing about required columns when there are none', () => {
     const none = { ...template, columns: [{ header: 'first_name', required: false, hint: '' }] }
     expect(templateSummary(none)).toBe('Up to 2000 rows and 1 MB, saved as CSV UTF-8.')
+  })
+})
+
+describe('columnHints', () => {
+  const template: CustomerImportTemplate = {
+    filename: 'customer-import-template.csv',
+    csv: 'first_name,status\r\nSample,active\r\n',
+    columns: [
+      { header: 'first_name', required: false, hint: '' },
+      {
+        header: 'status',
+        required: false,
+        hint: 'One of: lead, active. Blank is imported as active.',
+      },
+      { header: 'has_pets', required: false, hint: 'yes or no.' },
+    ],
+    max_rows: 2000,
+    max_megabytes: 1,
+  }
+
+  it('keeps the columns the server said something about, in order, word for word', () => {
+    expect(columnHints(template)).toEqual([
+      { header: 'status', hint: 'One of: lead, active. Blank is imported as active.' },
+      { header: 'has_pets', hint: 'yes or no.' },
+    ])
+  })
+
+  it('is empty when the server gave no hints', () => {
+    expect(columnHints({ ...template, columns: [template.columns[0]!] })).toEqual([])
   })
 })
 

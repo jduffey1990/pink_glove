@@ -20,6 +20,7 @@
   import { ref, watch } from 'vue'
   import { fetchCustomerImportTemplate, importCustomers } from '@/api/endpoints'
   import {
+    columnHints,
     errorText,
     importTone,
     rowHeading,
@@ -107,6 +108,19 @@
           <p v-if="template" class="text-caption text-medium-emphasis wrap">
             {{ templateSummary(template) }}
           </p>
+
+          <!--
+            The server's hint for each column: its choices, and what a blank
+            cell does. Closed by default, because thirty lines of it would
+            push the file picker off a phone.
+          -->
+          <details v-if="template" class="text-caption text-medium-emphasis mt-2 wrap">
+            <summary>What goes in each column</summary>
+
+            <div v-for="column in columnHints(template)" :key="column.header" class="mt-1">
+              <strong>{{ column.header }}</strong>: {{ column.hint }}
+            </div>
+          </details>
 
           <v-btn
             class="mt-2 px-0"
