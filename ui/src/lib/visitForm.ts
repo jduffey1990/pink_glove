@@ -145,11 +145,23 @@ export function priceOf (form: VisitForm): { cents: number } | 'blank' | 'invali
   return Number.isNaN(cents) ? 'invalid' : { cents }
 }
 
-/** Something the form can say without asking the server: the price is not a number. */
-export function localErrors (form: VisitForm): VisitErrors {
-  return priceOf(form) === 'invalid'
-    ? { fields: { price: ['Enter an amount in dollars, like 150 or 150.00.'] }, general: [] }
-    : NO_VISIT_ERRORS
+/**
+ * What the form can say without asking the server, shown as it is typed.
+ *
+ * Only whether the price can be read as a number at all. `existing` is an
+ * edit: a job always has a price, so a blank one there is not a request for
+ * a quote and cannot be sent.
+ */
+export function localErrors (form: VisitForm, { existing = false } = {}): VisitErrors {
+  const price = priceOf(form)
+
+  if (price === 'invalid') {
+    return { fields: { price: ['Enter an amount in dollars, like 150 or 150.00.'] }, general: [] }
+  }
+  if (price === 'blank' && existing) {
+    return { fields: { price: ['Enter a price. Use 0 for a visit that is not charged.'] }, general: [] }
+  }
+  return NO_VISIT_ERRORS
 }
 
 /**

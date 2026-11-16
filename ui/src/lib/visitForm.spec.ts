@@ -175,6 +175,11 @@ describe('localErrors', () => {
     expect(localErrors(filled({ price: 'abc' })).fields.price).toHaveLength(1)
   })
 
+  it('wants a price on an existing visit, where blank is not a request for a quote', () => {
+    expect(localErrors(filled({ price: '' }), { existing: true }).fields.price).toHaveLength(1)
+    expect(localErrors(filled({ price: '0' }), { existing: true }).fields).toEqual({})
+  })
+
   it('says nothing about a blank or a real one', () => {
     expect(localErrors(filled({ price: '' })).fields).toEqual({})
     expect(localErrors(filled({ price: '150' })).fields).toEqual({})
