@@ -480,6 +480,15 @@ class TestWhatEachRowOffers:
         assert {row["role"] for row in staff} == set(STAFF)
         assert {row["role"] for row in customers} == {Role.CUSTOMER}
 
+    def test_the_filter_cannot_show_a_cleaner_the_customers(self, team):
+        """It narrows what the caller may already see. It never widens it."""
+        client = client_for(team[Role.CLEANER])
+
+        assert client.get(LIST, {"staff": "false"}).json()["results"] == []
+        assert {row["role"] for row in client.get(LIST, {"staff": "true"}).json()["results"]} == (
+            set(STAFF)
+        )
+
     def test_the_list_costs_the_same_however_long_it_is(
         self, team, organization, django_assert_max_num_queries
     ):

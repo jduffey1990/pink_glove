@@ -15,6 +15,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createVuetify } from 'vuetify'
 import { api } from '@/api/client'
+import { ORGANIZATION, page, stubResizeObserver, teamRow } from '@/lib/team.fixtures'
 import { useSessionStore } from '@/stores/session'
 import TeamPage from './TeamPage.vue'
 
@@ -23,36 +24,11 @@ const OPTIONS = '/api/users/memberships/invite-options/'
 
 let mock: MockAdapter
 
-const organization = {
-  id: 'org-a',
-  name: 'Sparkle Clean',
-  slug: 'sparkle-clean',
-  timezone: 'America/Denver',
-  primary_color: '',
-  logo: null,
-}
-
-function row (id: string, overrides: Record<string, unknown> = {}) {
-  return {
-    id,
-    organization,
-    user: `user-${id}`,
-    user_name: `Person ${id}`,
-    user_email: `${id}@example.test`,
-    role: 'cleaner',
-    is_active: true,
-    state: 'active',
-    invited_at: null,
-    accepted_at: null,
-    deactivated_at: null,
-    available_actions: [],
-    assignable_roles: [],
-    ...overrides,
-  }
-}
+const organization = ORGANIZATION
+const row = teamRow
 
 async function mountPage (rows: unknown[], roles: string[], role = 'owner') {
-  mock.onGet(LIST).reply(200, { count: rows.length, next: null, previous: null, results: rows })
+  mock.onGet(LIST).reply(200, page(rows))
   mock.onGet(OPTIONS).reply(200, { roles })
   mock.onGet('/api/users/session/').reply(200, {
     id: 'user-me',
@@ -81,12 +57,7 @@ function menuButtons (wrapper: Awaited<ReturnType<typeof mountPage>>) {
 }
 
 beforeEach(() => {
-  // Vuetify measures things; jsdom has nothing to measure with.
-  globalThis.ResizeObserver ??= class {
-    observe () {}
-    unobserve () {}
-    disconnect () {}
-  }
+  stubResizeObserver()
   mock = new MockAdapter(api)
 })
 

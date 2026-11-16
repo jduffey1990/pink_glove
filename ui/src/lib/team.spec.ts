@@ -20,31 +20,14 @@ import {
   sortTeam,
   TEAM_ACTION_LOOK,
 } from './team'
+import { teamRow } from './team.fixtures'
 
-function row (overrides: Partial<TeamMember> = {}): TeamMember {
-  return {
-    id: 'm-1',
-    organization: {
-      id: 'org-a',
-      name: 'Sparkle Clean',
-      slug: 'sparkle-clean',
-      timezone: 'America/Denver',
-      primary_color: '',
-      logo: null,
-    },
-    user: 'u-1',
+function row (overrides: Record<string, unknown> = {}): TeamMember {
+  return teamRow('m-1', {
     user_name: 'Maria Lopez',
     user_email: 'maria@example.test',
-    role: 'cleaner',
-    is_active: true,
-    state: 'active',
-    invited_at: null,
-    accepted_at: null,
-    deactivated_at: null,
-    available_actions: [],
-    assignable_roles: [],
     ...overrides,
-  } as TeamMember
+  })
 }
 
 function failure (status: number, data: unknown): AxiosError {

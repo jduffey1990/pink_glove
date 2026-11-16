@@ -11,6 +11,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { api } from '@/api/client'
 import { statusOf } from '@/api/errors'
+import { page, teamRow } from '@/lib/team.fixtures'
 import { useTeamStore } from './team'
 
 const LIST = '/api/users/memberships/'
@@ -18,34 +19,13 @@ const OPTIONS = '/api/users/memberships/invite-options/'
 
 let mock: MockAdapter
 
+/** A row an owner could act on, which is what most of these start from. */
 function row (id: string, overrides: Record<string, unknown> = {}) {
-  return {
-    id,
-    organization: {
-      id: 'org-a',
-      name: 'Sparkle Clean',
-      slug: 'sparkle-clean',
-      timezone: 'America/Denver',
-      primary_color: '',
-      logo: null,
-    },
-    user: `user-${id}`,
-    user_name: `Person ${id}`,
-    user_email: `${id}@example.test`,
-    role: 'cleaner',
-    is_active: true,
-    state: 'active',
-    invited_at: null,
-    accepted_at: null,
-    deactivated_at: null,
+  return teamRow(id, {
     available_actions: ['change_role', 'deactivate'],
     assignable_roles: ['dispatcher'],
     ...overrides,
-  }
-}
-
-function page (rows: unknown[]) {
-  return { count: rows.length, next: null, previous: null, results: rows }
+  })
 }
 
 beforeEach(() => {

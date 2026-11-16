@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { createVuetify } from 'vuetify'
 import { api } from '@/api/client'
+import { stubResizeObserver } from '@/lib/team.fixtures'
 import AcceptInvitePage from './AcceptInvitePage.vue'
 import ForgotPasswordPage from './ForgotPasswordPage.vue'
 import ResetPasswordPage from './ResetPasswordPage.vue'
@@ -69,11 +70,7 @@ function invitation (overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
-  globalThis.ResizeObserver ??= class {
-    observe () {}
-    unobserve () {}
-    disconnect () {}
-  }
+  stubResizeObserver()
   mock = new MockAdapter(api)
 })
 
