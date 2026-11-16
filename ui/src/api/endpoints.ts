@@ -717,7 +717,8 @@ export async function resendInvite (id: string): Promise<InvitedTeamMember> {
 
 /**
  * What an invitation link opens. The token goes in the body, never in the
- * URL of an API call, so it does not end up in a server log.
+ * URL of an API call. (The page's own address carries it, as the emailed
+ * link has to; ADR-028 says what that costs.)
  */
 export async function inspectInvitation (token: string): Promise<Invitation> {
   const { data } = await api.post<Invitation>('/api/users/invitations/inspect/', { token })

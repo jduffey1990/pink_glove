@@ -310,7 +310,9 @@ class InvitationInspectView(APIView):
     asking and whether a password is needed.
 
     Public: the token is the credential. A POST with the token in the body,
-    like the magic link, so it is never part of a URL this API logs.
+    like the magic link, so no API call carries it in a URL. The page's own
+    address still does (`/accept-invite/<token>`), and a deployed server
+    writes that to its access log: see ADR-028 for why that is tolerated.
     """
 
     permission_classes = [AllowAny]
