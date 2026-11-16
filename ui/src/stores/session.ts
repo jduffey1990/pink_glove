@@ -131,6 +131,20 @@ export const useSessionStore = defineStore('session', () => {
     () => isAuthenticated.value && memberships.value.length > 1 && organization.value === null,
   )
 
+  /**
+   * Signed in, and active in no organization: deactivated everywhere, or an
+   * invitation not yet accepted (ADR-028).
+   *
+   * The session lists only memberships the server would resolve, so for this
+   * person the list is empty and there is no role. Every screen needs one,
+   * and without this the router bounces between `home` and `schedule` until
+   * it gives up. A superuser is left out: they act on organizations by
+   * header and never had a membership to lose.
+   */
+  const hasNoOrganization = computed(
+    () => isAuthenticated.value && memberships.value.length === 0 && !user.value?.is_superuser,
+  )
+
   function clear (): void {
     user.value = null
     devCode.value = null
@@ -233,6 +247,7 @@ export const useSessionStore = defineStore('session', () => {
     isActive,
     billing,
     needsOrganizationChoice,
+    hasNoOrganization,
     boot,
     refresh,
     login,

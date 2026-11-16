@@ -136,6 +136,16 @@
             Sign in
           </v-btn>
         </v-form>
+
+        <!-- Outside the form, so Enter in a field never lands here. -->
+        <v-btn
+          block
+          class="mt-2"
+          variant="text"
+          @click="router.push({ name: 'forgot-password' })"
+        >
+          Forgot password?
+        </v-btn>
       </v-card-text>
     </v-card>
   </v-container>
