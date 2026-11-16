@@ -203,6 +203,14 @@ REST_FRAMEWORK = {
         # invitation and one acceptance per person, with room for a password
         # the validators send back a few times.
         "invite_accept": "30/hour",
+        # Staff password reset (ADR-028). Asking is limited per client IP and,
+        # separately, per address asked about (`PasswordResetAccountThrottle`),
+        # which is what stops a rotating guesser flooding one mailbox. The
+        # per-address rate is the lower one: nobody needs four reset emails.
+        "password_reset": "5/hour",
+        "password_reset_account": "3/hour",
+        # Per client IP. Room for a new password the validators send back.
+        "password_reset_confirm": "10/hour",
     },
     # How many proxies sit in front of the app, which is how DRF decides which
     # entry of X-Forwarded-For to believe. Left unset, DRF keys throttles on the

@@ -95,6 +95,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/password-reset/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a password reset link
+         * @description Ask for a password reset link. Staff only; customers use magic links.
+         *
+         *     Always 202 with the same body, whether the address is staff, a customer
+         *     or nobody at all, and it takes the same time too: the view does not look
+         *     the account up. It hands the address to a worker, which decides and sends
+         *     (`two_factor.tasks.send_password_reset`).
+         *
+         *     Throttled twice: per client address, and per address asked about, so
+         *     neither one machine nor many can bury a person in reset emails.
+         */
+        post: operations["auth_password_reset_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/password-reset/confirm/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set a new password with a reset link
+         * @description Set a new password with a reset link. Public, and it signs nobody in.
+         *
+         *     On success every open session, trusted device and pending sign-in code
+         *     for the account is gone (`services.reset_password`), and the next
+         *     sign-in is password and code like any other.
+         */
+        post: operations["auth_password_reset_confirm_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/resend/": {
         parameters: {
             query?: never;
@@ -2970,6 +3022,23 @@ export interface components {
             previous?: string | null;
             results: components["schemas"]["TimeEntry"][];
         };
+        PasswordResetConfirmRequest: {
+            token: string;
+            password: string;
+        };
+        PasswordResetRequestRequest: {
+            /** Format: email */
+            email: string;
+        };
+        /**
+         * @description Always the same body, whatever the address: unknown, a customer, staff.
+         *     A different one would make this an account-enumeration oracle.
+         */
+        PasswordResetSent: {
+            detail: string;
+            /** @description Local development only. Never present in a deployed environment. */
+            dev_link?: string;
+        };
         /**
          * @description Base serializer for tenant-owned models.
          *
@@ -4016,6 +4085,64 @@ export interface operations {
                 };
             };
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    auth_password_reset_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetRequestRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PasswordResetRequestRequest"];
+                "multipart/form-data": components["schemas"]["PasswordResetRequestRequest"];
+            };
+        };
+        responses: {
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PasswordResetSent"];
+                };
+            };
+        };
+    };
+    auth_password_reset_confirm_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordResetConfirmRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PasswordResetConfirmRequest"];
+                "multipart/form-data": components["schemas"]["PasswordResetConfirmRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

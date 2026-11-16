@@ -27,6 +27,29 @@ class VerifySerializer(serializers.Serializer):
     )
 
 
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class PasswordResetSentSerializer(DetailSerializer):
+    """
+    Always the same body, whatever the address: unknown, a customer, staff.
+    A different one would make this an account-enumeration oracle.
+    """
+
+    dev_link = serializers.CharField(
+        required=False,
+        help_text="Local development only. Never present in a deployed environment.",
+    )
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    password = serializers.CharField(
+        write_only=True, trim_whitespace=False, style={"input_type": "password"}
+    )
+
+
 class ChallengeIssuedSerializer(DetailSerializer):
     """202 body: a code went out and the client should collect it."""
 
