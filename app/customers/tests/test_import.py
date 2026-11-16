@@ -23,6 +23,7 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.urls import reverse
+from rest_framework import serializers as drf_serializers
 from rest_framework.test import APIClient
 
 from customers import services
@@ -333,6 +334,31 @@ class TestRealImport:
         body = send(authed_client, [row(first_name="", last_name="")], dry_run=False).json()
 
         assert body["rows"][0]["errors"] == [{"column": "", "message": expected}]
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_an_error_on_a_field_no_column_maps_to_still_stops_the_row(
+        self, authed_client, monkeypatch, dry_run
+    ):
+        """
+        A rule added to the create path later may object to a field the file
+        has no column for. The row is still an error and still says why:
+        reading only the mapped columns' errors would call it importable.
+        """
+
+        def refuse(self, attrs):
+            raise drf_serializers.ValidationError({"user": ["That login is taken."]})
+
+        monkeypatch.setattr(CustomerSerializer, "validate", refuse)
+
+        response = send(authed_client, [row()], dry_run=dry_run)
+
+        assert response.status_code == (200 if dry_run else 400)
+        assert actions(response) == [ImportAction.ERROR]
+        assert response.json()["can_commit"] is False
+        assert response.json()["rows"][0]["errors"] == [
+            {"column": "", "message": "That login is taken."}
+        ]
+        assert stored() == (0, 0)
 
     def test_a_failure_while_writing_rolls_the_whole_import_back(self, authed_client, monkeypatch):
         """
@@ -788,6 +814,27 @@ class TestTheFile:
         assert response.status_code == 200
         assert response.json()["ignored_columns"] == ["Balance Due", "favourite colour"]
         assert actions(response) == [ImportAction.CREATE_CUSTOMER]
+
+    def test_a_column_with_no_header_is_reported_by_its_position(self, authed_client):
+        content = (
+            "first_name,,address_line1,city,state,postal_code\r\n"
+            "Dana,stray,1 Elm St,Denver,CO,80202\r\n"
+        )
+
+        response = send(authed_client, content)
+
+        assert response.json()["ignored_columns"] == ["(column 2, no header)"]
+        assert actions(response) == [ImportAction.CREATE_CUSTOMER]
+
+    def test_a_file_the_csv_reader_cannot_take_is_refused(self, authed_client):
+        """One cell past the reader's own field limit, well inside the size cap."""
+        content = as_csv([row(customer_notes="x" * 200_000)])
+
+        response = send(authed_client, content, dry_run=False)
+
+        assert response.status_code == 400
+        assert response.json()["file"] == ["This file could not be read as CSV."]
+        assert stored() == (0, 0)
 
     def test_a_column_given_twice_is_refused(self, authed_client):
         content = (

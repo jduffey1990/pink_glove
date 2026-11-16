@@ -327,16 +327,27 @@ class ImportResult:
 
 
 def _field_errors(target: str, errors: dict) -> list[dict]:
-    """A serializer's errors, keyed by the file's header rather than the field's name."""
+    """
+    A serializer's errors, keyed by the file's header rather than the field's name.
+
+    Every error is carried over, not only those on a mapped column. A rule
+    may object to a field the file has no column for; such an error belongs
+    to the whole row (a blank column). Dropping it would leave an invalid row
+    with no errors, which reads as importable.
+    """
     found = []
+    mapped = set()
     for column in COLUMNS:
-        if column.target == target and column.field in errors:
-            found.extend(
-                {"column": column.header, "message": str(message)}
-                for message in errors[column.field]
-            )
-    for message in errors.get("non_field_errors", []):
-        found.append({"column": "", "message": str(message)})
+        if column.target != target:
+            continue
+        mapped.add(column.field)
+        found.extend(
+            {"column": column.header, "message": str(message)}
+            for message in errors.get(column.field, [])
+        )
+    for name, messages in errors.items():
+        if name not in mapped:
+            found.extend({"column": "", "message": str(message)} for message in messages)
     return found
 
 
