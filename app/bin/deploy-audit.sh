@@ -10,6 +10,12 @@
 # audit warns without it, though Fly redirects at the edge and the deploy
 # leaves it off. UI_DIST_DIR is set EMPTY, the explicit "frontend is not
 # here", so the audit needs no build.
+#
+# STRIPE_SECRET_KEY is set EMPTY for another reason: python-decouple fills
+# anything the environment leaves out from app/.env, so a developer's Stripe
+# key (with no Connect webhook secret beside it) failed the audit on their
+# machine while CI, which has no .env, passed. Empty here means the optional
+# integration is off, whatever the .env says.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,6 +27,7 @@ SECURE_SSL_REDIRECT=True \
 ALLOWED_HOSTS=example.com \
 FRONTEND_BASE_URL=https://example.com \
 FIELD_ENCRYPTION_KEY=audit-only-not-a-key \
+STRIPE_SECRET_KEY= \
 MEDIA_BACKEND=s3 \
 MEDIA_BUCKET=audit-only \
 UI_DIST_DIR= \
