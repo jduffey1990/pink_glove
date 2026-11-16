@@ -149,6 +149,50 @@ describe('what the job page offers', () => {
   })
 })
 
+describe('a visit that is on an invoice', () => {
+  // ADR-033. The page needs no rule of its own: the server stops offering
+  // the reopen, and says why if a stale page asks for it anyway.
+
+  it('offers no reopen when the server offers none', async () => {
+    mock.onGet('/api/scheduling/jobs/job-1/').reply(200, job({
+      status: 'complete',
+      is_terminal: true,
+      next_statuses: [],
+      available_actions: [],
+    }))
+
+    await openPage()
+
+    expect(button('Scheduled')).toBeUndefined()
+    expect(document.body.textContent).toContain('Nothing further from here.')
+  })
+
+  it('shows the server\'s reason when a stale page asks to reopen it', async () => {
+    // Loaded before the invoice was issued, so Reopen is still on screen.
+    mock.onGet('/api/scheduling/jobs/job-1/').reply(200, job({
+      status: 'complete',
+      is_terminal: true,
+      next_statuses: [{ status: 'scheduled', reason_required: false }],
+      available_actions: [],
+    }))
+    mock.onPost('/api/scheduling/jobs/job-1/status/').reply(409, {
+      detail: 'This visit is on invoice INV-0001. Void the invoice first.',
+      status: 'complete',
+      allowed: [],
+    })
+    await openPage()
+
+    button('Scheduled')!.click()
+    await flushPromises()
+
+    expect(document.body.textContent).toContain(
+      'This visit is on invoice INV-0001. Void the invoice first.',
+    )
+    // Redrawn from the 409's own list, which is empty.
+    expect(button('Scheduled')).toBeUndefined()
+  })
+})
+
 describe('deleting a visit', () => {
   it('asks first, then deletes and goes back to the schedule', async () => {
     mock.onGet('/api/scheduling/jobs/job-1/').reply(200, job())
