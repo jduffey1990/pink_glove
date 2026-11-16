@@ -655,7 +655,7 @@ Run the whole section once against staging before trusting it with production.
 
 These are run by hand; nothing schedules them yet.
 With the weekly dump as the only copy off Fly, losing the Fly organization loses up to a week.
-Card payments are the exception: Stripe keeps every event for 30 days and the ledger refuses duplicates, so events since the dump can be resent ("When a payment does not show up", step 4).
+Card payments are the exception: Stripe keeps its events for some weeks (30 days through the API, by its documentation) and the ledger refuses duplicates, so events since the dump can be resent ("When a payment does not show up", step 4).
 
 ### Back up the database
 
