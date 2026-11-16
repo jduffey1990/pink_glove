@@ -23,6 +23,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from app.exceptions import ConflictError
@@ -374,9 +375,45 @@ def totals(invoice: Invoice) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
+#: What makes a payment count, said once: it has not been voided. Applied to a
+#: queryset from `Payment.objects` or a reverse manager, which already leave
+#: soft-deleted rows out -- never across a join, where nothing would.
+NOT_VOIDED = models.Q(voided_at__isnull=True)
+
+#: The attribute `with_paid_cents` leaves on each invoice.
+PAID_ANNOTATION = "ledger_paid_cents"
+
+
 def live_payments(invoice: Invoice) -> models.QuerySet[Payment]:
     """Payments that still count: not voided, not soft-deleted."""
-    return invoice.payments.filter(voided_at__isnull=True)
+    return invoice.payments.filter(NOT_VOIDED)
+
+
+def with_paid_cents(invoices: models.QuerySet[Invoice]) -> models.QuerySet[Invoice]:
+    """
+    `invoices`, each carrying its paid total, read in the same query.
+
+    The set-based form of `paid_cents`, for a report that walks every unpaid
+    invoice a tenant has: asking the ledger once per invoice is a query per
+    invoice. It is the same ledger read the same way -- live payments, tips
+    excluded -- and `paid_cents` uses the figure when it is there, so
+    `balance_cents`, `payment_state` and `is_overdue` answer from it without
+    a second formula anywhere (ADR-025).
+
+    A subquery over `Payment.objects`, not a join: the manager is what leaves
+    soft-deleted payments out, and a join would not go through it.
+
+    The figure is as old as the queryset. Use it to read, never on an
+    instance that is about to be written to.
+    """
+    paid = (
+        Payment.objects.filter(NOT_VOIDED, invoice=models.OuterRef("pk"))
+        .order_by()
+        .values("invoice")
+        .annotate(total=models.Sum("amount_cents"))
+        .values("total")
+    )
+    return invoices.annotate(**{PAID_ANNOTATION: Coalesce(models.Subquery(paid), 0)})
 
 
 def paid_cents(invoice: Invoice) -> int:
@@ -384,6 +421,10 @@ def paid_cents(invoice: Invoice) -> int:
     What has been paid toward the invoice. Tips are excluded on purpose: a tip
     is not revenue and never settles a bill (ADR-025).
     """
+    carried = getattr(invoice, PAID_ANNOTATION, None)
+    if carried is not None:
+        return carried
+
     return live_payments(invoice).aggregate(total=models.Sum("amount_cents"))["total"] or 0
 
 

@@ -1152,6 +1152,172 @@ paths:
               schema:
                 $ref: '#/components/schemas/Detail'
           description: ''
+  /api/billing/reports/collections/:
+    get:
+      operationId: billing_reports_collections_retrieve
+      description: A payment is filed under `received_on`, the organization-local
+        date on the row. Voided payments are in no period. Net is amount plus tips,
+        less the provider fees reported so far.
+      summary: Payments received in a period, by method
+      parameters:
+      - in: query
+        name: date_from
+        schema:
+          type: string
+          format: date
+        description: First day of the period, as the organization reckons days. Inclusive.
+        required: true
+      - in: query
+        name: date_to
+        schema:
+          type: string
+          format: date
+        description: Last day of the period, as the organization reckons days. Inclusive.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Collections'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/reports/collections/csv/:
+    get:
+      operationId: billing_reports_collections_csv_retrieve
+      description: Amounts are decimal dollars, in columns named `..._usd`. Text cells
+        that a spreadsheet would run as a formula are prefixed with an apostrophe.
+      summary: Collections as CSV
+      parameters:
+      - in: query
+        name: date_from
+        schema:
+          type: string
+          format: date
+        description: First day of the period, as the organization reckons days. Inclusive.
+        required: true
+      - in: query
+        name: date_to
+        schema:
+          type: string
+          format: date
+        description: Last day of the period, as the organization reckons days. Inclusive.
+        required: true
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/reports/receivables/:
+    get:
+      operationId: billing_reports_receivables_retrieve
+      description: Issued invoices with a balance. Drafts, void invoices and voided
+        payments do not count. Balances are read from the live ledger; `as_of` only
+        moves the date ages are counted from.
+      summary: Outstanding balances per customer, aged by due date
+      parameters:
+      - in: query
+        name: as_of
+        schema:
+          type: string
+          format: date
+        description: 'The organization-local date ages are counted from. Defaults
+          to the organization''s today. It moves the aging clock only: balances are
+          always what is owed now, not what was owed on this date.'
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Receivables'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/reports/receivables/csv/:
+    get:
+      operationId: billing_reports_receivables_csv_retrieve
+      description: Amounts are decimal dollars, in columns named `..._usd`. Text cells
+        that a spreadsheet would run as a formula are prefixed with an apostrophe.
+      summary: Receivables as CSV
+      parameters:
+      - in: query
+        name: as_of
+        schema:
+          type: string
+          format: date
+        description: 'The organization-local date ages are counted from. Defaults
+          to the organization''s today. It moves the aging clock only: balances are
+          always what is owed now, not what was owed on this date.'
+      tags:
+      - billing
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
   /api/billing/stripe/connect/:
     post:
       operationId: billing_stripe_connect_create
@@ -3854,6 +4020,33 @@ components:
       required:
       - acknowledgement_required
       - detail
+    Aging:
+      type: object
+      description: Outstanding balance by how far past its due date it is.
+      properties:
+        invoice_count:
+          type: integer
+        not_due_cents:
+          type: integer
+          description: Due on or after the as-of date.
+        days_1_30_cents:
+          type: integer
+        days_31_60_cents:
+          type: integer
+        days_61_90_cents:
+          type: integer
+        days_over_90_cents:
+          type: integer
+        total_cents:
+          type: integer
+      required:
+      - days_1_30_cents
+      - days_31_60_cents
+      - days_61_90_cents
+      - days_over_90_cents
+      - invoice_count
+      - not_due_cents
+      - total_cents
     AssignRequest:
       type: object
       properties:
@@ -3963,6 +4156,54 @@ components:
           description: Local development only. Never present in a deployed environment.
       required:
       - detail
+    Collections:
+      type: object
+      properties:
+        date_from:
+          type: string
+          format: date
+        date_to:
+          type: string
+          format: date
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/MethodCollections'
+        totals:
+          $ref: '#/components/schemas/CollectionsTotals'
+      required:
+      - date_from
+      - date_to
+      - methods
+      - totals
+    CollectionsTotals:
+      type: object
+      properties:
+        payment_count:
+          type: integer
+        amount_cents:
+          type: integer
+          description: What settled invoices. Tips excluded.
+        tip_cents:
+          type: integer
+          description: Received on top; never settles an invoice.
+        fee_cents:
+          type: integer
+          description: Provider fees reported so far.
+        net_cents:
+          type: integer
+          description: Amount plus tips, less fees.
+        fees_pending:
+          type: integer
+          description: Provider payments whose fee is not known yet, so the net is
+            still too high.
+      required:
+      - amount_cents
+      - fee_cents
+      - fees_pending
+      - net_cents
+      - payment_count
+      - tip_cents
     Customer:
       type: object
       description: |-
@@ -4204,6 +4445,40 @@ components:
           description: True (the default) previews the import and writes nothing.
       required:
       - file
+    CustomerReceivable:
+      type: object
+      description: Outstanding balance by how far past its due date it is.
+      properties:
+        invoice_count:
+          type: integer
+        not_due_cents:
+          type: integer
+          description: Due on or after the as-of date.
+        days_1_30_cents:
+          type: integer
+        days_31_60_cents:
+          type: integer
+        days_61_90_cents:
+          type: integer
+        days_over_90_cents:
+          type: integer
+        total_cents:
+          type: integer
+        customer:
+          type: string
+          format: uuid
+        customer_name:
+          type: string
+      required:
+      - customer
+      - customer_name
+      - days_1_30_cents
+      - days_31_60_cents
+      - days_61_90_cents
+      - days_over_90_cents
+      - invoice_count
+      - not_due_cents
+      - total_cents
     CustomerRequest:
       type: object
       description: |-
@@ -5092,6 +5367,40 @@ components:
       - user
       - user_email
       - user_name
+    MethodCollections:
+      type: object
+      properties:
+        payment_count:
+          type: integer
+        amount_cents:
+          type: integer
+          description: What settled invoices. Tips excluded.
+        tip_cents:
+          type: integer
+          description: Received on top; never settles an invoice.
+        fee_cents:
+          type: integer
+          description: Provider fees reported so far.
+        net_cents:
+          type: integer
+          description: Amount plus tips, less fees.
+        fees_pending:
+          type: integer
+          description: Provider payments whose fee is not known yet, so the net is
+            still too high.
+        method:
+          $ref: '#/components/schemas/PaymentMethodEnum'
+        label:
+          type: string
+      required:
+      - amount_cents
+      - fee_cents
+      - fees_pending
+      - label
+      - method
+      - net_cents
+      - payment_count
+      - tip_cents
     NextStatus:
       type: object
       properties:
@@ -6533,6 +6842,22 @@ components:
           maxLength: 255
       required:
       - reason
+    Receivables:
+      type: object
+      properties:
+        as_of:
+          type: string
+          format: date
+        customers:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerReceivable'
+        totals:
+          $ref: '#/components/schemas/Aging'
+      required:
+      - as_of
+      - customers
+      - totals
     RecordPaymentRequest:
       type: object
       description: '`POST /api/billing/payments/` -- everything a person types on

@@ -2,11 +2,15 @@ from django.urls import include, path
 from rest_framework.routers import SimpleRouter
 
 from billing.views import (
+    CollectionsCSVView,
+    CollectionsReportView,
     InvoiceLineViewSet,
     InvoiceViewSet,
     PayInvoiceCheckoutView,
     PayInvoiceView,
     PaymentViewSet,
+    ReceivablesCSVView,
+    ReceivablesReportView,
     StripeConnectView,
     StripeRefreshView,
     SubscriptionCheckoutView,
@@ -44,5 +48,9 @@ urlpatterns = [
     # Public, by signed token (the credential is in the invoice email).
     path("pay/<str:token>/", PayInvoiceView.as_view(), name="pay"),
     path("pay/<str:token>/checkout/", PayInvoiceCheckoutView.as_view(), name="pay-checkout"),
+    path("reports/receivables/", ReceivablesReportView.as_view(), name="report-receivables"),
+    path("reports/receivables/csv/", ReceivablesCSVView.as_view(), name="report-receivables-csv"),
+    path("reports/collections/", CollectionsReportView.as_view(), name="report-collections"),
+    path("reports/collections/csv/", CollectionsCSVView.as_view(), name="report-collections-csv"),
     path("", include(router.urls)),
 ]

@@ -13,6 +13,7 @@ catches one.
 """
 
 from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters
 from rest_framework.decorators import action
@@ -24,21 +25,26 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 
+from base.exports import AnyAcceptNegotiation, csv_response
 from base.permissions import IsAdminOrHigher, IsDispatcherOrHigher, IsOwner
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
-from billing import connect, services, subscription
+from billing import connect, reports, services, subscription
 from billing.enums import LineKind
 from billing.filters import InvoiceFilterSet, PaymentFilterSet
 from billing.models import Invoice, InvoiceLine, Payment
 from billing.serializers import (
     BillableJobSerializer,
+    CollectionsQuerySerializer,
+    CollectionsSerializer,
     DraftInvoiceSerializer,
     InvoiceLineSerializer,
     InvoiceSerializer,
     PaymentSerializer,
     PublicInvoiceSerializer,
     ReasonSerializer,
+    ReceivablesQuerySerializer,
+    ReceivablesSerializer,
     RecordPaymentSerializer,
     UrlSerializer,
 )
@@ -483,3 +489,117 @@ class PayInvoiceCheckoutView(APIView):
     def post(self, request, token: str):
         url = connect.create_checkout_session(_invoice_from(token))
         return Response({"url": url})
+
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+# Owner and admin only, one tier above the rest of billing: a dispatcher
+# raises and chases individual invoices, and the business's whole position
+# is not theirs to read. The organization comes from the resolved tenant;
+# `billing.reports` takes it as an argument and reads nothing from the request.
+
+_CSV_NOTE = (
+    "Amounts are decimal dollars, in columns named `..._usd`. Text cells that a "
+    "spreadsheet would run as a formula are prefixed with an apostrophe."
+)
+
+
+def _receivables_for(request) -> dict:
+    query = ReceivablesQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    return reports.receivables(request.organization, as_of=query.validated_data.get("as_of"))
+
+
+def _collections_for(request) -> dict:
+    query = CollectionsQuerySerializer(data=request.query_params)
+    query.is_valid(raise_exception=True)
+    return reports.collections(request.organization, **query.validated_data)
+
+
+class ReceivablesReportView(APIView):
+    """What each customer owes, aged by due date."""
+
+    permission_classes = [IsAdminOrHigher]
+
+    @extend_schema(
+        parameters=[ReceivablesQuerySerializer],
+        responses={200: ReceivablesSerializer, 400: DetailSerializer, 403: DetailSerializer},
+        summary="Outstanding balances per customer, aged by due date",
+        description=(
+            "Issued invoices with a balance. Drafts, void invoices and voided "
+            "payments do not count. Balances are read from the live ledger; "
+            "`as_of` only moves the date ages are counted from."
+        ),
+    )
+    def get(self, request):
+        return Response(ReceivablesSerializer(_receivables_for(request)).data)
+
+
+class ReceivablesCSVView(APIView):
+    """The receivables report as a file, one row per customer."""
+
+    permission_classes = [IsAdminOrHigher]
+    content_negotiation_class = AnyAcceptNegotiation
+
+    @extend_schema(
+        parameters=[ReceivablesQuerySerializer],
+        responses={
+            (200, "text/csv"): OpenApiTypes.STR,
+            400: DetailSerializer,
+            403: DetailSerializer,
+        },
+        summary="Receivables as CSV",
+        description=_CSV_NOTE,
+    )
+    def get(self, request):
+        report = _receivables_for(request)
+        return csv_response(
+            f"receivables_{report['as_of']}.csv",
+            reports.RECEIVABLES_CSV_HEADER,
+            reports.receivables_csv_rows(report),
+        )
+
+
+class CollectionsReportView(APIView):
+    """Money received in a period, by method."""
+
+    permission_classes = [IsAdminOrHigher]
+
+    @extend_schema(
+        parameters=[CollectionsQuerySerializer],
+        responses={200: CollectionsSerializer, 400: DetailSerializer, 403: DetailSerializer},
+        summary="Payments received in a period, by method",
+        description=(
+            "A payment is filed under `received_on`, the organization-local date "
+            "on the row. Voided payments are in no period. Net is amount plus "
+            "tips, less the provider fees reported so far."
+        ),
+    )
+    def get(self, request):
+        return Response(CollectionsSerializer(_collections_for(request)).data)
+
+
+class CollectionsCSVView(APIView):
+    """The collections report as a file, one row per method."""
+
+    permission_classes = [IsAdminOrHigher]
+    content_negotiation_class = AnyAcceptNegotiation
+
+    @extend_schema(
+        parameters=[CollectionsQuerySerializer],
+        responses={
+            (200, "text/csv"): OpenApiTypes.STR,
+            400: DetailSerializer,
+            403: DetailSerializer,
+        },
+        summary="Collections as CSV",
+        description=_CSV_NOTE,
+    )
+    def get(self, request):
+        report = _collections_for(request)
+        return csv_response(
+            f"collections_{report['date_from']}_{report['date_to']}.csv",
+            reports.COLLECTIONS_CSV_HEADER,
+            reports.collections_csv_rows(report),
+        )

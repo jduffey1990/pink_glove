@@ -476,6 +476,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/billing/reports/collections/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Payments received in a period, by method
+         * @description A payment is filed under `received_on`, the organization-local date on the row. Voided payments are in no period. Net is amount plus tips, less the provider fees reported so far.
+         */
+        get: operations["billing_reports_collections_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/reports/collections/csv/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Collections as CSV
+         * @description Amounts are decimal dollars, in columns named `..._usd`. Text cells that a spreadsheet would run as a formula are prefixed with an apostrophe.
+         */
+        get: operations["billing_reports_collections_csv_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/reports/receivables/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Outstanding balances per customer, aged by due date
+         * @description Issued invoices with a balance. Drafts, void invoices and voided payments do not count. Balances are read from the live ledger; `as_of` only moves the date ages are counted from.
+         */
+        get: operations["billing_reports_receivables_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/reports/receivables/csv/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Receivables as CSV
+         * @description Amounts are decimal dollars, in columns named `..._usd`. Text cells that a spreadsheet would run as a formula are prefixed with an apostrophe.
+         */
+        get: operations["billing_reports_receivables_csv_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/billing/stripe/connect/": {
         parameters: {
             query?: never;
@@ -1650,6 +1730,17 @@ export interface components {
             detail: string;
             acknowledgement_required: boolean;
         };
+        /** @description Outstanding balance by how far past its due date it is. */
+        Aging: {
+            invoice_count: number;
+            /** @description Due on or after the as-of date. */
+            not_due_cents: number;
+            days_1_30_cents: number;
+            days_31_60_cents: number;
+            days_61_90_cents: number;
+            days_over_90_cents: number;
+            total_cents: number;
+        };
         AssignRequest: {
             /** Format: uuid */
             user: string;
@@ -1707,6 +1798,27 @@ export interface components {
             two_factor_required: boolean;
             /** @description Local development only. Never present in a deployed environment. */
             dev_code?: string;
+        };
+        Collections: {
+            /** Format: date */
+            date_from: string;
+            /** Format: date */
+            date_to: string;
+            methods: components["schemas"]["MethodCollections"][];
+            totals: components["schemas"]["CollectionsTotals"];
+        };
+        CollectionsTotals: {
+            payment_count: number;
+            /** @description What settled invoices. Tips excluded. */
+            amount_cents: number;
+            /** @description Received on top; never settles an invoice. */
+            tip_cents: number;
+            /** @description Provider fees reported so far. */
+            fee_cents: number;
+            /** @description Amount plus tips, less fees. */
+            net_cents: number;
+            /** @description Provider payments whose fee is not known yet, so the net is still too high. */
+            fees_pending: number;
         };
         /**
          * @description Base serializer for tenant-owned models.
@@ -1813,6 +1925,20 @@ export interface components {
              * @default true
              */
             dry_run: boolean;
+        };
+        /** @description Outstanding balance by how far past its due date it is. */
+        CustomerReceivable: {
+            invoice_count: number;
+            /** @description Due on or after the as-of date. */
+            not_due_cents: number;
+            days_1_30_cents: number;
+            days_31_60_cents: number;
+            days_61_90_cents: number;
+            days_over_90_cents: number;
+            total_cents: number;
+            /** Format: uuid */
+            customer: string;
+            customer_name: string;
         };
         /**
          * @description Base serializer for tenant-owned models.
@@ -2214,6 +2340,21 @@ export interface components {
             readonly user_email: string;
             readonly role: components["schemas"]["RoleEnum"];
             readonly is_active: boolean;
+        };
+        MethodCollections: {
+            payment_count: number;
+            /** @description What settled invoices. Tips excluded. */
+            amount_cents: number;
+            /** @description Received on top; never settles an invoice. */
+            tip_cents: number;
+            /** @description Provider fees reported so far. */
+            fee_cents: number;
+            /** @description Amount plus tips, less fees. */
+            net_cents: number;
+            /** @description Provider payments whose fee is not known yet, so the net is still too high. */
+            fees_pending: number;
+            method: components["schemas"]["PaymentMethodEnum"];
+            label: string;
         };
         NextStatus: {
             status: components["schemas"]["JobStatusEnum"];
@@ -2987,6 +3128,12 @@ export interface components {
         ReadinessStatusEnum: "ok" | "degraded";
         ReasonRequest: {
             reason: string;
+        };
+        Receivables: {
+            /** Format: date */
+            as_of: string;
+            customers: components["schemas"]["CustomerReceivable"][];
+            totals: components["schemas"]["Aging"];
         };
         /** @description `POST /api/billing/payments/` -- everything a person types on a receipt. */
         RecordPaymentRequest: {
@@ -4320,6 +4467,162 @@ export interface operations {
                 };
             };
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_reports_collections_retrieve: {
+        parameters: {
+            query: {
+                /** @description First day of the period, as the organization reckons days. Inclusive. */
+                date_from: string;
+                /** @description Last day of the period, as the organization reckons days. Inclusive. */
+                date_to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collections"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_reports_collections_csv_retrieve: {
+        parameters: {
+            query: {
+                /** @description First day of the period, as the organization reckons days. Inclusive. */
+                date_from: string;
+                /** @description Last day of the period, as the organization reckons days. Inclusive. */
+                date_to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_reports_receivables_retrieve: {
+        parameters: {
+            query?: {
+                /** @description The organization-local date ages are counted from. Defaults to the organization's today. It moves the aging clock only: balances are always what is owed now, not what was owed on this date. */
+                as_of?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Receivables"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_reports_receivables_csv_retrieve: {
+        parameters: {
+            query?: {
+                /** @description The organization-local date ages are counted from. Defaults to the organization's today. It moves the aging clock only: balances are always what is owed now, not what was owed on this date. */
+                as_of?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
