@@ -10,6 +10,8 @@ import type {
   AccessWarning,
   BillableJob,
   Customer,
+  CustomerImportResult,
+  CustomerImportTemplate,
   CustomerRequest,
   Invoice,
   InvoiceLine,
@@ -269,6 +271,44 @@ export async function updateCustomer (
   payload: CustomerRequest,
 ): Promise<Customer> {
   const { data } = await api.patch<Customer>(`/api/customers/customers/${id}/`, payload)
+  return data
+}
+
+/**
+ * What an import file looks like: the template to download, which columns
+ * are required and the limits on a file. Served so the column list has one
+ * source, the backend's (ADR-031).
+ */
+export async function fetchCustomerImportTemplate (): Promise<CustomerImportTemplate> {
+  const { data } = await api.get<CustomerImportTemplate>(
+    '/api/customers/customers/import-template/',
+  )
+  return data
+}
+
+/**
+ * Preview (`dryRun`) or perform an import of customers from a CSV file.
+ *
+ * The file goes up as a file. It is never read in the browser: the server
+ * validates each row with the rules the create path uses and says what it
+ * would do. A real import that a row stops is a 400 whose body is the same
+ * per-row result; `lib/customerImport` reads it back out of the error.
+ */
+export async function importCustomers (
+  file: File,
+  dryRun: boolean,
+): Promise<CustomerImportResult> {
+  const form = new FormData()
+  form.append('file', file)
+  // Always sent. The server reads a missing value as a dry run, but a real
+  // import should never hinge on a default.
+  form.append('dry_run', dryRun ? 'true' : 'false')
+
+  // No explicit Content-Type: the browser has to set the multipart boundary.
+  const { data } = await api.post<CustomerImportResult>(
+    '/api/customers/customers/import/',
+    form,
+  )
   return data
 }
 

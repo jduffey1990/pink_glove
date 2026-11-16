@@ -71,6 +71,12 @@ export type InvoiceAction
 
 export type Customer = Schemas['Customer']
 export type ServiceLocation = Schemas['ServiceLocation']
+
+/** Customer import (ADR-031). A row's outcome never carries an access code. */
+export type CustomerImportResult = Schemas['CustomerImportResult']
+export type CustomerImportRow = Schemas['CustomerImportRow']
+export type CustomerImportRowError = Schemas['CustomerImportRowError']
+export type CustomerImportTemplate = Schemas['CustomerImportTemplate']
 export type Service = Schemas['Service']
 
 /**

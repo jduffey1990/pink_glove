@@ -4,8 +4,15 @@
   import { ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
   import { createCustomer, listCustomers } from '@/api/endpoints'
+  import CustomerImportDialog from '@/components/CustomerImportDialog.vue'
+  import { useSessionStore } from '@/stores/session'
 
   const router = useRouter()
+  const session = useSessionStore()
+
+  // Owner and admin. The API enforces this independently (ADR-031); hiding
+  // the button is a courtesy.
+  const importOpen = ref(false)
 
   const customers = ref<Customer[]>([])
   const search = ref('')
@@ -87,6 +94,15 @@
         variant="outlined"
       />
 
+      <v-btn
+        v-if="session.isAdminOrHigher"
+        prepend-icon="mdi-upload"
+        variant="tonal"
+        @click="importOpen = true"
+      >
+        Import
+      </v-btn>
+
       <v-btn color="primary" prepend-icon="mdi-plus" @click="openNew">New</v-btn>
     </div>
 
@@ -152,6 +168,12 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <CustomerImportDialog
+      v-if="session.isAdminOrHigher"
+      v-model="importOpen"
+      @imported="load"
+    />
   </v-container>
 </template>
 
