@@ -18,6 +18,18 @@ export const ORGANIZATION: OrganizationSummary = {
 }
 
 /**
+ * The same organization gone read-only (Phase 4c). Its billing state is
+ * `deactivated`, which is also a word a membership's own `state` uses: the
+ * two are different fields on different objects, and a spec uses this to
+ * prove the team page never reads one for the other.
+ */
+export const READ_ONLY_ORGANIZATION: OrganizationSummary = {
+  ...ORGANIZATION,
+  is_active: false,
+  billing: { state: 'deactivated', level: 'error', notice: 'This organization is read-only.' },
+}
+
+/**
  * A team row as the API sends it: an active cleaner the caller may do
  * nothing to, until a spec says otherwise.
  */

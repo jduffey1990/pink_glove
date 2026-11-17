@@ -15,7 +15,13 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createVuetify } from 'vuetify'
 import { api } from '@/api/client'
-import { ORGANIZATION, page, stubResizeObserver, teamRow } from '@/lib/team.fixtures'
+import {
+  ORGANIZATION,
+  page,
+  READ_ONLY_ORGANIZATION,
+  stubResizeObserver,
+  teamRow,
+} from '@/lib/team.fixtures'
 import { useSessionStore } from '@/stores/session'
 import TeamPage from './TeamPage.vue'
 
@@ -24,10 +30,14 @@ const OPTIONS = '/api/users/memberships/invite-options/'
 
 let mock: MockAdapter
 
-const organization = ORGANIZATION
 const row = teamRow
 
-async function mountPage (rows: unknown[], roles: string[], role = 'owner') {
+async function mountPage (
+  rows: unknown[],
+  roles: string[],
+  role = 'owner',
+  organization = ORGANIZATION,
+) {
   mock.onGet(LIST).reply(200, page(rows))
   mock.onGet(OPTIONS).reply(200, { roles })
   mock.onGet('/api/users/session/').reply(200, {
@@ -127,6 +137,36 @@ describe('TeamPage', () => {
     ], [])
 
     expect(wrapper.text().match(/You/g)).toHaveLength(1)
+  })
+
+  it('does not read the organization\'s billing state as a member\'s state', async () => {
+    // Phase 4c: the organization is read-only and its billing state is
+    // "deactivated", the same word a switched-off membership uses. Every
+    // row carries that organization. The people in it are still active, the
+    // server offers nothing on them, and the page must show exactly that:
+    // no Deactivated chip, no menus, no Invite.
+    const rows = [
+      row('a', { user_name: 'Maria Lopez', organization: READ_ONLY_ORGANIZATION }),
+      row('b', { user_name: 'Sam Old', organization: READ_ONLY_ORGANIZATION }),
+    ]
+
+    const wrapper = await mountPage(rows, [], 'owner', READ_ONLY_ORGANIZATION)
+
+    expect(wrapper.text()).toContain('Maria Lopez')
+    expect(wrapper.text()).not.toContain('Deactivated')
+    expect(menuButtons(wrapper)).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('Invite')
+  })
+
+  it('still marks a member the team itself switched off, in a read-only organization', async () => {
+    const wrapper = await mountPage(
+      [row('a', { state: 'deactivated', is_active: false, organization: READ_ONLY_ORGANIZATION })],
+      [],
+      'owner',
+      READ_ONLY_ORGANIZATION,
+    )
+
+    expect(wrapper.text().match(/Deactivated/g)).toHaveLength(1)
   })
 
   it('says so when the team cannot be loaded', async () => {

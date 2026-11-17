@@ -17,6 +17,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from app.exceptions import BadRequestJSON, ConflictError
+from base.permissions import ORGANIZATION_INACTIVE
 from users.enums import (
     MANAGEABLE_ROLES,
     STAFF_ROLES,
@@ -119,14 +120,33 @@ class Actor:
     user: CustomUser
     #: None for a superuser acting on an organization by header.
     membership: Membership | None
+    #: True when the organization is read-only for this caller: deactivated
+    #: or lapsed (Phase 4c, ADR-028), and the caller is not a superuser. The
+    #: same condition, and the same exemption, as `IsOrgMember` applies to
+    #: every unsafe request. It is repeated here because that check only
+    #: runs on a write, and a row's `available_actions` are read on a GET:
+    #: without it a read-only organization's team page would offer buttons
+    #: that every one of which answers 403.
+    read_only: bool = False
 
     @classmethod
     def of(cls, request) -> "Actor":
-        return cls(user=request.user, membership=getattr(request, "membership", None))
+        organization = getattr(request, "organization", None)
+        return cls(
+            user=request.user,
+            membership=getattr(request, "membership", None),
+            read_only=(
+                organization is not None
+                and not organization.is_active
+                and not request.user.is_superuser
+            ),
+        )
 
     @property
     def manageable_roles(self) -> tuple[Role, ...]:
         """The roles this caller may invite, grant, and act on."""
+        if self.read_only:
+            return ()
         if self.user.is_superuser:
             return STAFF_ROLES
         if self.membership is None:
@@ -168,6 +188,11 @@ def sole_active_owner_id(organization) -> uuid.UUID | None:
 
 def _not_manageable(actor: Actor, role: str) -> str | None:
     """Why this caller may not manage or grant `role`, or None if they may."""
+    if actor.read_only:
+        # Unreachable through the API, where `IsOrgMember` has already said
+        # this to any write. Said again so a caller of these services gets
+        # the true reason and not a sentence about rank.
+        return ORGANIZATION_INACTIVE
     if role == Role.CUSTOMER:
         return "Customer access is not managed from the team page."
     if role in actor.manageable_roles:
