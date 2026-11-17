@@ -1959,7 +1959,7 @@ export interface components {
             readonly plan: string | null;
             /**
              * Format: date-time
-             * @description The UTC instant this occurrence was originally planned for. Immutable. This, not scheduled_start, is the materializer's idempotency key -- a rescheduled job must not be re-created at its old slot.
+             * @description The UTC instant of the plan occurrence this visit accounts for. No caller can write it: the materializer sets it, and regenerate_plan re-keys a kept visit to the same local day when the plan's time moves. This, not scheduled_start, is the materializer's idempotency key -- a rescheduled job must not be re-created at its old slot.
              */
             readonly plan_occurrence: string | null;
             /** Format: date-time */
@@ -1972,6 +1972,11 @@ export interface components {
             readonly status_changed_at: string | null;
             readonly is_terminal: boolean;
             readonly next_statuses: components["schemas"]["NextStatus"][];
+            /**
+             * @description What this caller may do to the visit besides move its status: `edit`,
+             *     `delete`, both or neither. The server refuses anything not listed.
+             */
+            readonly available_actions: string[];
             price_cents?: number;
             notes?: string;
             readonly cancellation_reason: string;
@@ -2083,6 +2088,8 @@ export interface components {
             scheduled_end: string;
             price_cents?: number;
             notes?: string;
+            /** @description User ids to put on a new job, so booking a visit with its crew is one request that either wholly happens or does not. Create only: the crew of an existing job changes through assign and unassign. */
+            assignees?: string[];
         };
         /**
          * @description * `scheduled` - Scheduled
@@ -2622,6 +2629,8 @@ export interface components {
             scheduled_end?: string;
             price_cents?: number;
             notes?: string;
+            /** @description User ids to put on a new job, so booking a visit with its crew is one request that either wholly happens or does not. Create only: the crew of an existing job changes through assign and unassign. */
+            assignees?: string[];
         };
         /**
          * @description The organization as its own admins see it.

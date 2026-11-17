@@ -6,14 +6,20 @@
    * not the browser's. `date_from`/`date_to` go to the API as local dates and
    * the backend converts -- so a job at 23:30 on the 14th in Denver appears
    * under the 14th even though it is the 15th in UTC.
+   *
+   * "New visit" books a one-off: a job with no plan behind it. The form is
+   * `VisitDialog`; this page only decides which day it opens on, and shows
+   * what the server booked, price included, since the price is the server's.
    */
   import type { Job, JobStatus } from '@/api/types'
   import { computed, ref, watch } from 'vue'
   import { useRouter } from 'vue-router'
   import { listAssignableStaff, listJobs } from '@/api/endpoints'
   import JobStatusChip from '@/components/JobStatusChip.vue'
+  import VisitDialog from '@/components/VisitDialog.vue'
   import {
     addDays,
+    formatDateTime,
     formatDayLabel,
     formatTime,
     todayIn,
@@ -103,6 +109,37 @@
   }
 
   const isToday = (day: string) => day === todayIn(session.timeZone)
+
+  // --- booking ---------------------------------------------------------------
+
+  const bookingOpen = ref(false)
+  const bookingDate = ref(todayIn(session.timeZone))
+  const booked = ref<Job | null>(null)
+
+  /** Open the form on `day`, or on today when it is in the week on screen. */
+  function book (day?: string) {
+    const today = todayIn(session.timeZone)
+    bookingDate.value = day ?? (week.value.includes(today) ? today : week.value[0])
+    bookingOpen.value = true
+  }
+
+  function onBooked (job: Job) {
+    booked.value = job
+
+    // Show the week the visit landed in. Moving the anchor reloads the board
+    // through the watcher above; staying put needs the reload asked for.
+    const day = toIsoDate(job.scheduled_start, session.timeZone)
+    if (week.value.includes(day)) {
+      load()
+    } else {
+      anchor.value = day
+    }
+  }
+
+  function onBookingConflict (message: string) {
+    error.value = message
+    load()
+  }
 </script>
 
 <template>
@@ -121,6 +158,8 @@
       <v-chip v-if="session.organization" size="small" variant="tonal">
         {{ session.timeZone }}
       </v-chip>
+
+      <v-btn color="primary" prepend-icon="mdi-plus" @click="book()">New visit</v-btn>
     </div>
 
     <div class="d-flex flex-wrap ga-2 mb-4">
@@ -152,6 +191,21 @@
 
     <v-alert v-if="error" class="mb-4" type="error" variant="tonal">{{ error }}</v-alert>
 
+    <v-alert
+      v-if="booked"
+      class="mb-4"
+      closable
+      density="compact"
+      type="success"
+      variant="tonal"
+      @click:close="booked = null"
+    >
+      Booked {{ booked.customer_detail.display_name }} for
+      {{ formatDateTime(booked.scheduled_start, session.timeZone) }}
+      at {{ formatCents(booked.price_cents) }}.
+      <router-link class="ml-1" :to="{ name: 'job', params: { id: booked.id } }">Open</router-link>
+    </v-alert>
+
     <v-progress-linear v-if="loading" class="mb-2" indeterminate />
 
     <div class="week-grid">
@@ -164,8 +218,18 @@
         flat
         :variant="isToday(day) ? 'tonal' : 'flat'"
       >
-        <div class="text-caption font-weight-medium mb-2">
-          {{ formatDayLabel(day) }}
+        <div class="d-flex align-center mb-2">
+          <span class="text-caption font-weight-medium">{{ formatDayLabel(day) }}</span>
+          <v-spacer />
+
+          <v-btn
+            :aria-label="`New visit on ${formatDayLabel(day)}`"
+            density="comfortable"
+            icon="mdi-plus"
+            size="x-small"
+            variant="text"
+            @click="book(day)"
+          />
         </div>
 
         <p
@@ -206,6 +270,14 @@
         </v-card>
       </v-card>
     </div>
+
+    <VisitDialog
+      v-model="bookingOpen"
+      :date="bookingDate"
+      :staff="staff"
+      @conflict="onBookingConflict"
+      @saved="onBooked"
+    />
   </v-container>
 </template>
 

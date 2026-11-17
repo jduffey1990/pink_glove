@@ -8,7 +8,7 @@
  * already marked no-access.
  */
 
-import type { JobStatus } from '@/api/types'
+import type { JobAction, JobStatus } from '@/api/types'
 
 export const JOB_STATUS_LOOK: Record<JobStatus, { label: string, color: string, icon: string }> = {
   scheduled: { label: 'Scheduled', color: 'grey', icon: 'mdi-calendar-blank-outline' },
@@ -34,4 +34,15 @@ export const JOB_STATUS_OPTIONS = (Object.keys(JOB_STATUS_LOOK) as JobStatus[]).
 /** Whether the server offers `status` as a next move for this job. */
 export function canMoveTo (job: { next_statuses: { status: JobStatus }[] }, status: JobStatus): boolean {
   return job.next_statuses.some(next => next.status === status)
+}
+
+/**
+ * Whether the server offers `action` on this job to this caller.
+ *
+ * Read off `available_actions`, never worked out from the status or the role:
+ * whether a visit may be deleted turns on recorded time and on whether a plan
+ * created it, which only the server knows.
+ */
+export function jobAllows (job: { available_actions: string[] }, action: JobAction): boolean {
+  return job.available_actions.includes(action)
 }

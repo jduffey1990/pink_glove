@@ -40,3 +40,29 @@ export function errorDetail (error: unknown): string | null {
   }
   return null
 }
+
+/**
+ * A validation failure, field by field: `{ field: ["message", ...] }`.
+ *
+ * For a form that shows each message under the input it is about. DRF sends a
+ * list per field, sometimes a bare string, and `detail` or
+ * `non_field_errors` for what belongs to no field; all come back as lists
+ * under the key the server used, so the caller decides where each one goes.
+ * Empty when there was no response body to read.
+ */
+export function fieldErrors (error: unknown): Record<string, string[]> {
+  const body = bodyOf(error)
+  if (body === null) {
+    return {}
+  }
+
+  const errors: Record<string, string[]> = {}
+  for (const [field, value] of Object.entries(body)) {
+    const messages = (Array.isArray(value) ? value : [value])
+      .filter((message): message is string => typeof message === 'string')
+    if (messages.length > 0) {
+      errors[field] = messages
+    }
+  }
+  return errors
+}

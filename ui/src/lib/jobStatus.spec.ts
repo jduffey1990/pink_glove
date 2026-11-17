@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canMoveTo, JOB_STATUS_OPTIONS, statusLabel } from './jobStatus'
+import { canMoveTo, JOB_STATUS_OPTIONS, jobAllows, statusLabel } from './jobStatus'
 
 describe('job status presentation', () => {
   it('labels a status', () => {
@@ -35,5 +35,19 @@ describe('canMoveTo', () => {
 
   it('offers nothing on a finished job', () => {
     expect(canMoveTo({ next_statuses: [] }, 'no_access')).toBe(false)
+  })
+})
+
+describe('jobAllows', () => {
+  it('answers from the server\'s list', () => {
+    // A plan visit: editable, but deleting it would only bring it back.
+    const job = { available_actions: ['edit'] }
+
+    expect(jobAllows(job, 'edit')).toBe(true)
+    expect(jobAllows(job, 'delete')).toBe(false)
+  })
+
+  it('offers nothing when the server offers nothing', () => {
+    expect(jobAllows({ available_actions: [] }, 'edit')).toBe(false)
   })
 })

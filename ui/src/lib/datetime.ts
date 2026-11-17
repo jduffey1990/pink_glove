@@ -86,6 +86,64 @@ export function weekOf (date: IsoDate): IsoDate[] {
   return Array.from({ length: 7 }, (_, index) => addDays(monday, index))
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** What the clock on the wall reads at `instantMs` in `timeZone`, as if that reading were UTC. */
+function wallClockMs (instantMs: number, timeZone: string): number {
+  const p = parts(new Date(instantMs), timeZone)
+  // `% 24`: some engines render midnight as hour 24 under `hour12: false`.
+  return Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour) % 24,
+    Number(p.minute),
+  )
+}
+
+/**
+ * The instant at which the wall clock in `timeZone` reads `date` `time`, as a
+ * UTC ISO string: the inverse of `toIsoDate` + `formatTime`, and what the API
+ * takes for `scheduled_start`.
+ *
+ * A wall-clock time is not always exactly one instant, and the two exceptions
+ * are resolved the way the backend resolves them for recurring plans
+ * (`fold=0` in `scheduling.services.expand_occurrences`), so a visit booked
+ * by hand and one a plan creates land on the same instant:
+ *
+ * - a time the clocks skip (02:30 on spring-forward day) takes the offset in
+ *   force before the change, which lands just after the gap (03:30);
+ * - a time that happens twice (01:30 on fall-back day) is the first pass.
+ *
+ * `time` is "HH:MM", as an `<input type="time">` gives it; seconds are ignored.
+ */
+export function zonedInstant (date: IsoDate, time: string, timeZone: string): string {
+  const [year, month, day] = date.split('-').map(Number)
+  const [hour, minute] = time.split(':').map(Number)
+  const wall = Date.UTC(year, month - 1, day, hour, minute)
+
+  // The zone's offset a day either side. A zone changes its clocks at most
+  // once in that span, so these are the offsets before and after any change.
+  const before = wallClockMs(wall - DAY_MS, timeZone) - (wall - DAY_MS)
+  const after = wallClockMs(wall + DAY_MS, timeZone) - (wall + DAY_MS)
+
+  // Earlier offset first, so an ambiguous time resolves to its first pass.
+  for (const offset of [before, after]) {
+    if (wallClockMs(wall - offset, timeZone) === wall) {
+      return new Date(wall - offset).toISOString()
+    }
+  }
+
+  // Neither reads back: the time is in a gap. Pre-change offset, as above.
+  return new Date(wall - before).toISOString()
+}
+
+/** `minutes` after `instant`, as a UTC ISO string. Elapsed time, not wall-clock. */
+export function addMinutes (instant: Date | string, minutes: number): string {
+  const date = typeof instant === 'string' ? new Date(instant) : instant
+  return new Date(date.getTime() + minutes * 60_000).toISOString()
+}
+
 /** e.g. "09:00". Wall-clock time in the organization's zone. */
 export function formatTime (instant: Date | string, timeZone: string): string {
   const date = typeof instant === 'string' ? new Date(instant) : instant

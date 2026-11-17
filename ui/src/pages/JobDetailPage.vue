@@ -8,15 +8,23 @@
    * caller may make, and a refused transition answers 409 with the list as it
    * now stands. Both are rendered as given. A client-side copy would drift the
    * first time the backend's rules changed.
+   *
+   * Edit and Delete follow the same arrangement. They are offered when the
+   * job's `available_actions` says so and at no other time: whether a visit
+   * may be deleted turns on recorded time and on whether a plan created it,
+   * and a finished visit is reopened before it is changed (ADR-032). If the
+   * job moved on since the page loaded, the server answers 409, and its
+   * message is shown and the job re-read.
    */
   import type { Job, JobNote, JobPhoto, JobStatus, TransitionConflict } from '@/api/types'
   import { computed, ref, watch } from 'vue'
-  import { useRoute } from 'vue-router'
+  import { useRoute, useRouter } from 'vue-router'
   import {
     assignJob,
     clockIn,
     clockOut,
     createJobNote,
+    deleteJob,
     deleteJobNote,
     getJob,
     listAssignableStaff,
@@ -29,12 +37,14 @@
   import { bodyOf, errorDetail } from '@/api/errors'
   import JobStatusChip from '@/components/JobStatusChip.vue'
   import RevealCodesDialog from '@/components/RevealCodesDialog.vue'
+  import VisitDialog from '@/components/VisitDialog.vue'
   import { formatDateTime, formatDuration } from '@/lib/datetime'
-  import { statusLabel } from '@/lib/jobStatus'
+  import { jobAllows, statusLabel } from '@/lib/jobStatus'
   import { formatCents } from '@/lib/money'
   import { statusOf, useSessionStore } from '@/stores/session'
 
   const route = useRoute()
+  const router = useRouter()
   const session = useSessionStore()
 
   const jobId = computed(() => route.params.id as string)
@@ -69,6 +79,14 @@
   )
   const canWork = computed(() => session.isDispatcherOrHigher || isAssignedToMe.value)
   const openEntry = computed(() => job.value?.open_time_entry ?? null)
+
+  /** The server's answer, not a guess from the status or the role. */
+  const canEdit = computed(() => job.value !== null && jobAllows(job.value, 'edit'))
+  const canDelete = computed(() => job.value !== null && jobAllows(job.value, 'delete'))
+
+  const editOpen = ref(false)
+  const deleteOpen = ref(false)
+  const deleting = ref(false)
 
   async function load () {
     loading.value = true
@@ -141,6 +159,38 @@
       }
     } finally {
       busy.value = false
+    }
+  }
+
+  function onEdited (updated: Job) {
+    job.value = updated
+    allowedStatuses.value = null
+    conflictMessage.value = ''
+  }
+
+  /** The visit is no longer in a state the edit made sense for. Say why, re-read. */
+  function onEditConflict (message: string) {
+    conflictMessage.value = message
+    load()
+  }
+
+  async function removeJob () {
+    deleting.value = true
+    conflictMessage.value = ''
+
+    try {
+      await deleteJob(jobId.value)
+      // Only a dispatcher is ever offered Delete, and the schedule is theirs.
+      await router.replace({ name: 'schedule' })
+    } catch (error_) {
+      deleteOpen.value = false
+      conflictMessage.value = errorDetail(error_) ?? 'Could not delete this visit.'
+      if (statusOf(error_) === 409) {
+        // Somebody clocked in, or it was cancelled, since this page loaded.
+        await load()
+      }
+    } finally {
+      deleting.value = false
     }
   }
 
@@ -240,6 +290,16 @@
           {{ formatDateTime(job.scheduled_start, session.timeZone) }}
           · {{ formatDuration(job.duration_minutes) }}
         </span>
+
+        <v-btn
+          v-if="canEdit"
+          prepend-icon="mdi-calendar-edit"
+          size="small"
+          variant="tonal"
+          @click="editOpen = true"
+        >
+          Edit visit
+        </v-btn>
       </div>
 
       <v-alert
@@ -505,6 +565,20 @@
                 title="Reason"
               />
             </v-list>
+
+            <v-card-actions v-if="canDelete">
+              <v-spacer />
+
+              <v-btn
+                color="error"
+                prepend-icon="mdi-delete-outline"
+                size="small"
+                variant="text"
+                @click="deleteOpen = true"
+              >
+                Delete visit
+              </v-btn>
+            </v-card-actions>
           </v-card>
         </v-col>
       </v-row>
@@ -514,6 +588,38 @@
         :job-id="job.id"
         :location-id="job.location"
       />
+
+      <VisitDialog
+        v-model="editOpen"
+        :job="job"
+        @conflict="onEditConflict"
+        @saved="onEdited"
+      />
+
+      <v-dialog v-model="deleteOpen" max-width="420">
+        <v-card>
+          <v-card-title class="text-subtitle-1">Delete this visit?</v-card-title>
+
+          <v-card-text>
+            It comes off the schedule as if it had never been booked. To call off
+            a visit that was really planned, cancel it instead, so the reason is
+            kept.
+          </v-card-text>
+
+          <v-card-actions>
+            <v-spacer />
+            <v-btn text="Keep it" @click="deleteOpen = false" />
+
+            <v-btn
+              color="error"
+              :loading="deleting"
+              text="Delete"
+              variant="flat"
+              @click="removeJob"
+            />
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
 
       <v-dialog v-model="reasonDialog" max-width="420">
         <v-card>

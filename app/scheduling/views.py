@@ -45,6 +45,8 @@ from scheduling.services import (
     assign_user,
     clock_in,
     clock_out,
+    delete_refusal,
+    edit_refusal,
     expand_occurrences,
     materialize_plan,
     regenerate_plan,
@@ -266,17 +268,26 @@ class JobViewSet(TenantViewSetMixin, ModelViewSet):
 
         return queryset.none()
 
+    def perform_update(self, serializer):
+        """
+        A finished visit is not edited in place; it is reopened first. The
+        rule is `services.edit_refusal`, which is also what the job publishes
+        as `available_actions`, so the page and the server cannot disagree.
+        """
+        refusal = edit_refusal(serializer.instance)
+        if refusal:
+            raise ConflictError(refusal, {"status": serializer.instance.status})
+        super().perform_update(serializer)
+
     def perform_destroy(self, instance):
         """
-        A job somebody worked is history, not a mistake. Cancelling records the
-        reason and keeps the row; deleting it would orphan the time entries and
-        the hours billed against them.
+        Deleting is for a visit booked by mistake. One that was worked, is
+        under way or finished, or came from a plan is cancelled instead: the
+        row and the reason stay (ADR-021). See `services.delete_refusal`.
         """
-        if instance.time_entries.exists():
-            raise ConflictError(
-                "This job has recorded time. Cancel it instead of deleting it.",
-                {"status": instance.status},
-            )
+        refusal = delete_refusal(instance)
+        if refusal:
+            raise ConflictError(refusal, {"status": instance.status})
         instance.delete()
 
     @extend_schema(

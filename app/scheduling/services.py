@@ -181,6 +181,12 @@ def materialize_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> in
             status=JobStatus.SCHEDULED,
             price_cents=price_cents,
             notes=plan.notes,
+            # The stamp: what this run wrote, kept beside the live values so a
+            # later plan edit can tell whether a person has changed them
+            # (ADR-032). This is the only place it is ever written.
+            planned_price_cents=price_cents,
+            planned_end=occurrence + duration,
+            planned_notes=plan.notes,
         )
         for occurrence in missing
     ]
@@ -221,7 +227,18 @@ def _untouched_future_jobs(plan: RecurringPlan, *, now: dt.datetime | None = Non
 
     "Untouched" is derived from state that is already there rather than from a
     flag someone has to remember to set (ADR-020): still SCHEDULED, still
-    sitting at the instant the plan put it, and never worked.
+    sitting at the instant the plan put it, never worked, and still saying
+    what the plan wrote for its price, its end and its note (ADR-032).
+
+    Those last three are compared with the visit's own stamp, not with the
+    plan or a fresh quote. A service's price, a location's square footage and
+    a plan's note all change without regenerating anything, so the visits of
+    one plan legitimately carry different prices and notes, and each is
+    exactly what the plan wrote on the day it wrote it.
+
+    A NULL stamp never equals anything in SQL, so a plan visit without one
+    falls out of this set and is kept. That is the safe direction: not
+    knowing what the plan wrote is not evidence that nobody changed it.
     """
     now = now or timezone.now()
 
@@ -232,7 +249,12 @@ def _untouched_future_jobs(plan: RecurringPlan, *, now: dt.datetime | None = Non
             status=JobStatus.SCHEDULED,
             plan_occurrence__isnull=False,
         )
-        .filter(scheduled_start=models.F("plan_occurrence"))
+        .filter(
+            scheduled_start=models.F("plan_occurrence"),
+            price_cents=models.F("planned_price_cents"),
+            scheduled_end=models.F("planned_end"),
+            notes=models.F("planned_notes"),
+        )
         .exclude(time_entries__isnull=False)
     )
 
@@ -259,9 +281,69 @@ def regenerate_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> dic
     if untouched:
         Job.objects.filter(pk__in=untouched).delete()  # soft delete
 
-    regenerated = materialize_plan(plan, today=today) if plan.is_active else 0
+    regenerated = 0
+    if plan.is_active:
+        _rekey_kept_jobs(plan, today=today or organization_today(plan.organization))
+        regenerated = materialize_plan(plan, today=today)
 
     return {"regenerated": regenerated, "kept": kept}
+
+
+def _rekey_kept_jobs(plan: RecurringPlan, *, today: dt.date) -> None:
+    """
+    Give each visit that survived a plan edit the occurrence the plan's
+    *current* definition has on the local day it was planned for (ADR-032).
+
+    `plan_occurrence` is an instant, and it is how the materializer knows an
+    occurrence already has its visit. Move the plan from 9am to 2pm and every
+    occurrence is a different instant: a kept visit, still keyed to 9am, no
+    longer accounts for its day, so the rebuild puts a new 2pm visit beside
+    it. The visit a customer asked to move turns up twice, and the one they
+    cancelled comes back. Re-keying to the same local day is what makes
+    "kept" mean "this is still that day's visit".
+
+    Runs between the drop and the rebuild, so the only live rows are the kept
+    ones and no key it hands out can collide with an untouched job. A visit
+    whose day the new definition no longer has (Tuesdays became Thursdays)
+    has nothing to claim and keeps its old key.
+
+    Reaches back to the start of today, not just to now: this morning's
+    finished visit must still account for today when the plan moves to the
+    afternoon.
+    """
+    tz = plan.organization.tz
+    occurrences = expand_occurrences(
+        plan, window_start=today, window_end=today + MATERIALIZATION_HORIZON
+    )
+    if not occurrences:
+        return
+
+    current = set(occurrences)
+    by_day: dict[dt.date, list[dt.datetime]] = {}
+    for occurrence in occurrences:
+        by_day.setdefault(occurrence.astimezone(tz).date(), []).append(occurrence)
+
+    # Ordered, so which visit claims which occurrence is the same on every run.
+    kept = list(
+        Job.objects.filter(
+            plan=plan,
+            plan_occurrence__gte=dt.datetime.combine(today, dt.time.min, tzinfo=tz),
+        ).order_by("plan_occurrence", "pk")
+    )
+    taken = {job.plan_occurrence for job in kept}
+
+    for job in kept:
+        if job.plan_occurrence in current:
+            continue
+
+        planned_day = job.plan_occurrence.astimezone(tz).date()
+        free = [o for o in by_day.get(planned_day, ()) if o not in taken]
+        if not free:
+            continue
+
+        taken.add(free[0])
+        job.plan_occurrence = free[0]
+        job.save(update_fields=["plan_occurrence", "updated_at"])
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +405,73 @@ def unassign_user(*, job: Job, user) -> bool:
 
     assignment.delete()
     return True
+
+
+#: What a dispatcher may do to a visit besides move its status. Published on
+#: the job as `available_actions` and enforced by `JobViewSet` from the same
+#: two functions below, so a page never decides either one (ADR-023, ADR-032).
+ACTION_EDIT = "edit"
+ACTION_DELETE = "delete"
+JOB_ACTIONS = (ACTION_EDIT, ACTION_DELETE)
+
+
+def edit_refusal(job: Job) -> str | None:
+    """
+    Why `job` may not be edited right now, or None if it may.
+
+    A finished visit is the record of what happened: time entries, an invoice
+    line and its dated description may all point at it. Changing one is a
+    correction, and the state machine already has the deliberate step for
+    that, so the answer is "reopen it first" rather than a quiet rewrite.
+    `assign_user` refuses a finished job for the same reason.
+    """
+    if job.is_terminal:
+        return (
+            f"This job is {job.get_status_display().lower()} and cannot be changed. "
+            "Reopen it first."
+        )
+    return None
+
+
+def delete_refusal(job: Job) -> str | None:
+    """
+    Why `job` may not be deleted right now, or None if it may.
+
+    Deletion is for a visit booked by mistake that nothing has happened to
+    yet (ADR-021). Everything else is called off by cancelling, which keeps
+    the row and the reason:
+
+    * recorded time would be orphaned, along with the hours billed against it;
+    * a visit that is under way or finished is history, not a mistake;
+    * a visit a plan created comes straight back, because the materializer
+      only counts live rows. Deleting a *cancelled* one is the worst case: it
+      puts the visit the customer called off back on the board.
+    """
+    if job.time_entries.exists():
+        return "This job has recorded time. Cancel it instead of deleting it."
+
+    if job.status != JobStatus.SCHEDULED:
+        return (
+            "Only a job that is still scheduled can be deleted. "
+            f"This one is {job.get_status_display().lower()}."
+        )
+
+    if job.plan_occurrence is not None:
+        return (
+            "This visit comes from a recurring plan, so deleting it would only "
+            "bring it back. Cancel it instead."
+        )
+
+    return None
+
+
+def job_actions(job: Job, *, is_dispatcher: bool) -> list[str]:
+    """Which of `JOB_ACTIONS` the server will accept for `job` from this caller."""
+    if not is_dispatcher:
+        return []
+
+    refusals = {ACTION_EDIT: edit_refusal, ACTION_DELETE: delete_refusal}
+    return [action for action in JOB_ACTIONS if refusals[action](job) is None]
 
 
 def next_statuses(job: Job, *, is_dispatcher: bool) -> list[str]:
