@@ -1055,12 +1055,62 @@ Such a visit keeps its old key, the new series is built beside it, and `kept` in
 **Accepted cost:** after a rule change that moves the day, a kept visit and the new series can both stand in one week.
 That was already true and is now the only case left.
 
+### 3. A plan visit is stamped with what the plan wrote, and "untouched" reads the stamp
+
+Amends ADR-020, whose own text is left as it was.
+ADR-020 read "untouched" off the start alone, so a price set by hand, a longer slot or a note on a plan visit was thrown away by the next plan edit.
+A lost hand-set price becomes a wrong invoice.
+
+`materialize_plan` now stamps each visit it creates with `planned_price_cents`, `planned_end` and `planned_notes`: the price, the end and the note it wrote.
+A future plan visit is untouched when it is still `scheduled`, `scheduled_start == plan_occurrence`, has no time entries, **and** its price, end and note each equal their stamp.
+The comparison is three `F()` equalities in the same query, so a NULL stamp matches nothing and that visit is kept: not knowing what the plan wrote is not evidence that nobody changed it.
+
+It is still derived from state, which is why ADR-020 rejected a "detached" flag.
+No write path has to remember anything: only the materializer writes the stamp, no serializer accepts it, and the admin shows it read-only.
+An edit that is taken back makes the visit the plan's again, and a PATCH that changes nothing pins nothing.
+
+**Three columns, not one snapshot column.**
+A JSON snapshot would be one field to add and none to keep whole.
+But the rule has to run in SQL, over eight weeks of visits, in the query that picks what to drop, and "does this timestamp equal that JSON string" is not a comparison to trust.
+Three typed columns compare with `=`, and a check constraint (`job_plan_stamp_is_whole`) keeps them all set or all NULL.
+`planned_notes` is the one nullable text column in the project, on purpose: NULL is "no plan wrote this visit" and `""` is "the plan wrote it with no note".
+
+**The backfill** (`scheduling/migrations/0003_plan_stamps.py`) is one UPDATE: every row with a `plan_occurrence`, soft-deleted rows included, is stamped with its own current price, end and note.
+That is correct for every visit made before this branch, because no page could edit one.
+The one case it gets wrong is a plan visit PATCHed through the API before the migration ran: its hand-set values become its stamp, so it reads as untouched and the next plan edit rebuilds it.
+That is the unsafe direction, and it is exactly what happened to such a visit before the stamp existed, so nothing gets worse.
+
+**With the re-key (part 2).**
+A visit kept for its price is still sitting at its planned instant.
+When the plan's time moves it keeps its old time, is re-keyed to the new occurrence on its day, and nothing is built beside it; a cancelled one does not come back.
+The re-key leaves the stamp alone: it records what the plan wrote when it made the visit, not what it would write now.
+So a kept visit later moved by hand onto the plan's new time still differs from its stamp in its end, and stays kept.
+
+**Rejected -- comparing against a re-quote and the plan's current note.**
+This is the obvious rule, and a probe through the API settled it.
+Raise the service's price, edit the plan's note (neither regenerates anything, both by design), let a later nightly run extend the horizon: one plan's untouched visits then carried prices `{15000: 56, 20000: 7}` and two different notes.
+Every one was exactly what the plan wrote on the day it wrote it.
+A re-quote calls the 56 older ones hand-edited and pins them, and plan edits stop regenerating anything.
+`TestNothingIsPinnedThatNobodyTouched` is that probe as a test, across an edit to the rule, time, duration, service, location and price override.
+
+**Rejected -- `updated_at` later than `created_at` as the signal.**
+No migration, and it catches every edit.
+But an empty PATCH bumps `updated_at` (verified), so a save that changed nothing pins the visit; an edit that is taken back stays pinned; `bulk_create` already leaves the two a few microseconds apart, so it needs an epsilon; and any future bulk `.save()` over jobs would pin every visit silently.
+
+**Rejected -- making it true by construction.**
+Regenerate on every plan-note edit and re-price future plan visits on every service or location change, so the plan and the service could be compared against after all.
+That reverses a tested decision about notes, has `catalog` reach into `scheduling`, and changes what "the price is a snapshot" means for a visit already booked.
+
+**Rejected -- the duration alone.**
+It is the one field that was derivable without a stamp, since a plan's duration only changes through an edit that regenerates.
+It leaves the price out, which is the case that costs money.
+
+**Accepted cost, unchanged from ADR-020:** a hand-added assignee does not pin a visit.
+The crew is not stamped, and `default_assignees` has the same history problem the note has.
+A test pins it so it stays a decision.
+
 ### Left open, on purpose
 
-- **An edit that leaves the start alone does not pin a plan visit.**
-  A longer slot, a note or a price set by hand is rebuilt on the next plan edit, exactly as ADR-020 already accepts for a hand-added assignee.
-  Widening "untouched" needs a record of what the plan last wrote, which is the flag ADR-020 rejected.
-  Tests in `test_rescheduling.py` pin the current behaviour.
 - **There is no double-booking rule.**
   The same cleaner can be put on overlapping visits by create, assign or a move, and nothing warns.
   Tests pin that too.
