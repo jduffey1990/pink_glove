@@ -1306,3 +1306,109 @@ Clock-in and assign already answer 409 on any finished visit.
 Clock-out of an entry that was left open, unassign, a dispatcher's time-entry correction and a new job note all still succeed on a billed visit.
 None changes what the invoice bills (the line amount is a snapshot, ADR-026), so none is this bug.
 The Django admin edits a job directly and passes through none of this, as it passes through none of the state machine.
+
+---
+
+## ADR-034: An owner runs their own team: invitations, the team rules, and staff password reset
+
+**Decided (2026-11-17, before the first work trial).**
+`MembershipViewSet` was read-only, so every new cleaner and every lost password meant the developer in the Django admin.
+Five decisions, taken together because each one closes a hole the next would otherwise open.
+
+**1. An invitation is an inactive membership, and only acceptance activates it.**
+`invite` creates the `Membership` with `is_active=False` and `invited_at` set; following the emailed link sets `is_active=True` and `accepted_at`.
+Everything that decides access already reads `is_active`: tenant resolution in the middleware, the 2FA policy, the magic-link rule, the assignee checks.
+So an invitation nobody has accepted changes nothing about how its recipient signs in or what they reach, in this organization or any other.
+That matters because an invited address may already be somebody: counted as a membership, a staff invitation would make a rival's customer "not only a customer" and take their magic link away, so any organization's admin could lock another organization's customers out by inviting them.
+For the same reason the invited account is never written to (no name, no password), its name is not shown to the inviter until it joins, the response is identical for a known and an unknown address, and reactivating a withdrawn invitation re-invites instead of granting access.
+`Membership.state` (invited, active, deactivated) is derived, never stored; `deactivated_at` is the one new column, and it exists to tell a withdrawn invitation from a pending one.
+Memberships made by the seed or in the admin have `invited_at` and `accepted_at` NULL and read as active: nothing gates sign-in on either column, and `two_factor/tests/test_lockout_guard.py` pins that.
+
+**2. The team rules are one function, and each row publishes its answer.**
+An owner manages anyone; an admin manages dispatchers and cleaners and cannot invite, promote to, demote, deactivate, reactivate or re-invite an owner or admin; nobody below admin manages anybody.
+Nobody changes their own role or deactivates themselves.
+The last active owner (one who can actually sign in) keeps both the role and the membership, checked under a row lock on every owner in the organization so two owners cannot remove each other at once.
+Customers are neither invited nor managed here.
+`users.services._refusal` is the single statement of all of it: every write enforces it, and every row is serialized with the `available_actions` and `assignable_roles` it yields for the caller, with the invitable roles on their own endpoint.
+The team page draws its buttons from those and keeps no table of which role outranks which (ADR-023).
+A refusal for rank is a 403; a refusal for the row's current state (already deactivated, nothing to resend, last owner) is a 409, so the page knows to re-read.
+
+**3. `AccountToken` is a sibling of `MagicLinkToken`, not a generalisation of it.**
+It is built the same way: 256 random bits, only the SHA-256 stored, an expiry, single use by a conditional update.
+It carries a `purpose` (invitation, 7 days; password reset, 1 hour) that is a required argument of every lookup, so a token is only ever found by the endpoint it was issued for.
+An invitation also names the one membership it opens, enforced by a check constraint.
+Issuing withdraws whatever was live for the same thing, so a resend kills the earlier email and so does asking for a reset twice; deactivating an invitation withdraws its token.
+Both flows look the token up, validate the password, and only then spend it, so a password the validators refuse does not cost the person their link.
+
+**4. Accepting and resetting set a password and sign nobody in.**
+Both are public endpoints that answer with a sentence.
+The person then signs in the ordinary way and meets the ordinary challenge (ADR-008), on every device, so neither an intercepted invitation nor a reset is also a session, and no bypass of the second factor was added anywhere.
+Accepting sets the password and the name only for an account that has never had a password; an existing account keeps both, whatever the request says.
+A reset leaves nothing from before it working: every session ends with the password (Django's session auth hash), every trusted device is forgotten, every outstanding 2FA code is withdrawn, and a sign-in that was waiting on one of those codes is over, including through `/api/auth/resend/`.
+Reset is for active staff only: a customer signs in by magic link, an invitee has not joined, and a platform superuser changes their password from a shell.
+
+**5. Asking for a reset says the same thing to everyone, and does the same work.**
+The endpoint answers 202 with one body whether the address is staff, a customer or nobody.
+The view does not look the account up: it hands the address to a Celery task (`two_factor.send_password_reset`), which decides and sends.
+A lookup in the request would cost a staff address a token and an SMTP conversation and any other address nothing, and the response time alone would tell them apart.
+It is throttled per client address and per address asked about; the second counts unknown addresses the same way, so a 429 says nothing either.
+That task takes no `organization_id`, which is a recorded exception to invariant 3: a reset belongs to a person and happens before any tenant is resolved, as a 2FA code does, so there is no organization to pass and no tenant data for a missing one to leak.
+The link is created in the worker and goes only into the email; the broker carries the typed address and no result is stored.
+With `LOCAL = True`, and only then, the invitation and reset links come back in the response as `dev_link`, as `dev_code` does, and nothing is emailed.
+
+**Rejected -- adding a `purpose` column to `MagicLinkToken`.**
+One table and one model, which is why it looks like the obvious thing.
+A magic link signs its holder in and these two never do, so sharing a table leaves "which kind is this" to a filter that somebody can forget, and that failure is a staff session from a link meant for something else: it fails open.
+With a sibling, an invitation simply is not in the table the magic-link endpoint reads.
+It would also have rewritten the customer's sign-in path, in the same change that must not alter anyone's sign-in.
+
+**Rejected -- an invitation as an active membership with `accepted_at` NULL.**
+Simpler, and it is what the two existing columns suggest.
+Every reader of `is_active` (six call sites, and every one written later) would then have to remember to exclude the unaccepted, and forgetting is the cross-tenant lockout described above.
+Inactive-until-accepted fails closed.
+
+**Rejected -- a role table in the frontend.**
+The page could work out its buttons from the caller's role and the row's.
+It would be right until the day a rule changed on the server and nothing in the UI failed, and it cannot know the last-owner rule at all without counting owners (ADR-023).
+
+**Rejected -- signing the person in on accept or on reset.**
+One step fewer.
+It would make a link in a mailbox equivalent to password plus code for an owner, which is the trade ADR-008 refuses for staff, and it would let a reset walk around the trusted-device rule.
+
+**Rejected -- sending the reset email from the request, as the magic link does.**
+It needs no task and no exception to invariant 3.
+It is also a timing oracle for which addresses are staff, on an endpoint whose whole design is to not be one.
+The magic-link endpoint has the same shape today and is left alone here; closing it the same way is a separate change.
+
+**Rejected -- an admin typing the invitee's name.**
+The inviter usually knows it.
+But the address may already belong to an account in another organization, and then either the typed name is silently dropped or one tenant renames another tenant's person; and a name typed for a new account by whoever invites first would follow that person into every organization that invites them later.
+The invitee names themselves when they accept.
+
+**Rejected -- letting a superuser reset by email.**
+A superuser can act in every organization.
+That password is changed with `manage.py changepassword`, by someone with a shell, not by whoever can read a mailbox.
+
+**Rejected -- refusing invitations and resets while an organization is read-only.**
+ADR-028 makes a lapsed organization read-only, and "accept an invitation" and "set a new password" are writes.
+But they are not writes to the organization: they are how a person gets in, and the person who most needs to get in to a lapsed organization is the owner, to pay.
+Refusing them would turn read-only into locked, which is exactly what ADR-028 avoided for the subscription endpoints.
+They need no `allowed_while_inactive` flag, because they never reach `IsOrgMember`: they are `AllowAny` with no organization resolved.
+
+**Accepted costs.**
+The second factor is a code sent to the same mailbox the reset link goes to, so with reset by email the mailbox alone is enough to take a staff account: before this, it took the mailbox and the password.
+That is inherent in a self-service reset while the code is emailed, and an authenticator app or passkey is what would change it.
+The invitation and reset tokens travel in the path of the page's address (`/accept-invite/<token>`, `/reset-password/<token>`), as the magic link's and the pay page's do, so a deployed server writes them to its access log before they are spent; a logged token still yields no session without the mailbox, and moving the token to the URL fragment would take it out of the log for all four links at once.
+Reset emails depend on the Celery worker: with the worker down the request still answers 202 and the email waits in the queue.
+Deactivating a membership does not end the person's session, since they may belong elsewhere; the middleware stops resolving the organization on their next request, and their trusted device, if any, is still trusted if they are reactivated.
+A deactivated cleaner's future job assignments are left as they are.
+
+**Consequences.**
+The reset views live in `two_factor`, beside the sign-in they recover, because finishing a reset has to reach that app's devices and codes; `users` still imports nothing from `two_factor`.
+`SessionSerializer` lists only active memberships, with the same filter as `TenantMiddleware`, so a deactivated membership or an unaccepted invitation is never offered as an organization to act in; before this the payload listed a deactivated one.
+A person active in no organization is signed in with no role, and the frontend sends them to one page that says so.
+In a read-only organization (ADR-028) the team's five writes are refused by `IsOrgMember` like any other write, and the rule function carries the same condition and the same superuser exemption so that no row offers an action that would be refused: `available_actions`, `assignable_roles` and the invitable roles are all empty there.
+A membership's `state` and the organization's billing state share the words "active" and "deactivated"; they are different fields with different schema names (`MembershipStateEnum`, `BillingStateEnum`), and the team page reads only the first.
+Five throttle scopes were added and must be listed in all three settings files.
+The frontend paths `/accept-invite/<token>` and `/reset-password/<token>` are spelled in `users/services.py`, `two_factor/services.py` and `ui/src/router/index.ts`.
+The `TeamAction` values are mirrored as a type and a label table in `ui/` (`src/api/types.ts`, `src/lib/team.ts`), the way invoice actions are.

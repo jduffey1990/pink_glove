@@ -2950,3 +2950,126 @@ Before the rebase, against `7843a71`, the same work read 1049 → 1265 and 131 �
    All of it is on `feat/reports`; nothing was committed to `main`, nothing was pushed or merged, and no `fly` command, staging or production access, or migration was run.
    The branch was rebased once, onto local `main` at `6ef6f78`, before anything had been pushed; the two generated schema files were regenerated at each commit that carries them rather than merged by hand.
    Tests ran against a database of their own (`pg_reports`); the development database was not touched.
+
+---
+
+## Team management as built
+
+Branch `feat/team-management`, on `main` at 6ef6f78 (after Phase 4c).
+Backend 1234 → 1599, frontend 146 → 209.
+Decision record: ADR-034.
+The problem was that `MembershipViewSet` was read-only, so every new cleaner and every lost password meant the developer in the Django admin.
+
+**How customer memberships come to exist today.**
+Only two ways, and neither is an API: the Django admin (`MembershipAdmin`, or the inline on a user), and `seed_demo`.
+`CustomerSerializer.user` then links a customer record to a user who already holds an active customer membership in the caller's organization.
+Nothing here changes that: `customer` is not a role the team page can invite, grant or act on.
+
+**Invitations.**
+`POST /api/users/memberships/` takes an address and a staff role and creates the membership inactive, with `invited_at` set.
+Following the emailed link (`/accept-invite/<token>`) activates it and stamps `accepted_at`.
+Until then nothing that reads `is_active` counts it, so an invitation changes nothing for its recipient, in this organization or any other.
+An address that already has an account gets a membership and nothing else: the account is not written to, its name is not shown until it joins, and the response is the same as for a stranger.
+`Membership.state` (invited, active, deactivated) is derived; `deactivated_at` is the one new column.
+
+**The team rules.**
+An owner manages anyone; an admin manages dispatchers and cleaners only; nobody changes their own role or deactivates themselves; the last active owner keeps both the role and the membership, checked under a lock.
+`users.services._refusal` states them once.
+The writes (`PATCH` for the role, `deactivate`, `reactivate`, `resend-invite`) enforce it, and every row is served with the `available_actions` and `assignable_roles` it yields for the caller, with the invitable roles at `memberships/invite-options/`.
+There is no PUT and no DELETE.
+
+**The token.**
+`users.AccountToken`, a sibling of `MagicLinkToken`: hashed, single use, expiring, with a `purpose` (invitation, 7 days; password reset, 1 hour) required by every lookup.
+Issuing withdraws the earlier one for the same thing.
+
+**Accepting.**
+`POST /api/users/invitations/inspect/` says what a link opens and whether the account has ever had a password; `POST /api/users/invitations/accept/` joins, and sets a name and password only for an account that never had one.
+Neither signs anyone in.
+
+**Staff password reset.**
+`POST /api/auth/password-reset/` answers 202 with one body for every address and does the same work for every address: the view enqueues `two_factor.send_password_reset`, and the worker decides and sends.
+`POST /api/auth/password-reset/confirm/` sets the password, ends every session, forgets every trusted device, withdraws every outstanding 2FA code and ends any sign-in that was waiting on one.
+It signs nobody in.
+Active staff only: not customers, not invitees, not platform superusers.
+
+**A fix found on the way.**
+The session payload listed a deactivated membership, which the middleware then refused; it now lists only what the middleware would resolve.
+
+**A fix found by the review.**
+Withdrawing 2FA codes on reset closed `/api/auth/verify/` and left `/api/auth/resend/` open: a sign-in started with the old password could ask for a fresh code and finish.
+`ResendView` now treats a spent code as the end of the sign-in it belonged to.
+Reproduced with a test first.
+
+**On top of Phase 4c.**
+In a read-only organization the five team writes are refused by `IsOrgMember` with its own sentence, and no row offers an action: the rule function carries the same condition and superuser exemption.
+Sign-in, password reset (request and confirm) and accepting an invitation all still work there, because they never reach `IsOrgMember`; refusing them would lock out the owner who has to get in to pay.
+`users/tests/test_read_only_organization.py` pins each.
+
+**Frontend.**
+`/team` (admin tier, in the nav), `/accept-invite/:token`, `/forgot-password`, `/reset-password/:token`, a "Forgot password?" link on the login page, and `/no-access` for someone signed in but active in no organization.
+The team page keeps no role table: menus come from `available_actions`, the role select from `assignable_roles`, the invite dialog from `invite-options`.
+No tier changed; the router gained an `admin` access tier that reads the existing `isAdminOrHigher`.
+
+**Not verified.**
+No browser has looked at any of these pages, at any width.
+The 390px layout is by construction only (a wrapping chip row, truncating names, one menu button per row).
+The emails have been rendered in tests and never seen in a mail client.
+The `/no-access` redirect is covered through the session store's `hasNoOrganization` and not as a navigation.
+
+### Phase gate
+
+Reviewed by the author, by mutation (each rule broken in turn to see its tests fail), and by one independent `/security-review` pass over the branch diff.
+
+**1. Test coverage.**
+Backend 1234 → 1599, frontend 146 → 209.
+Every new endpoint, service, model method and the Celery task has direct tests.
+Each permission rule is tested from every role on both sides of the line (one table of who may manage whom drives invite, role change, deactivate, reactivate and resend), each tenant-scoped endpoint has a cross-tenant test for every verb, and mass assignment is tested on the invite body and the role PATCH.
+Token replay and cross-purpose use are tested in all six directions.
+*Gaps left open:* the two-owners race is closed by a row lock that is argued and not exercised, since it needs two concurrent transactions.
+The router guard has no spec, so the `admin` tier and the `/no-access` redirect are untested as navigation.
+`NoAccessPage.vue` and the login page's new link have no spec.
+The email templates are asserted by substring, not rendered and looked at.
+The reset task is run eagerly in tests and never against a real broker.
+`AccountToken` is not registered in the admin and so has no admin test.
+
+**2. DRY.**
+One rule function serves both what a row offers and what a write accepts.
+`validated_password` is the one way a public endpoint accepts a password.
+The three team specs share `ui/src/lib/team.fixtures.ts`.
+*Accepted:* the "render, send, log without the link" block exists once in `users/services.py` and once in `two_factor/services.py`, beside the existing one for 2FA codes; and `failureMessage` lives in `lib/team.ts` though the account pages use it too.
+
+**3. Modularity.**
+Pages reach the backend through `ui/src/api/endpoints.ts` and the team store; no page calls `fetch` or axios.
+Rules live in `users/services.py` and `two_factor/services.py`, not in views or serializers.
+`two_factor` imports `users`; `users` imports nothing from `two_factor`.
+
+**4. Orthogonality.**
+Couplings this adds, each noted in code:
+the five throttle scopes (`team_invite`, `invite_accept`, `password_reset`, `password_reset_account`, `password_reset_confirm`) are listed in `settings/base.py`, `local.py` and `test.py`;
+the paths `/accept-invite/<token>` and `/reset-password/<token>` are spelled in `users/services.py`, `two_factor/services.py` and `ui/src/router/index.ts`;
+`TeamAction` in `users/enums.py` is mirrored by the `TeamAction` type in `ui/src/api/types.ts` and the labels in `ui/src/lib/team.ts`;
+`ENUM_NAME_OVERRIDES` gained `MembershipStateEnum` and `StaffRoleEnum`;
+the session payload's membership filter must match `TenantMiddleware`'s;
+`Actor.read_only` in `users/services.py` repeats the condition and exemption of `IsOrgMember`;
+the role-tier mirror gained an `admin` route tier in `ui/src/router/index.ts` and the nav gate in `App.vue`;
+password reset emails need the Celery worker;
+`two_factor.tasks.send_password_reset` takes no `organization_id` (ADR-034);
+mounting a Vuetify page in a spec needs `vuetify` inlined in `ui/vite.config.mts`.
+
+**5. Security.**
+`AllowAny`, each deliberate and throttled: `InvitationInspectView`, `InvitationAcceptView`, `PasswordResetRequestView`, `PasswordResetConfirmView`.
+`MembershipViewSet` states its permission per action: `IsStaff` to read, `IsAdminOrHigher` for everything else, including any action added later.
+`organization` is stamped from the resolved tenant on invite and is not a field of any body.
+No authorization lives only in the UI.
+`AccountToken` is a `Base` model like the other sign-in rows; no API serves it.
+Nothing sensitive is logged by the application: no token, no link, no password, tested with the mail both succeeding and failing.
+`dev_link` is returned only when `LOCAL` is set, tested both ways for the invitation and the reset.
+The deploy audit is clean.
+`/security-review` found one issue, the resend bypass above, fixed.
+*Open, recorded in ADR-034:* with the second factor emailed, a mailbox alone can now take a staff account through reset; and the tokens travel in the page's path, so a deployed server's access log holds them until they are spent.
+
+**6. Branch and production guard.**
+All of this is on `feat/team-management`.
+Nothing was committed to `main`, nothing was pushed or merged, and no `fly` command or staging or production resource was touched.
+The branch was rebased once onto `main` at 6ef6f78, at the orchestrator's instruction, before anything had been pushed.
+One migration, `users/0003`; none in any other app.
