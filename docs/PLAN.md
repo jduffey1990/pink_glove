@@ -3078,8 +3078,9 @@ One migration, `users/0003`; none in any other app.
 
 ## Ops readiness as built
 
-Branch `feat/ops-readiness`, on top of `7843a71`.
-Backend 1049 → 1203; frontend untouched, and the schema did not change.
+Branch `feat/ops-readiness`, written on top of `7843a71` and rebased onto `main` at `6ad5eb8` once Phase 4c had merged.
+Backend 1049 → 1203 as written, and 1234 → 1400 on the rebased tip; frontend untouched, and the schema did not change.
+Everything below was recorded before the rebase; what the rebase changed and what was checked again is in "After Phase 4c" at the end.
 Production does not exist yet and only Jordan stands it up, so this is everything the repository can provide: code, settings guards, runbook steps as exact commands, and a local rehearsal that proves the ones that can be proved here.
 What the brief asked for, and what each turned into:
 
@@ -3114,6 +3115,7 @@ A freshly built image passed its health check with `worker` and `beat` exited: `
 CI could not have seen it: the suite runs tasks eagerly, pytest brings `packaging` with it, and the image job only checks the build finishes.
 On Fly the web check would have passed too.
 Fixed by depending on `celery[redis]`, and by importing the broker transport as a build step so the next one fails the image build.
+That fix was taken off this branch and merged to `main` on its own, ahead of the rest (`2c67938`), so it is no longer one of this branch's commits.
 The rehearsal instructions were right as far as they went and blind in one place: nothing in them looked at `worker` or `beat`, and `up -d` reports success when both start and then exit.
 `docs/DEPLOY.md` now starts the checks with `ps`, adds an emailed invoice as the one check that goes through Redis to the worker, and says the same about `fly status` after every deploy.
 
@@ -3365,3 +3367,39 @@ Gaps: the SDK's real HTTP transport is exercised in the rehearsal and not in pyt
 **5. Security.** No new model, endpoint or Celery task, so invariants 1 to 3 are untouched; the action passes `organization_id` from the row. No new `AllowAny` view in the application: one exists in `app/tests/sentry_probe_app.py`, a URLconf used only by a child test process and included by nothing. The admin still admits only a session that cleared the second factor (tested for the action, in pytest and over TLS); the action adds a superuser requirement and the ledger stays read-only. Access codes stay write-only and encrypted: `check_field_encryption` decrypts in memory, prints counts, records no reveal because no person sees a value, and is tested never to print a code or ciphertext. Nothing sensitive is logged by the new code; the admin logs an event id and a user id. No secret in source: the DSNs in tests are placeholders on `.invalid`, and gitleaks passed on every commit. The deploy audit comes back clean, and the rehearsal signed in over TLS and wrote a private object. What may leave to Sentry is ADR-029. Gap: `/security-review` was not run on the diff; the review above was done by hand.
 
 **6. Branch and production guard.** Everything is on `feat/ops-readiness`; nothing was committed to `main`, pushed or merged. No `fly` command was run, no live service or credential was touched, and nothing was sent to a third party: every DSN was `.invalid` or the container's own loopback, mail went to the console backend, and the AWS CLI was pointed at MinIO on loopback with its own empty configuration. Docker: only the `pink-glove-rehearsal` project, brought down with its volumes; the `pink-glove` project was not touched.
+
+### After Phase 4c (rebased 2026-11-17)
+
+`main` gained the platform subscription (Phase 4c, ADR-028) and the worker fix while this branch was open.
+The branch was rebased onto it; the worker fix dropped out as already applied, and `pyproject.toml` and the `Dockerfile` carry one copy of it with the `sentry-sdk` line beside it.
+Four files conflicted, all of them two appends at the same place, and each kept both sides: `app/.env.example` (the platform block, then error tracking), `billing/tests/conftest.py` (`platform_billing_on`, then the shared `enqueue` and `no_fee`), `docs/DECISIONS.md` (ADR-028, then ADR-029) and this file.
+`docs/DEPLOY.md`, `settings/production.py` and the settings tests merged without one, and the runbook still reads top to bottom: steps 1 to 10, then Production, Email, Error tracking, Backup and restore, the rehearsal and the recovery table.
+
+What 4c changed for this work, and what was done about each:
+
+**The admin replay covers platform events as written.**
+A platform event is ledgered with no account, but it is only ever RECEIVED, and so only ever FAILED, with the organization its Stripe customer resolved to.
+The action hands that organization's id to the same task (invariant 3) and `process` picks the platform handlers from the row's empty account.
+Tested with `checkout.session.completed`, the one type both handler tables share, so a replay sent down the Connect path would record a payment and fail: it re-reads the subscription and writes none.
+A platform event nobody holds has no organization and is refused with a sentence on the page, whatever its status.
+
+**The scrubber needed no change, and the tests now say why.**
+`STRIPE_PLATFORM_WEBHOOK_SECRET` is redacted by name.
+The billing portal's URL and a Checkout URL lose the session they name by the rule for a long path segment; neither is logged today.
+Stripe's ids for a tenant (`cus_`, `sub_`, `acct_`, `price_`) are left readable on purpose: they are names, nothing can be done with one without the platform's key, and they are what an error about a subscription is looked up by.
+
+**Both sets of production guards hold together.**
+The email refusals, the error-tracking refusal and 4c's two (a price without the platform webhook secret, a price without the key) are tested in the one module and pass together.
+4c's settings are all optional, so the Dockerfile, the rehearsal compose file and the settings tests' baseline needed nothing for them.
+The audit script did: with the Stripe key emptied there, a developer's `.env` holding a platform price tripped 4c's "price without the key" refusal, the same leak through `python-decouple` as before, and the script and the settings probe now set the price empty too.
+On a machine with such a `.env`, the commits of this branch before that one fail up to three tests for that reason; with no `.env`, as in CI and the gate, every commit was run on its own and passes.
+
+**`check_field_encryption` and the restore drill hold with `organizations` migration 0006.**
+In the rebased image the release command applied `0006_platform_subscription`, the check read all four seeded values, and part A of the drill was run again: dump (40 tables), restore into a fresh database, right key `OK` and exit 0, `migrate --check` exit 0, a different key `4 of 4 ... cannot be read` and exit 1.
+"Restoring production" gained a step: the subscription fields mirror Stripe, so an older dump restores them stale and the daily task, or a run by hand, corrects them.
+
+The rehearsal was run once more from an image built from the rebased worktree: `web`, `worker` and `beat` up, the health, asset, 404 and redirect checks as before, sign-in over TLS (202, code from the web log, 200), a private object written and read back by signature (200, same SHA-256) and refused without (403), and one invoice emailed through the worker.
+Stack brought down with its volumes.
+
+Backend 1234 → 1400: the 154 above, 4 more in `billing/tests/test_admin.py` and 8 more in `app/tests/test_sentry.py`.
+Still open: `/security-review` was not run; part B of the drill and the mutation check were not repeated after the rebase.
