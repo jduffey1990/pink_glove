@@ -63,7 +63,7 @@ testing gotchas that will otherwise cost you an hour each.
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
 | D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
 | 4b | Stripe Connect: tenants take card payments | **Done** (merged 2026-09-23, with the staging fixes) |
-| 4c | Platform subscription: tenants pay for pink_glove | **Done** on `phase-4c-platform-subscription` (2026-10-09), gated; waiting to be merged |
+| 4c | Platform subscription: tenants pay for pink_glove | **Done** (built on `phase-4c-platform-subscription` 2026-10-09, merged) |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
 ---
