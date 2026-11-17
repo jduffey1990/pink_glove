@@ -36,6 +36,7 @@ PRODUCTION_ENV = {
     **PRODUCTION_BASELINE,
     "UI_DIST_DIR": "",
     "STRIPE_SECRET_KEY": "",
+    "STRIPE_PLATFORM_PRICE_ID": "",
     "SENTRY_DSN": "",
     "SENTRY_ENVIRONMENT": "",
     "SENTRY_RELEASE": "",
@@ -99,6 +100,9 @@ class TestWhatCountsAsSensitive:
             "Proxy-Authorization",
             "Stripe-Signature",
             "STRIPE_SECRET_KEY",
+            # Both webhook endpoints' signing secrets (Phase 4b, Phase 4c).
+            "STRIPE_CONNECT_WEBHOOK_SECRET",
+            "STRIPE_PLATFORM_WEBHOOK_SECRET",
             "FIELD_ENCRYPTION_KEY",
             "SENTRY_DSN",
             "AWS_SECRET_ACCESS_KEY",
@@ -134,6 +138,16 @@ class TestWhatCountsAsSensitive:
             "aggregate",
             "monkey",
             "organization_id",
+            # Stripe's identifiers for a tenant (Phase 4c) are names, not
+            # credentials: nothing can be done with a `cus_` or `sub_` id
+            # without the platform's key. Left readable on purpose, like the
+            # `pi_` and `evt_` ids the webhook already logs, because they are
+            # what an error about a subscription is looked up by.
+            "stripe_customer_id",
+            "stripe_subscription_id",
+            "stripe_account_id",
+            "STRIPE_PLATFORM_PRICE_ID",
+            "subscription_status",
         ],
     )
     def test_and_these_do(self, name):
@@ -154,6 +168,21 @@ class TestCredentialsInAUrl:
         url = f"/api/billing/invoices/{uuid.uuid4()}/void/"
 
         assert scrub_url(url) == url
+
+    def test_a_stripe_hosted_session_url_loses_the_session_it_names(self):
+        """
+        What `billing.subscription` gets back from Stripe (Phase 4c): the
+        billing portal's URL signs its holder in to the tenant's subscription,
+        and a Checkout URL carries its session. Neither is logged today; if
+        one ever lands in a log line or an exception, the session goes.
+        """
+        portal = "https://billing.stripe.com/p/session/test_" + "YWNjdF8xVGVzdFBsYXRmb3Jt" * 3
+        checkout = "https://checkout.stripe.com/c/pay/cs_test_" + "a1B2c3D4e5F6g7H8i9J0" * 3
+
+        assert scrub_url(f"portal: {portal}") == (
+            f"portal: https://billing.stripe.com/p/session/{FILTERED}"
+        )
+        assert scrub_url(checkout) == f"https://checkout.stripe.com/c/pay/{FILTERED}"
 
     def test_the_pay_links_token_is_redacted_wherever_the_url_appears(self):
         """`billing.connect.pay_token`: the credential in an invoice email."""
