@@ -9,7 +9,7 @@
    *
    * Accepting signs nobody in. The server answers with a sentence, and the
    * person then signs in the ordinary way and meets the ordinary code
-   * (ADR-008, ADR-028). Every message shown here is the server's own.
+   * (ADR-008, ADR-034). Every message shown here is the server's own.
    */
   import type { Invitation } from '@/api/types'
   import { ref } from 'vue'

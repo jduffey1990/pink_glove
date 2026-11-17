@@ -4,7 +4,7 @@ Team management must not change how anyone already here signs in.
 Every membership that existed before invitations did was made by the seed or
 in the Django admin, with `invited_at` and `accepted_at` both NULL. Nothing
 may gate sign-in on either column, or the day this ships is the day every
-existing owner is locked out (ADR-028). These walk the three sign-in paths
+existing owner is locked out (ADR-034). These walk the three sign-in paths
 of ADR-008 for exactly such a person.
 """
 

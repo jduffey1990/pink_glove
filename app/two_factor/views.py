@@ -183,7 +183,7 @@ class ResendView(APIView):
         # (`services.forget_devices`), and that has to end the sign-in they
         # belonged to as well: otherwise whoever started it with the old
         # password asks here for a fresh code and finishes without ever being
-        # asked for the new one (ADR-028). A spent code with a sign-in still
+        # asked for the new one (ADR-034). A spent code with a sign-in still
         # pending behind it only ever means that, because a code spent by
         # verifying takes the pending sign-in with it. An expired code is not
         # spent, so the ordinary "send me another" is untouched.

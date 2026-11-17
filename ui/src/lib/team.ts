@@ -4,7 +4,7 @@
  * Presentation only, as with `jobStatus.ts` and `invoiceStatus.ts`. Who may
  * manage whom is the server's to say: each row arrives with the
  * `available_actions` and `assignable_roles` worked out for the caller, and
- * the roles they may invite come from their own endpoint (ADR-023, ADR-028).
+ * the roles they may invite come from their own endpoint (ADR-023, ADR-034).
  * There is deliberately no table here of which role outranks which.
  */
 

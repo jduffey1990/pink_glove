@@ -5,7 +5,7 @@
    * There is no role table on this page. Every row arrives with the
    * `available_actions` and `assignable_roles` the server worked out for
    * whoever is asking, and the roles on offer in the invite dialog come from
-   * the server too (ADR-023, ADR-028). An admin sees no menu on an owner's
+   * the server too (ADR-023, ADR-034). An admin sees no menu on an owner's
    * row because the server sent that row no actions, not because this file
    * knows what an admin is. Refusals are shown in the server's own words.
    */

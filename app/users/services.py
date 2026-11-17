@@ -1,6 +1,6 @@
 """
 Sign-in rules that more than one view has to agree on, and the rules of the
-team page: who may manage whom, and what an invitation does (ADR-028).
+team page: who may manage whom, and what an invitation does (ADR-034).
 """
 
 import logging

@@ -2,7 +2,7 @@
 Background work for sign-in.
 
 One task, and it is the recorded exception to "every task takes
-`organization_id`" (ADR-004, CLAUDE.md invariant 3; see ADR-028). A password
+`organization_id`" (ADR-004, CLAUDE.md invariant 3; see ADR-034). A password
 reset belongs to a person, not to an organization: it happens before any
 tenant is resolved, exactly as a 2FA code does, so there is no organization
 to pass and no tenant data for a missing one to leak.

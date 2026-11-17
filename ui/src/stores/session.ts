@@ -133,7 +133,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * Signed in, and active in no organization: deactivated everywhere, or an
-   * invitation not yet accepted (ADR-028).
+   * invitation not yet accepted (ADR-034).
    *
    * The session lists only memberships the server would resolve, so for this
    * person the list is empty and there is no role. Every screen needs one,

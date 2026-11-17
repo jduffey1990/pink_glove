@@ -4,7 +4,7 @@
    *
    * The server gives the same answer for every address, staff or not, known
    * or not, so that this page cannot be used to find out who has an account
-   * (ADR-028). The sentence shown afterwards is the server's, word for word:
+   * (ADR-034). The sentence shown afterwards is the server's, word for word:
    * rewording it here to sound more certain would undo exactly that.
    */
   import { ref } from 'vue'

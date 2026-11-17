@@ -30,7 +30,7 @@ STAFF_ROLE_CHOICES = [(role.value, role.label) for role in STAFF_ROLES]
 #: challenged only on an untrusted device; customers use magic links.
 ALWAYS_TWO_FACTOR_ROLES = DISPATCHER_ROLES
 
-#: Who may manage whom on the team (ADR-028): the roles each tier may invite,
+#: Who may manage whom on the team (ADR-034): the roles each tier may invite,
 #: grant, and act on. An owner manages anyone; an admin manages the tiers
 #: below admin and nothing else; nobody below admin manages anybody. Customer
 #: is in no list: portal access is not handed out from the team page.
@@ -60,7 +60,7 @@ class TeamAction(TextChoices):
 
     Published per row as `available_actions`, already worked out for the
     caller, so the page draws its buttons from the answer instead of keeping
-    its own copy of who outranks whom (ADR-023, ADR-028).
+    its own copy of who outranks whom (ADR-023, ADR-034).
     """
 
     CHANGE_ROLE = "change_role", "Change role"

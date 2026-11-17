@@ -35,7 +35,7 @@ const routes: RouteRecordRaw[] = [
     meta: { access: 'public', title: 'Enter your code' },
   },
   {
-    // The three account pages (ADR-028). No session: the token in the email
+    // The three account pages (ADR-034). No session: the token in the email
     // is the credential, and none of them signs anyone in.
     path: '/forgot-password',
     name: 'forgot-password',

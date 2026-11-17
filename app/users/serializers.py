@@ -68,7 +68,7 @@ class TeamMemberSerializer(MembershipSerializer):
     `available_actions` and `assignable_roles` are worked out for whoever is
     asking, from the same rules the writes enforce (`users.services`), so the
     page draws its buttons from them and keeps no table of who outranks whom
-    (ADR-023, ADR-028). The session payload keeps the plain
+    (ADR-023, ADR-034). The session payload keeps the plain
     `MembershipSerializer`: a person's own memberships have no caller to
     judge them by.
     """

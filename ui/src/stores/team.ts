@@ -5,7 +5,7 @@
  * table. Every row carries the `available_actions` the server worked out for
  * the caller, and after any write the whole list is read again, because one
  * change can alter what another row offers: demote one of two owners and the
- * other becomes the last one, who can no longer be deactivated (ADR-028).
+ * other becomes the last one, who can no longer be deactivated (ADR-034).
  */
 
 import type { InvitedTeamMember, StaffRole, TeamMember } from '@/api/types'

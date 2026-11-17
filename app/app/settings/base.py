@@ -195,7 +195,7 @@ REST_FRAMEWORK = {
         # opening Checkout sessions does not.
         "pay_page": "120/hour",
         "pay_checkout": "10/hour",
-        # Team management (ADR-028). Inviting, resending and re-inviting each
+        # Team management (ADR-034). Inviting, resending and re-inviting each
         # put an email in a mailbox the caller names; keyed on the signed-in
         # user. An owner setting up a crew sends a dozen, not hundreds.
         "team_invite": "60/hour",
@@ -203,7 +203,7 @@ REST_FRAMEWORK = {
         # invitation and one acceptance per person, with room for a password
         # the validators send back a few times.
         "invite_accept": "30/hour",
-        # Staff password reset (ADR-028). Asking is limited per client IP and,
+        # Staff password reset (ADR-034). Asking is limited per client IP and,
         # separately, per address asked about (`PasswordResetAccountThrottle`),
         # which is what stops a rotating guesser flooding one mailbox. The
         # per-address rate is the lower one: nobody needs four reset emails.

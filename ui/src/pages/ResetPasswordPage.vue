@@ -5,7 +5,7 @@
    * Public: the token in the address is the credential. A success signs
    * nobody in. It ends every session the account had, forgets every trusted
    * device, and the person then signs in with the new password and a code
-   * like any other sign-in (ADR-008, ADR-028).
+   * like any other sign-in (ADR-008, ADR-034).
    *
    * The validators' answers are shown as the server sent them, all of them
    * at once.

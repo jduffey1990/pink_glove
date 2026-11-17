@@ -2,7 +2,7 @@
 `AccountToken`: single-use, hashed, expiring, and good for one purpose only.
 
 `Membership.state` is here too, since the token and the state are the two
-things the model layer adds for team management (ADR-028).
+things the model layer adds for team management (ADR-034).
 """
 
 import hashlib

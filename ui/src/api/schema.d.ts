@@ -1622,7 +1622,7 @@ export interface paths {
          *     Public: the token is the credential. A POST with the token in the body,
          *     like the magic link, so no API call carries it in a URL. The page's own
          *     address still does (`/accept-invite/<token>`), and a deployed server
-         *     writes that to its access log: see ADR-028 for why that is tolerated.
+         *     writes that to its access log: see ADR-034 for why that is tolerated.
          */
         post: operations["users_invitations_inspect_create"];
         delete?: never;
@@ -1702,7 +1702,7 @@ export interface paths {
          *     Reading is the staff directory it has been since Phase 1. Writing is for
          *     admins and owners, and the role tier is only the first gate: who may be
          *     managed by whom is decided per row in `users.services`, which is also
-         *     where each row's `available_actions` come from (ADR-028).
+         *     where each row's `available_actions` come from (ADR-034).
          *
          *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
          *     switching someone off or on is an action with its own rules, and a
@@ -1717,7 +1717,7 @@ export interface paths {
          *     Reading is the staff directory it has been since Phase 1. Writing is for
          *     admins and owners, and the role tier is only the first gate: who may be
          *     managed by whom is decided per row in `users.services`, which is also
-         *     where each row's `available_actions` come from (ADR-028).
+         *     where each row's `available_actions` come from (ADR-034).
          *
          *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
          *     switching someone off or on is an action with its own rules, and a
@@ -1743,7 +1743,7 @@ export interface paths {
          *     Reading is the staff directory it has been since Phase 1. Writing is for
          *     admins and owners, and the role tier is only the first gate: who may be
          *     managed by whom is decided per row in `users.services`, which is also
-         *     where each row's `available_actions` come from (ADR-028).
+         *     where each row's `available_actions` come from (ADR-034).
          *
          *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
          *     switching someone off or on is an action with its own rules, and a
@@ -1762,7 +1762,7 @@ export interface paths {
          *     Reading is the staff directory it has been since Phase 1. Writing is for
          *     admins and owners, and the role tier is only the first gate: who may be
          *     managed by whom is decided per row in `users.services`, which is also
-         *     where each row's `available_actions` come from (ADR-028).
+         *     where each row's `available_actions` come from (ADR-034).
          *
          *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
          *     switching someone off or on is an action with its own rules, and a
@@ -1787,7 +1787,7 @@ export interface paths {
          *     Reading is the staff directory it has been since Phase 1. Writing is for
          *     admins and owners, and the role tier is only the first gate: who may be
          *     managed by whom is decided per row in `users.services`, which is also
-         *     where each row's `available_actions` come from (ADR-028).
+         *     where each row's `available_actions` come from (ADR-034).
          *
          *     There is no PUT and no DELETE. A PATCH changes the role and nothing else;
          *     switching someone off or on is an action with its own rules, and a
@@ -3840,7 +3840,7 @@ export interface components {
          *     `available_actions` and `assignable_roles` are worked out for whoever is
          *     asking, from the same rules the writes enforce (`users.services`), so the
          *     page draws its buttons from them and keeps no table of who outranks whom
-         *     (ADR-023, ADR-028). The session payload keeps the plain
+         *     (ADR-023, ADR-034). The session payload keeps the plain
          *     `MembershipSerializer`: a person's own memberships have no caller to
          *     judge them by.
          */

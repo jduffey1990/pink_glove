@@ -107,7 +107,7 @@ class Membership(TenantModel):
     #: the magic-link rule, the assignee checks). An invitation is created
     #: with this False and only acceptance sets it, so an invitation nobody
     #: has accepted changes nothing about how its recipient signs in or what
-    #: they can reach, in this organization or any other (ADR-028).
+    #: they can reach, in this organization or any other (ADR-034).
     is_active = models.BooleanField(default=True)
     #: Both are NULL on a membership made by the seed or in the admin, which
     #: is an ordinary active membership. Nothing gates sign-in on either.
@@ -221,7 +221,7 @@ class MagicLinkToken(Base):
 class AccountToken(Base):
     """
     A single-use emailed link that sets a staff password: an invitation to an
-    organization, or a password reset (ADR-028).
+    organization, or a password reset (ADR-034).
 
     A sibling of `MagicLinkToken` rather than a generalisation of it, built
     the same way: 256 random bits, only the SHA-256 stored, an expiry, and a

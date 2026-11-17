@@ -4,7 +4,7 @@ Policy and delivery for two-factor challenges, and the staff password reset.
 The reset lives here, beside the sign-in it recovers, because finishing one
 has to forget this app's trusted devices and pending codes. `users` knows
 nothing about either, and `two_factor` already depends on `users`, so the
-dependency keeps running one way (ADR-028).
+dependency keeps running one way (ADR-034).
 """
 
 import logging

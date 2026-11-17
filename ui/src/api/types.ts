@@ -17,7 +17,7 @@ export type Organization = Schemas['Organization']
 export type Role = Schemas['RoleEnum']
 
 /**
- * Team management (ADR-028). A `TeamMember` is a membership as the directory
+ * Team management (ADR-034). A `TeamMember` is a membership as the directory
  * endpoint returns it: with where it stands and what the caller may do to it.
  * The session's own `Membership` rows carry neither.
  */
