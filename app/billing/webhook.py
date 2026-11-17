@@ -356,6 +356,13 @@ def replay(row: StripeEvent) -> bool:
     a replay that is itself lost leaves the queue telling the truth. Queuing
     one twice is harmless for the reason a Stripe resend is: `process` leaves
     a PROCESSED row alone and both ledgers refuse a second write.
+
+    Connect and platform events alike (Phase 4c). A platform row has no
+    account but does have the organization its customer resolved to, which
+    is the id the task is handed; `process` then picks the handler table
+    from the row. A platform handler only re-reads the Subscription, so a
+    second run of one writes the same thing again. A row nobody owns, of
+    either kind, has no organization to run under and is refused.
     """
     if row.status != StripeEventStatus.FAILED or row.organization_id is None:
         return False

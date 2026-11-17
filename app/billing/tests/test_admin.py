@@ -11,6 +11,8 @@ The admin itself admits only a session that has cleared the second factor
 open a way round that.
 """
 
+from unittest import mock
+
 import pytest
 from django.contrib.admin.models import CHANGE, LogEntry
 from django.contrib.auth.models import Permission
@@ -19,11 +21,13 @@ from django.urls import reverse
 from kombu.exceptions import OperationalError
 
 from app.admin import TWO_FACTOR_VERIFIED_SESSION_KEY
+from billing import subscription
 from billing.enums import StripeEventStatus
 from billing.models import Payment, StripeEvent
 from billing.tasks import process_stripe_event
 from billing.tests.factories import IssuedInvoiceFactory, StripeEventFactory
-from billing.tests.stripe_fixtures import ACCOUNT_ID
+from billing.tests.stripe_fixtures import ACCOUNT_ID, CUSTOMER_ID, subscription_checkout_session
+from billing.tests.test_platform_webhook import ledgered as platform_ledgered
 from billing.tests.test_webhook import ledgered, session
 from scheduling.tests.factories import OrganizationFactory, UserFactory
 
@@ -171,6 +175,75 @@ class TestOnlyFailedRows:
 
         enqueue.assert_called_once_with(str(connected.pk), str(broken.pk))
         assert [level for level, _ in said(response)] == ["success", "warning"]
+
+
+@pytest.mark.usefixtures("platform_billing_on")
+class TestPlatformEvents:
+    """
+    The platform's own events (Phase 4c, ADR-028) are ledgered in the same
+    table. Such a row has no account, but it does have an organization: the
+    one whose Stripe customer the event is about, resolved before anything
+    is queued. So a FAILED one is replayed like any other, with that
+    organization's id (invariant 3), and `process` picks the platform
+    handlers from the row's empty account. The one type both tables share is
+    used here, so a replay sent down the Connect path would show.
+    """
+
+    @pytest.fixture
+    def subscriber(self):
+        return OrganizationFactory(stripe_customer_id=CUSTOMER_ID)
+
+    @pytest.fixture
+    def broken(self, subscriber):
+        row = platform_ledgered(
+            subscriber, "checkout.session.completed", subscription_checkout_session()
+        )
+        StripeEvent.objects.filter(pk=row.pk).update(
+            status=StripeEventStatus.FAILED, error="ServiceUnavailableError: Stripe was down"
+        )
+        return row
+
+    def test_a_failed_platform_event_is_queued_with_the_tenant_it_was_resolved_to(
+        self, admin_client, subscriber, broken, enqueue
+    ):
+        assert broken.account == ""
+
+        response = replay(admin_client, broken)
+
+        enqueue.assert_called_once_with(str(subscriber.pk), str(broken.pk))
+        assert [level for level, _ in said(response)] == ["success"]
+
+    def test_and_it_runs_the_platform_handler_not_the_connect_one(
+        self, admin_client, subscriber, broken
+    ):
+        """No mock on the queue: the suite runs the task inline."""
+        with mock.patch.object(subscription, "refresh_subscription") as refresh:
+            replay(admin_client, broken)
+
+        refresh.assert_called_once_with(subscriber)
+        # The Connect handler for this type records a payment on an invoice.
+        assert not Payment.objects.exists()
+        broken.refresh_from_db()
+        assert broken.status == StripeEventStatus.PROCESSED
+        assert broken.error == ""
+
+    @pytest.mark.parametrize("status", [StripeEventStatus.IGNORED, StripeEventStatus.FAILED])
+    def test_a_platform_event_no_tenant_holds_is_refused_and_says_so(
+        self, admin_client, enqueue, status
+    ):
+        """
+        "No organization holds customer ..." is ledgered with none. There is
+        no organization id to hand the task, so nothing is queued, whatever
+        the row's status says.
+        """
+        row = StripeEventFactory(account="", organization=None, type="invoice.paid", status=status)
+
+        response = replay(admin_client, row)
+
+        enqueue.assert_not_called()
+        ((level, text),) = said(response)
+        assert level == "warning"
+        assert "that an organization owns" in text
 
 
 class TestRunningItTwice:
