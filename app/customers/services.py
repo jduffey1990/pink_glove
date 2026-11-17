@@ -29,7 +29,9 @@ from dataclasses import dataclass, field
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
+from base.permissions import ORGANIZATION_INACTIVE
 from customers.enums import ImportAction
 from customers.import_columns import (
     BY_HEADER,
@@ -566,6 +568,18 @@ def import_customers(*, organization, upload, dry_run: bool, context: dict) -> I
     of one file sent at once (a double click on Confirm) run one after the
     other and the second finds the first's customers already on file. A plan
     with an error row is returned unwritten, with `committed` False.
+
+    Whether the organization may be written to at all is the permission
+    layer's rule, not this function's: a deactivated organization is
+    read-only (`IsOrgMember`, ADR-028), and the view never gets here. The one
+    thing checked here is what that layer cannot see. It read `is_active`
+    off the row the request loaded; this then waits for the row lock, which
+    the subscription checkout holds across calls to Stripe, and the platform
+    webhook can switch the organization off in the meantime. So the row is
+    read again under the lock, and an organization that was active when the
+    request was let in and is not now is refused with the same sentence. One
+    that was already inactive when the request was let in (a superuser
+    putting things right) is not this function's business.
     """
     parsed = read_file(upload)
 
@@ -573,7 +587,9 @@ def import_customers(*, organization, upload, dry_run: bool, context: dict) -> I
         return _plan(organization=organization, parsed=parsed, dry_run=True, context=context)
 
     with transaction.atomic():
-        Organization.objects.select_for_update().get(pk=organization.pk)
+        locked = Organization.objects.select_for_update().get(pk=organization.pk)
+        if organization.is_active and not locked.is_active:
+            raise PermissionDenied(ORGANIZATION_INACTIVE)
         result = _plan(organization=organization, parsed=parsed, dry_run=False, context=context)
         if not result.has_errors:
             _write(result, organization)

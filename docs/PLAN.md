@@ -2708,6 +2708,17 @@ Importing the same file twice adds nothing.
 Measured once on a laptop at 2000 rows with access codes: 2.8 s to preview, 6.2 s to import, 2.7 s to re-import, a 330 KB response.
 The worker timeout is 60 s.
 
+**A read-only organization (Phase 4c, ADR-028).**
+The branch was rebased onto `main` at `6ef6f78`, which carries Phase 4c, on 2026-11-17.
+4c makes an organization read-only by setting `is_active` false, either by hand or from `organizations.services.apply_coverage` when a trial or subscription has run past its grace, and `IsOrgMember` then refuses every unsafe method with `ORGANIZATION_INACTIVE`.
+The import needed no change to obey that: both actions state `IsAdminOrHigher`, which inherits `IsOrgMember`, and neither sets `allowed_while_inactive`.
+A real import and a dry run are both refused with a 403 whose body is the same as the one creating a customer by hand gets; the template, a GET, is still served.
+A dry run is refused too because it is a POST and the rule is by method, and that is the right answer: a preview of a write that cannot happen would end at an Import button the server refuses.
+Inside the grace period, with the organization still active, an import works like any other write.
+One thing was added. The permission check reads `is_active` off the row the request loaded, and a real import then waits for the organization's row lock, which 4c's checkout holds across calls to Stripe; the platform webhook can switch the organization off in between.
+The row is read again under the lock, and an organization that was active when the request was let in and is not now is refused with the same sentence.
+The lock itself does not fight 4c: the import takes that one row lock and nothing 4c holds, so the webhook's update of the row waits a few seconds for the import to commit and neither can deadlock the other.
+
 **Frontend.**
 An Import button on the Customers page for owner and admin opens `components/CustomerImportDialog.vue`: choose a file, preview, confirm, result, and the list reloads.
 The file is uploaded, never parsed in the browser.
@@ -2718,12 +2729,13 @@ The flow is `useCustomerImport` in `lib/customerImport.ts`; the template is save
 Nothing in this section was seen in a running browser: not the Import button, not the dialog, not the column hints disclosure, not the download, not 390px.
 The dialog has a mounted spec that proves the markup is wired to the flow and shows the server's wording; it says nothing about layout.
 
-Backend 1049 → 1154. Frontend 131 → 183.
+Backend 1234 → 1349. Frontend 146 → 198.
+Both are counted from `main` at `6ef6f78`; before the rebase, on `7843a71`, they were 1049 → 1154 and 131 → 183.
 
 ### Phase gate
 
 **1. Test coverage.**
-`customers/tests/test_import.py`, 105 tests: each role on each side of the line for both endpoints (owner and admin in; dispatcher, cleaner, customer and anonymous out, for a dry run as well as a real import), a deactivated organization, the dry-run default with row counts before and after, all-or-nothing including a failure half way through the write, the import's status default (blank and missing are `active`, a given status is kept, the preview and the import agree, an existing customer is untouched, the create path still says `lead`), matching, re-import, the tenant boundary (an import in A creates nothing in B, matching never sees B, a forged `organization` in the form or as a column is inert), access codes absent from the response and the captured logs and present through the model, the raw column and the audited reveal, the file hygiene cases, the template (which must import as it stands), and two identical runs compared byte for byte.
+`customers/tests/test_import.py`, 115 tests: each role on each side of the line for both endpoints (owner and admin in; dispatcher, cleaner, customer and anonymous out, for a dry run as well as a real import), a read-only organization (lapsed through 4c's own `apply_coverage` and switched off by hand, real import and dry run, the refusal compared with the create path's, the grace period, reactivation, and the recheck under the row lock), the dry-run default with row counts before and after, all-or-nothing including a failure half way through the write, the import's status default (blank and missing are `active`, a given status is kept, the preview and the import agree, an existing customer is untouched, the create path still says `lead`), matching, re-import, the tenant boundary (an import in A creates nothing in B, matching never sees B, a forged `organization` in the form or as a column is inert), access codes absent from the response and the captured logs and present through the model, the raw column and the audited reveal, the file hygiene cases, the template (which must import as it stands), and two identical runs compared byte for byte.
 Each safeguard was broken on purpose once to confirm a test goes red: the dry-run default, the transaction, the tenant filter in matching, writing on a dry run, writing despite an error row, logging a row, echoing a code, reading `organization` from the form, removing the status default, and letting that default override a status that was given.
 Frontend: `lib/customerImport.spec.ts` (the flow and the arranging), `lib/download.spec.ts`, `api/endpoints.spec.ts` (what `dry_run` puts on the wire), `components/CustomerImportDialog.spec.ts` (mounted).
 *Gaps left open:*
@@ -2731,7 +2743,8 @@ no browser has seen any of the UI, at any width;
 `CustomersPage.vue` has no spec, like every page, so the role gate on the Import button and the reload after an import are untested;
 the organization row lock is untested, because two imports at once need two connections and the suite runs each test in one transaction;
 the 2000-row timing was measured by hand and is not asserted;
-a superuser importing is untested;
+a superuser importing through the API is untested (the service is, for a deactivated organization);
+the recheck under the row lock is tested at the service with a stale organization object, not with two real connections racing;
 the real multipart request from a browser was never sent to a running API (the spec pins the form, the backend tests use DRF's encoder);
 a file of exactly 1 MB is untested (over it is).
 
@@ -2758,6 +2771,7 @@ A change to a serializer rule needs no edit here, which a test asserts.
 
 **5. Security.**
 Both actions state `IsAdminOrHigher`; nothing is `AllowAny`.
+Neither sets `allowed_while_inactive`, so a deactivated organization cannot import (ADR-028), and a test pins that.
 `organization` comes from `get_organization()` and is stamped in `_write` (invariant 2); no model was added (invariant 1) and no task (invariant 3).
 No column maps to `user`, `organization` or `customer`, and a test pins that.
 Access codes go from the cell to the serializer to the encrypted field; a row's outcome has no field for one, the log line is counts, and an existing location's codes are never overwritten.
@@ -2768,5 +2782,5 @@ No error tracker that captures local variables is configured; if one is added, `
 The deploy audit and rehearsal were not run: no setting that production reads, no image or `deploy/` file changed (the one settings edit is a schema enum name).
 
 **6. Branch and production guard.**
-All of it is on `feat/customer-import`, cut from `7843a71`.
-Nothing was committed to `main`, nothing was pushed, merged or rebased, no `fly` command was run, and no migration was made or applied.
+All of it is on `feat/customer-import`, cut from `7843a71` and rebased once onto `main` at `6ef6f78` (2026-11-17, at the orchestrator's instruction, before anything was pushed).
+Nothing was committed to `main`, nothing was pushed or merged, no `fly` command was run, and no migration was made or applied.

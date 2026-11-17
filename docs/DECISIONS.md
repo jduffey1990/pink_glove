@@ -931,6 +931,15 @@ A status that is given is kept as written, so `lead` stays `lead`, and one that 
 It reaches only a customer the import creates: a customer already on file is never edited (decision 2), so an existing `lead` stays one.
 The template's hint for the column says so ("Blank is imported as active."), which is the server's copy.
 
+**Amended (2026-11-17, on rebasing over Phase 4c): a read-only organization cannot import, and the lock is rechecked.**
+ADR-028 makes a deactivated organization read-only at `IsOrgMember`, by method.
+The import obeys that with nothing of its own: both actions state `IsAdminOrHigher`, neither sets `allowed_while_inactive`, and a real import and a dry run are both a 403 carrying `ORGANIZATION_INACTIVE`.
+A dry run is refused as well, on purpose: it is a POST, and a preview of a write that cannot happen is a dead end.
+The row lock from decision 4 gained one line.
+The permission check reads the row the request loaded; the import then waits for the lock, which the subscription checkout holds across calls to Stripe, and the platform webhook can deactivate the organization meanwhile.
+Under the lock the row is read again, and one that was active when the request was let in and is not now is refused with the same sentence.
+One that was already inactive when the request was let in is left to the permission layer, which is how a superuser can still put a deactivated organization right.
+
 **Rejected -- leaving a blank status as `lead`.**
 What this first shipped with, on the reasoning that an import should behave exactly as the create path does.
 The create path's default answers "what is somebody who was just typed in", which is usually an enquiry.

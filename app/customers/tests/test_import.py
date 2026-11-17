@@ -16,6 +16,7 @@ The contract under test, in the order the classes come:
 """
 
 import csv
+import datetime as dt
 import io
 import logging
 
@@ -23,14 +24,20 @@ import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import serializers as drf_serializers
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.test import APIClient
 
+from base.permissions import ORGANIZATION_INACTIVE
 from customers import services
 from customers.enums import CustomerStatus, ImportAction
 from customers.import_columns import BY_HEADER, COLUMNS, CUSTOMER, LOCATION, MAX_ROWS
 from customers.models import Customer, ServiceLocation
 from customers.serializers import CustomerSerializer, ImportedLocationSerializer
+from customers.views import CustomerViewSet
+from organizations.models import Organization
+from organizations.services import apply_coverage
 from users.enums import Role
 
 IMPORT_URL = reverse("customers:customer-import-customers")
@@ -132,12 +139,141 @@ class TestWhoMayImport:
     def test_nobody_else_may_fetch_the_template(self, client_for, organization, role):
         assert client_for(organization, role).get(TEMPLATE_URL).status_code == 403
 
-    def test_a_deactivated_organization_cannot_import(self, authed_client, organization):
+
+@pytest.mark.django_db
+class TestReadOnlyOrganization:
+    """
+    A deactivated organization is read-only (ADR-028), whether a person
+    switched it off or its subscription lapsed. An import is a write, so it
+    is refused where every other write is: `IsOrgMember`, which
+    `IsAdminOrHigher` inherits. Nothing in the import knows about billing.
+    """
+
+    @pytest.fixture
+    def billing_on(self, settings):
+        settings.PLATFORM_BILLING_ENABLED = True
+        settings.PLATFORM_TRIAL_DAYS = 30
+        settings.PLATFORM_GRACE_DAYS = 14
+
+    def lapse(self, organization):
+        """Let the trial and its grace run out, then let 4c's own rule switch it off."""
+        organization.trial_ends_at = timezone.now() - dt.timedelta(days=40)
+        organization.save(update_fields=["trial_ends_at"])
+        assert apply_coverage(organization) is True
+        organization.refresh_from_db()
+        assert organization.is_active is False
+        assert organization.deactivated_for_billing_at is not None
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_a_lapsed_organization_is_refused_in_the_servers_words(
+        self, authed_client, organization, billing_on, dry_run
+    ):
+        """
+        A dry run too. It is a POST, the rule is by method, and a preview of
+        a write that cannot happen would end at a refused Import button.
+        """
+        self.lapse(organization)
+
+        response = send(authed_client, [row(gate_code=GATE_CODE)], dry_run=dry_run)
+
+        assert response.status_code == 403
+        assert response.json() == {"detail": ORGANIZATION_INACTIVE}
+        assert stored() == (0, 0)
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_an_organization_switched_off_by_hand_is_refused_the_same_way(
+        self, authed_client, organization, dry_run
+    ):
         organization.is_active = False
         organization.save(update_fields=["is_active"])
 
-        assert send(authed_client, [row()], dry_run=False).status_code == 403
+        response = send(authed_client, [row()], dry_run=dry_run)
+
+        assert response.status_code == 403
+        assert response.json() == {"detail": ORGANIZATION_INACTIVE}
         assert stored() == (0, 0)
+
+    def test_it_is_refused_exactly_as_creating_a_customer_by_hand_is(
+        self, authed_client, organization, billing_on
+    ):
+        """The same status and the same body as the ordinary create path."""
+        self.lapse(organization)
+
+        by_hand = authed_client.post(
+            reverse("customers:customer-list"), {"first_name": "Dana"}, format="json"
+        )
+        by_import = send(authed_client, [row()], dry_run=False)
+
+        assert by_hand.status_code == by_import.status_code == 403
+        assert by_hand.json() == by_import.json()
+
+    def test_the_template_can_still_be_read(self, authed_client, organization, billing_on):
+        """Read-only, not locked out: a GET is still answered."""
+        self.lapse(organization)
+
+        assert authed_client.get(TEMPLATE_URL).status_code == 200
+
+    def test_past_the_trial_but_inside_the_grace_an_import_still_works(
+        self, authed_client, organization, billing_on
+    ):
+        """Not covered, not yet deactivated: every write works, and so does this one."""
+        organization.trial_ends_at = timezone.now() - dt.timedelta(days=3)
+        organization.save(update_fields=["trial_ends_at"])
+        assert apply_coverage(organization) is False
+
+        assert send(authed_client, [row()], dry_run=False).status_code == 200
+        assert stored() == (1, 1)
+
+    def test_an_organization_that_is_covered_again_can_import_again(
+        self, authed_client, organization, billing_on
+    ):
+        self.lapse(organization)
+        organization.trial_ends_at = timezone.now() + dt.timedelta(days=30)
+        organization.save(update_fields=["trial_ends_at"])
+        assert apply_coverage(organization) is True
+
+        assert send(authed_client, [row()], dry_run=False).status_code == 200
+        assert stored() == (1, 1)
+
+    def test_neither_import_view_opts_out_of_the_read_only_rule(self):
+        """`allowed_while_inactive` is for the subscription endpoints alone (ADR-028)."""
+        assert not getattr(CustomerViewSet, "allowed_while_inactive", False)
+        for name in ("import_customers", "import_template"):
+            assert "allowed_while_inactive" not in getattr(CustomerViewSet, name).kwargs
+
+    def test_an_organization_switched_off_while_the_import_waited_is_refused(self, organization):
+        """
+        The permission check reads the organization the request loaded. A
+        real import then waits for the organization's row lock, which 4c's
+        checkout holds across calls to Stripe, and the webhook can switch the
+        organization off in between. Under the lock the row is read again.
+        """
+        stale = Organization.objects.get(pk=organization.pk)
+        Organization.objects.filter(pk=organization.pk).update(is_active=False)
+        assert stale.is_active is True
+
+        upload = SimpleUploadedFile("book.csv", as_csv([row()]).encode())
+        with pytest.raises(PermissionDenied) as refused:
+            services.import_customers(organization=stale, upload=upload, dry_run=False, context={})
+
+        assert str(refused.value.detail) == ORGANIZATION_INACTIVE
+        assert stored() == (0, 0)
+
+    def test_a_superuser_putting_things_right_is_not_refused_by_the_recheck(self, organization):
+        """
+        `IsOrgMember` lets a superuser write to a deactivated organization.
+        The recheck is for one that changed under the request, not that.
+        """
+        organization.is_active = False
+        organization.save(update_fields=["is_active"])
+
+        upload = SimpleUploadedFile("book.csv", as_csv([row()]).encode())
+        result = services.import_customers(
+            organization=organization, upload=upload, dry_run=False, context={}
+        )
+
+        assert result.committed is True
+        assert stored() == (1, 1)
 
 
 @pytest.mark.django_db
