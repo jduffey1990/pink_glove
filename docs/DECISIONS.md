@@ -456,6 +456,8 @@ the schema turns that into a reviewable diff.
 
 ## ADR-020: Editing a recurring plan regenerates untouched future jobs and keeps the rest
 
+**Amended by ADR-032 (visit booking, 2026-11-16): "untouched" also requires the price, end and note to equal what the plan stamped, and a kept visit is re-keyed to its day.** Kept for the reasoning.
+
 **Decided (Phase 3a).** A `Job` materialized from a `RecurringPlan` carries
 `plan_occurrence`, the UTC instant it was originally planned for. When the plan
 is edited (rule, time, duration, location, service, price override, or
