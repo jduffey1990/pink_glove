@@ -414,6 +414,8 @@ what the last re-read of the Subscription said. In order:
 3. Did the worker apply it? `/admin/` → Billing → Stripe events, filter on
    an empty account: the row's status and error. The sweep re-queues a row
    still RECEIVED after ten minutes, as for Connect.
+   A FAILED row is replayed from the same list with "Re-queue the selected FAILED events", exactly as for Connect (step 9, "When a payment does not show up", step 4): a platform row carries the organization whose customer it is about, and the worker picks the platform handlers from the row's empty account.
+   A row IGNORED with "No organization holds customer …" has no tenant to run under and is refused; fix the customer id on the organization and resend the event from Stripe.
 4. Whatever happened, the daily task at 01:00 UTC re-reads every
    subscription and applies the rule. To not wait: run it as in step 6, or
    return to the settings page with `?subscription=return` in the URL
@@ -817,6 +819,7 @@ The order matters more than the exact flags, so check each command's `--help` as
 7. `fly deploy --config deploy/fly.toml --app pink-glove`. The release command runs any migration newer than the dump. Then `fly scale count web=1 worker=1 beat=1 --app pink-glove`.
 8. `fly ssh console --app pink-glove -C "python manage.py check_field_encryption"` must end in `OK`. Then sign in, open a job with photos, and reveal one location's codes.
 9. Resend the Stripe events since the dump ("When a payment does not show up", step 4).
+10. The subscription fields on each organization are mirrors of Stripe (ADR-028), so a dump older than a tenant's last renewal restores them stale. The daily task at 01:00 UTC re-reads every subscription and corrects them; to not wait, run it by hand as in step 10.6 of "Stand up staging". Do this before anyone signs in, or a tenant who paid since the dump may meet a read-only banner.
 
 ---
 
