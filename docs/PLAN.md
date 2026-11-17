@@ -2845,22 +2845,23 @@ The jsdom specs cover which controls exist and what they send, not how anything 
 
 ## Billed visit guard as built
 
-Branch `fix/billed-visit-reopen`, cut from the tip of `feat/visit-booking`.
+Branch `fix/billed-visit-reopen`, cut from the tip of `feat/visit-booking` and restacked onto it after that branch was rebased onto `main` with Phase 4c.
 Closes the finding the visit booking gate left open: a visit on a live invoice could be reopened through the status action and then edited or deleted.
 
 - `scheduling.services.register_job_claim_check` is a registration hook; `BillingConfig.ready()` registers `billing.services.visit_claims` (ADR-033). Nothing under `scheduling/` imports `billing`, and a test fails if it ever does.
 - A visit a live line points at (`live_lines()`: draft or issued, not voided, not deleted) offers no reopen and refuses one with a 409 in billing's words; it refuses edit and delete the same way. Voiding the invoice, deleting the draft or removing the line frees it.
 - A draft holds a visit too, because nothing at issue re-checks that a draft's visits are finished: before this, a visit reopened while on a draft was issued and billed while `scheduled`.
 - The job list asks about a whole page in one query (`JobListSerializer`); forward moves never ask.
+- The platform subscription (Phase 4c, ADR-028) is not a claim. It lives on `Organization`, not in `Invoice`, and `visit_claims` reads invoice lines only; a test walks four subscription states. `BillingConfig.ready()` registers exactly one check, and nothing else in the project has a `ready()`. In a deactivated organization the read-only gate answers first (403), and the claim is still there when it comes back.
 - No schema change, no migration, no frontend change beyond two specs: the job page already draws its buttons from `next_statuses` and shows a 409's `detail`.
 
 Checked and left alone: clock-out of an open entry, unassign, a dispatcher's time-entry correction and a new job note still succeed on a billed visit. None changes what the invoice bills. The Django admin bypasses all of it.
 
 ### Phase gate
 
-1. **Test coverage.** Backend 1167 to 1231 (+64): `billing/tests/test_visit_guard.py` (the reproduction, draft and issued and voided, both finished statuses, published equals accepted for reopen across four billing states and for edit and delete across every status, the list, query count, cross-tenant) and `scheduling/tests/test_claim_guard.py` (the hook with a stand-in check, nothing registered, one call per page, the import test). Frontend 228 to 230: two `JobDetailPage` specs. Gaps: no test with two real registered apps (only billing exists; two stand-ins are tested); the admin path is untested; nothing was run in a browser.
+1. **Test coverage.** Backend 1399 to 1469 (+70): `billing/tests/test_visit_guard.py` (the reproduction, draft and issued and voided, both finished statuses, published equals accepted for reopen across four billing states and for edit and delete across every status, the list, query count, cross-tenant) and `scheduling/tests/test_claim_guard.py` (the hook with a stand-in check, nothing registered, one call per page, the import test). Frontend 243 to 245: two `JobDetailPage` specs. Gaps: no test with two real registered apps (only billing exists; two stand-ins are tested); the admin path is untested; nothing was run in a browser.
 2. **DRY.** One claim lookup (`job_claims`) feeds `next_statuses`, `available_actions`, both 409s and the `allowed` list. `visit_claims` reuses `live_lines()` rather than restating it.
 3. **Modularity.** The rule is in `billing/services.py`, the hook in `scheduling/services.py`; views and serializers call them.
 4. **Orthogonality.** One new coupling, by design and recorded as ADR-033: billing registers with scheduling at startup. The dependency still runs one way and a test enforces it.
 5. **Security.** No new endpoint, model, task or `AllowAny`. The change only refuses more. The claim check filters on the job's own organization and a test forces a cross-tenant line in underneath `TenantModel.save()` to prove it is ignored. A cleaner is never told about the invoice. `/security-review` was NOT run as a skill; the diff was reviewed by hand.
-6. **Branch and production guard.** All work is on `fix/billed-visit-reopen`. Nothing committed to `main`, nothing pushed, merged or rebased, no `--no-verify`, no `fly`, no `migrate` against the dev database.
+6. **Branch and production guard.** All work is on `fix/billed-visit-reopen`. Nothing committed to `main`, nothing pushed or merged, no `--no-verify`, no `fly`, no `migrate` against the dev database.

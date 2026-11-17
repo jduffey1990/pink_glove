@@ -12,15 +12,21 @@ HTTP, where the two meet. The mechanism on its own, with a stand-in check, is
 tested in `scheduling/tests/test_claim_guard.py`.
 """
 
+import datetime as dt
+
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 
+from base.permissions import ORGANIZATION_INACTIVE
+from billing import services as billing_services
 from billing.enums import InvoiceStatus, LineKind
 from billing.models import Invoice, InvoiceLine
 from billing.tests.conftest import completed_job, staff_in
 from organizations.enums import NoAccessFeeType
+from scheduling import services as scheduling_services
 from scheduling.enums import JobStatus
 from scheduling.models import Job, JobAssignment
 from scheduling.tests.factories import CustomerFactory, OrganizationFactory
@@ -341,3 +347,54 @@ class TestTenancy:
 
         assert reopen(their_dispatcher, visit).status_code == 404
         assert reopen(their_dispatcher, their_visit).status_code == 200
+
+
+@pytest.mark.django_db
+class TestBesideThePlatformSubscription:
+    """
+    Phase 4c bills the *organization* for the product (ADR-028). That is a
+    different relationship from an organization billing its customer, it
+    lives on `Organization` and in Stripe rather than in `Invoice`, and it
+    must never be mistaken for a claim on a visit.
+    """
+
+    @pytest.mark.parametrize("subscription", ["active", "past_due", "canceled", "trialing"])
+    def test_what_the_organization_owes_the_platform_holds_no_visit(
+        self, dispatcher_client, org, visit, subscription
+    ):
+        org.subscription_status = subscription
+        org.stripe_customer_id = "cus_platform_test"
+        org.subscription_paid_through = timezone.now() + dt.timedelta(days=20)
+        org.save()
+
+        assert billing_services.visit_claims([visit]) == {}
+        assert reopen(dispatcher_client, visit).status_code == 200
+
+    def test_the_visit_check_is_the_only_thing_billing_registers(self):
+        """One registration at startup, and it is the invoice one."""
+        assert scheduling_services._claim_checks == [billing_services.visit_claims]
+
+    def test_a_lapsed_organization_is_read_only_before_it_is_anything_else(
+        self, dispatcher_client, org, visit, issued
+    ):
+        """
+        The organization gate answers first, in its own words. The claim is
+        still there when the organization comes back.
+        """
+        org.is_active = False
+        org.save()
+
+        lapsed = reopen(dispatcher_client, visit)
+        row = dispatcher_client.get(job_url(visit)).json()
+
+        assert lapsed.status_code == 403
+        assert lapsed.json()["detail"] == ORGANIZATION_INACTIVE
+        assert row["next_statuses"] == []
+        assert row["available_actions"] == []
+
+        org.is_active = True
+        org.save()
+        back = reopen(dispatcher_client, visit)
+
+        assert back.status_code == 409
+        assert issued["number"] in back.json()["detail"]
