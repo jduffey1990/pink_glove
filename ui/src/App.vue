@@ -48,6 +48,11 @@
       )
     }
 
+    // Owner and admin only, like the route and the API behind it.
+    if (session.isAdminOrHigher) {
+      items.push({ title: 'Reports', icon: 'mdi-chart-box-outline', to: '/reports' })
+    }
+
     return items
   })
 

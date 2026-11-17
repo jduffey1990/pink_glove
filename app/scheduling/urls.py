@@ -7,6 +7,8 @@ from scheduling.views import (
     JobViewSet,
     RecurringPlanViewSet,
     TimeEntryViewSet,
+    TimesheetCSVView,
+    TimesheetReportView,
 )
 
 app_name = "scheduling"
@@ -18,4 +20,8 @@ router.register("time-entries", TimeEntryViewSet, basename="timeentry")
 router.register("job-notes", JobNoteViewSet, basename="jobnote")
 router.register("job-photos", JobPhotoViewSet, basename="jobphoto")
 
-urlpatterns = [path("", include(router.urls))]
+urlpatterns = [
+    path("reports/timesheet/", TimesheetReportView.as_view(), name="report-timesheet"),
+    path("reports/timesheet/csv/", TimesheetCSVView.as_view(), name="report-timesheet-csv"),
+    path("", include(router.urls)),
+]

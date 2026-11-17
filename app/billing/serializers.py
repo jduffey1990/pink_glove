@@ -12,6 +12,7 @@ recalculation (ADR-026).
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from base.serializers import DateRangeQuerySerializer
 from base.viewsets import TenantModelSerializer
 from billing import connect, services
 from billing.enums import LineKind, PaymentMethod, PaymentState
@@ -372,3 +373,71 @@ class BillableJobSerializer(serializers.Serializer):
     scheduled_start = serializers.DateTimeField()
     status = serializers.CharField()
     amount_cents = serializers.IntegerField()
+
+
+# --- Reports ---------------------------------------------------------------
+# Shapes for `billing.reports`. Plain serializers over plain dicts: a report is
+# computed, not stored. Every amount is integer cents (invariant 5).
+
+
+class ReceivablesQuerySerializer(serializers.Serializer):
+    as_of = serializers.DateField(
+        required=False,
+        help_text=(
+            "The organization-local date ages are counted from. Defaults to the "
+            "organization's today. It moves the aging clock only: balances are "
+            "always what is owed now, not what was owed on this date."
+        ),
+    )
+
+
+class AgingSerializer(serializers.Serializer):
+    """Outstanding balance by how far past its due date it is."""
+
+    invoice_count = serializers.IntegerField()
+    not_due_cents = serializers.IntegerField(help_text="Due on or after the as-of date.")
+    days_1_30_cents = serializers.IntegerField()
+    days_31_60_cents = serializers.IntegerField()
+    days_61_90_cents = serializers.IntegerField()
+    days_over_90_cents = serializers.IntegerField()
+    total_cents = serializers.IntegerField()
+
+
+class CustomerReceivableSerializer(AgingSerializer):
+    customer = serializers.UUIDField()
+    customer_name = serializers.CharField()
+
+
+class ReceivablesSerializer(serializers.Serializer):
+    as_of = serializers.DateField()
+    customers = CustomerReceivableSerializer(many=True)
+    totals = AgingSerializer()
+
+
+class CollectionsQuerySerializer(DateRangeQuerySerializer):
+    #: A year: the widest period anyone reads money over, and the response is
+    #: one row per method however long it is.
+    max_days = 366
+
+
+class CollectionsTotalsSerializer(serializers.Serializer):
+    payment_count = serializers.IntegerField()
+    amount_cents = serializers.IntegerField(help_text="What settled invoices. Tips excluded.")
+    tip_cents = serializers.IntegerField(help_text="Received on top; never settles an invoice.")
+    fee_cents = serializers.IntegerField(help_text="Provider fees reported so far.")
+    net_cents = serializers.IntegerField(help_text="Amount plus tips, less fees.")
+    fees_pending = serializers.IntegerField(
+        help_text="Provider payments whose fee is not known yet, so the net is still too high."
+    )
+
+
+class MethodCollectionsSerializer(CollectionsTotalsSerializer):
+    method = serializers.ChoiceField(choices=PaymentMethod.choices)
+    label = serializers.CharField()
+
+
+class CollectionsSerializer(serializers.Serializer):
+    date_from = serializers.DateField()
+    date_to = serializers.DateField()
+    methods = MethodCollectionsSerializer(many=True)
+    totals = CollectionsTotalsSerializer()

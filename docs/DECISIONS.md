@@ -885,6 +885,128 @@ secret, and a price without the key.
 
 ---
 
+## ADR-030: What the reports mean: which day an entry is on, which date a payment is on, and whose balance it is
+
+**Decided (2026-11-16).**
+An owner's first two questions are "what do I owe my cleaners this week" and "who owes me".
+Three read-only reports answer them: a timesheet (`scheduling.reports`), receivables and collections (`billing.reports`).
+A report is a definition as much as a query, and each definition below has an obvious alternative that gives a different number.
+The numbers are what someone is paid from, so the definitions are recorded here rather than left in a docstring.
+
+**1. A time entry belongs, whole, to the organization-local day it was clocked in on.**
+A shift from 22:00 to 02:00 is four hours on the day it began and none on the next.
+The same rule decides the edge of a period: an entry that clocks in on the last day and out after midnight is entirely inside it.
+So every entry is in exactly one day and one period, and two pay periods laid end to end add up to the whole with nothing counted twice or dropped.
+The day's bounds are `Organization.local_day_bounds`, the ones the jobs filter and the time-entry filter already use, so a 23 or 25 hour day is the right length (invariant 8).
+`TimeEntryFilterSet` was already filing entries by `clock_in`; the report agrees with the list beside it.
+
+**Rejected: splitting an entry at local midnight.**
+It is the more exact answer to "how many hours were worked on Tuesday", and nothing here asks that: there is no daily overtime rule and no payroll feature (ADR-025 rejected one for tips on the same grounds).
+It would make "entry count" mean something different from the number of rows, put half of one shift in each of two pay periods, and need its own answer for the hour that happens twice in November.
+If daily overtime arrives, it layers on top: the entries and their instants are unchanged.
+
+**Rejected: the day of clock-out.**
+An open entry has none, so it would belong to no day until someone clocked out, and then move.
+
+**Rejected: the day the job was scheduled for.**
+A visit rescheduled after it was worked would carry its hours into a different pay period, possibly one already paid.
+
+**2. Seconds are elapsed time between two UTC instants, truncated per entry, and a total is the sum of the rows under it.**
+On the night the clocks go back, 00:30 to 02:30 on the wall is three hours worked and is reported as three.
+Truncating per entry rather than once on the total means a total never disagrees with the rows printed beneath it.
+
+**3. An open entry is listed and flagged, and counts for nothing.**
+`seconds` and `clock_out` are null, not zero, which would read as worked.
+`entry_count` includes it and `open_entry_count` says how many there are, so a total that is still short says so.
+
+**4. A correction is the entry.**
+A dispatcher's PATCH rewrites `clock_in` and `clock_out` in place, and `TimeEntry` keeps no earlier version and has no void.
+The report reads the row as it stands, including which day it is now on.
+An audit trail of corrections would be a model change and a different feature.
+
+**5. Soft deletes follow the foreign key.**
+The manager hides soft-deleted rows only on the model being queried, never across a join (phase gate item 5), so each join is a decision.
+The rule: where the foreign key cascades, the child does not outlive the parent; where it protects, it does.
+`TimeEntry.job` cascades, so an entry on a soft-deleted job is left out by an explicit join filter.
+`Job.customer` and `Invoice.customer` protect, so hours worked for, and money owed by, a customer since removed from the address book stay in the reports under the customer's name.
+The API lets a dispatcher delete a customer who has history; dropping the hours would underpay a cleaner and dropping the invoice would understate what is owed, and the name is on the invoice's own snapshot regardless (ADR-026).
+Invoice lines are not read at all: an issued invoice's total is the snapshot on the row.
+
+**6. Receivables are the live ledger, aged by due date. `as_of` moves the aging clock and nothing else.**
+A balance is `billing.services.balance_cents`, the same function the invoice page uses (ADR-025).
+So that it can be asked of every unpaid invoice in one query, `services.with_paid_cents` carries the ledger's paid total on each invoice, and `paid_cents` uses it when it is there: one definition of "live payment", one of "balance", reached two ways.
+A test holds the two readings together over a ledger with a bounced check, an overpayment and a soft-deleted payment in it.
+The buckets are not yet due, 1-30, 31-60, 61-90 and over 90 days past the due date; due today is not yet late, which is `services.is_overdue`'s rule and is tested against it.
+Only issued invoices count: a draft is not a debt and a void invoice is not one any more.
+
+**Rejected: rewinding the ledger to `as_of`**, so that the report says what was owed on that date.
+It is what an accountant means by "aging as of month end", and it needs a second, date-bounded balance formula beside the one the rest of billing uses.
+`received_on` is the date written on the check, typed by a person, so a rewind would also change every time a late check was entered.
+The question at the trial is who owes the organization now; `as_of` exists so a test, or someone looking a week ahead, can say which day "now" is.
+The frontend does not offer it and always asks for today.
+
+**Rejected: a balance computed in SQL inside the report.**
+Faster by nothing that matters, and a second formula that a change to the ledger's rules would not reach.
+
+**7. Collections file a payment under `received_on`, and a voided payment is in no period.**
+`received_on` is an organization-local date on the row, so there is no instant to convert, the same reasoning as the payment filters.
+A check that arrived on Friday and was entered on Monday is Friday's money.
+Voiding says the money did not arrive or went back, so the payment leaves the period it was first counted in; a report for a closed month can therefore change, and that is the ledger being right rather than the report being wrong.
+A payment against an invoice voided afterwards still counts: it arrived, and the refund is what voids it.
+Net is amount plus tips less the provider's fees, which is what reached the organization; tips are shown apart because they are not revenue (ADR-025).
+A card payment whose fee Stripe has not reported yet has nothing to subtract, so `fees_pending` counts those and a net that is still too high says so.
+
+**Rejected: `created_at`, when the row was written.**
+It dates the typing, not the money, and it is a UTC instant that would need converting.
+
+**Rejected: estimating a missing fee from Stripe's published rate.**
+Phase 4b reads the fee from the balance transaction for the reason that the rate is not the fee.
+
+**8. Owner and admin only, one tier above the rest of billing and scheduling.**
+A dispatcher raises and chases individual invoices and corrects individual time entries; what everyone was paid and the business's whole position are not theirs to read.
+The route and the navigation mirror it, and the API refuses independently.
+
+**9. A CSV is its own URL, amounts in it are decimal dollars, and only text is neutralised.**
+Each report has a `.../csv/` twin rather than `?format=csv`, so the schema describes a `text/csv` response without a renderer that would also have to render errors.
+The API speaks integer cents; a spreadsheet's reader wants dollars, so cents are converted by moving the decimal point of an integer, never by dividing a float (ADR-009), and the column is named `..._usd` so it cannot be read as cents.
+Any text cell that begins with `=`, `+`, `-`, `@`, a tab or a carriage return is prefixed with an apostrophe, and every text cell is quoted so a typed value stays one cell whatever the spreadsheet splits on.
+Numbers the server computed are written bare: they cannot carry a formula, and as text they could not be summed.
+The file opens with a byte-order mark, because without one Excel reads UTF-8 as the machine's legacy code page.
+There is no totals row: a spreadsheet sums a column, and a total among the rows is counted twice by the first person who does.
+
+**Rejected: cents in the CSV.**
+Unambiguous and exact, and the first thing anyone would do with the file is divide a column by a hundred.
+
+**Rejected: neutralising every cell that starts with a minus sign, numbers included.**
+It is the literal reading of the usual advice and turns a genuinely negative amount into text.
+No amount in these three reports can be negative today; the rule is written for the day one can.
+
+**10. The reports live in `<app>/reports.py`, in the app that owns the data.**
+The timesheet is in `scheduling`, the money in `billing`, and both use `base.exports` for the file.
+`billing` may import `scheduling` and nothing imports the other way.
+
+**Rejected: a `reports` app.**
+It would import both `scheduling` and `billing`, and it would be the first place a combined report (hours against revenue) got written with its own idea of a balance.
+
+**11. A read-only organization still reads its reports, and the platform subscription is in none of them.**
+ADR-028 makes an organization past its grace read-only, not locked out.
+Reports are reads and the data is the tenant's, so the owner of a lapsed organization can read and download all of them, and they keep moving: a deactivated tenant's customers can still pay it by card, and that payment is reported.
+No report view sets `allowed_while_inactive`; `IsOrgMember` only refuses unsafe methods, so the hole ADR-028 opened for the three subscription views is not needed here and stays three views wide.
+The two money relationships of ADR-024 stay apart.
+What the tenant pays the platform is not money the tenant received and not money its customers owe it; platform events write `StripeEvent` rows and fields on the organization, never an `Invoice` or a `Payment`, and those two tables are all the money reports read.
+A test runs every platform event type through the handler and holds both tables and all four money endpoints unchanged.
+
+**Rejected: hiding the reports from a lapsed organization**, as a lever to get the bill paid.
+The hours are owed to the crew and the invoices are owed to the tenant whoever is behind on a subscription, and ADR-028 already chose read-only over locked out for that reason.
+
+**Consequences.**
+A timesheet period is capped at `scheduling.filters.MAX_RANGE_DAYS`, the jobs filter's own cap, and collections at 366 days; the frontend does not copy either and shows the server's refusal.
+A closed month's collections can change when a payment in it is voided.
+The figure `with_paid_cents` carries is as old as the queryset, so it is for reading: nothing that writes to an invoice may be handed an annotated instance.
+The demo seed's two tenants are owed identical amounts, because every seeded invoice is one untaxed service; tenant isolation on these reports is proved by the tests, not by the seed.
+
+---
+
 ## ADR-031: A customer import matches on one key, never edits what is on file, and is all or nothing
 
 **Decided (customer import, 2026-11-16).**

@@ -63,7 +63,7 @@ testing gotchas that will otherwise cost you an hour each.
 | 4a | Invoices, recorded payments, invoice email — no Stripe | **Done** |
 | D | Deploy target, staging, CI (ADR-027) — before 4b | **Done** (staging stand-up is Jordan's; runbook written and rehearsed) |
 | 4b | Stripe Connect: tenants take card payments | **Done** (merged 2026-09-23, with the staging fixes) |
-| 4c | Platform subscription: tenants pay for pink_glove | **Done** on `phase-4c-platform-subscription` (2026-10-09), gated; waiting to be merged |
+| 4c | Platform subscription: tenants pay for pink_glove | **Done** (built on `phase-4c-platform-subscription` 2026-10-09, merged) |
 | 5 | Notifications (reminders, SMS) + customer portal | Not started |
 
 ---
@@ -2865,3 +2865,88 @@ Checked and left alone: clock-out of an open entry, unassign, a dispatcher's tim
 4. **Orthogonality.** One new coupling, by design and recorded as ADR-033: billing registers with scheduling at startup. The dependency still runs one way and a test enforces it.
 5. **Security.** No new endpoint, model, task or `AllowAny`. The change only refuses more. The claim check filters on the job's own organization and a test forces a cross-tenant line in underneath `TenantModel.save()` to prove it is ignored. A cleaner is never told about the invoice. `/security-review` was NOT run as a skill; the diff was reviewed by hand.
 6. **Branch and production guard.** All work is on `fix/billed-visit-reopen`. Nothing committed to `main`, nothing pushed or merged, no `--no-verify`, no `fly`, no `migrate` against the dev database.
+
+---
+
+## Reports as built
+
+Branch `feat/reports`, cut from `main` at `7843a71` on 2026-11-16 and rebased the next day onto `6ef6f78`, which had gained Phase 4c and the no-mistakes gate.
+Three read-only reports for the owner's first two questions, "what do I owe my cleaners this week" and "who owes me".
+No model change and no migration.
+What each report means is ADR-030; read it before changing a number.
+
+| Report | Endpoint (each has a `csv/` twin) | Takes | Lives in |
+|---|---|---|---|
+| Timesheet | `GET /api/scheduling/reports/timesheet/` | `date_from`, `date_to` (required, organization-local, inclusive, at most 62 days) | `scheduling/reports.py` |
+| Receivables | `GET /api/billing/reports/receivables/` | `as_of` (optional, defaults to the organization's today) | `billing/reports.py` |
+| Collections | `GET /api/billing/reports/collections/` | `date_from`, `date_to` (required, at most 366 days) | `billing/reports.py` |
+
+All six are owner and admin only (`IsAdminOrHigher`).
+Each is one query whatever the number of staff, customers or payments, and is ordered with a unique tie-break so the same data gives the same bytes.
+
+- **Timesheet.** Per staff member: total seconds, entry count, open-entry count, and the entries.
+  An entry belongs, whole, to the local day it was clocked in on; an open entry is listed, flagged, and counts for nothing.
+  The bounds are `Organization.local_day_bounds`, so this is not a third way of computing a local day (the baseline gate's complaint).
+- **Receivables.** Per customer: outstanding balance in five aging buckets by due date, with totals.
+  The balance is `billing.services.balance_cents`; `services.with_paid_cents` lets it be asked of every unpaid invoice in one query, and `paid_cents` reads the carried figure when it is there.
+- **Collections.** Per payment method: count, amount, tips, provider fees reported so far, net, and how many card payments have no fee yet.
+  A payment is filed under `received_on`; a voided payment is in no period.
+- **CSV.** `base/exports.py` is the one writer.
+  Text cells that would start a formula are prefixed with an apostrophe and every text cell is quoted; amounts are decimal dollars in columns named `..._usd`; the timesheet carries exact `seconds` beside `hours_decimal`.
+- **Frontend.** `/reports` (a new `admin` route tier) with a period picker (this week, last week, this month, last month, custom) reckoned from the organization's today, a Timesheet section, a Money section, totals, and three CSV buttons.
+  The page adds nothing up.
+  Its logic is in `src/lib/reports.ts`, `loadable.ts`, `latest.ts` and `download.ts`, each with a spec, and `ReportsPage.spec.ts` mounts the page against a mocked API.
+- **Seed.** `seed_demo` now records a time entry for each assigned cleaner on each finished visit, as its own additive pass, so the timesheet is not empty on a seeded database and an older seed gains its hours on `--force`.
+- **Beside Phase 4c.** Neither meeting point needed a code change, and both are tested.
+  A lapsed organization is read-only and reports are reads, so its owner can still read and download all six; none of the report views sets `allowed_while_inactive`, because `IsOrgMember` only refuses unsafe methods.
+  The platform subscription is a second money relationship and is in neither money report: platform events write `StripeEvent` rows and fields on the organization, never an `Invoice` or a `Payment`, which are the only tables the reports read.
+
+Also in the branch: the jobs filter's date-range check moved to `base.validators.validate_date_range` unchanged, so the reports did not add a second copy of it.
+
+Backend 1234 → 1470. Frontend 146 → 216 (12 spec files → 17).
+Before the rebase, against `7843a71`, the same work read 1049 → 1265 and 131 → 200.
+
+### Phase gate
+
+1. **Test coverage.**
+   Every report has pytest tests for each role on each side of the line (owner and admin in; dispatcher, cleaner, customer and anonymous out), for both the JSON and the CSV form, and a cross-tenant test in which the two organizations work different hours and bill differently, so a wrong-tenant read is a wrong number.
+   Against Phase 4c: an organization deactivated by the coverage rule itself still reads and downloads all six with the figures it had before, a card payment arriving after the lapse is reported, a lapse lets no extra role in, and every event type in `PLATFORM_HANDLERS` leaves the `Invoice` and `Payment` tables and all four money endpoints byte for byte as they were.
+   Also covered: someone who owns one organization and cleans for another is refused the second one's reports, a superuser gets a report only with an organization named, a deactivated organization can still read them, the local day of an entry that crosses midnight or a period boundary, a 23 and a 25 hour day in Denver and a 25 hour day in Auckland, open entries, a corrected entry, every edge of every aging bucket, the ledger agreement test, soft-deleted entries, jobs, customers, invoices, lines and payments, flat query counts, byte-identical repeat responses, and formula injection with `=HYPERLINK("http://x","y")` and a typed `-10`.
+   The tests were checked for being able to fail by breaking the code under them: 15 mutants of the money reports (13 caught; one survivor was a redundant `order_by` under a comment that was wrong, both since removed, and the other is the fetch-narrowing filter, which changes no answer by design and says so), the timesheet's tenant, soft-delete, open-entry, day-length and formula rules one at a time (all caught), and 14 mutants of the frontend (all caught).
+   **Gaps, all of them:**
+   no browser has looked at `/reports` at any width, so the layout, the table scrolling inside its own box at 390px, the expansion panels and a real file landing in a real downloads folder are unverified;
+   no CSV has been opened in Excel, Numbers or Sheets, so the apostrophe prefix, the quoting and the byte-order mark are verified against the bytes and not against a spreadsheet;
+   the router guard's new `admin` branch has no spec (the guard has none at all, a baseline gap) and neither has the navigation item in `App.vue`;
+   the functions in `ui/src/api/endpoints.ts` are covered only through the page spec, which asserts their paths and parameters;
+   nothing measures the reports against a large tenant, only that the query count is flat.
+2. **DRY.**
+   One CSV writer, one date-range check (the jobs filter now calls it too), one balance formula, one definition of a live payment (`services.NOT_VOIDED`).
+   Left in place: `read_csv`, a three-line test helper, is written in three test modules; each report has a JSON view and a CSV view that differ in their last line.
+   The frontend formats seconds through the existing `formatDuration` and takes method labels from the API rather than `PAYMENT_METHOD_LABEL`.
+3. **Modularity.**
+   The page reaches the API only through `ui/src/api/endpoints.ts`.
+   Report logic is in `<app>/reports.py` rather than `<app>/services.py`, a deliberate departure from the convention: both `services.py` files are long, and a report decides nothing the seed or a task needs.
+   `billing.reports` goes through `billing.services` for every money rule.
+4. **Orthogonality.**
+   `scheduling` still imports nothing from `billing`; both import `base.exports`.
+   New couplings, each noted in code:
+   the timesheet's period cap is the jobs filter's `MAX_RANGE_DAYS`, so changing one changes the other;
+   `services.PAID_ANNOTATION` is a contract between `with_paid_cents` and `paid_cents`, and an annotated invoice must never reach a write;
+   the aging field names appear in `billing/reports.py`, `billing/serializers.py` and `AGING_LABEL` in `ui/src/lib/reports.ts`, the last enforced by the type-check;
+   a report's download filename is spelled in the view's `Content-Disposition` and in `csvFilename` in `ui/src/lib/reports.ts`;
+   the `admin` route tier in `ui/src/router/index.ts` and the navigation item in `App.vue` mirror `users.enums.ADMIN_ROLES`;
+   `ui/vite.config.mts` inlines Vuetify for vitest so a spec can mount a page.
+5. **Security.**
+   No new model.
+   The six views are `APIView`s, so the tenant comes from `request.organization` and is passed to the report as an argument; nothing reads it from request data, and each query filters on it.
+   Every view states `IsAdminOrHigher`; nothing is `AllowAny`, and nothing sets `allowed_while_inactive` (the list of views that do is still the three subscription views from Phase 4c).
+   No authorization lives only in the UI.
+   Joins across soft-deletable relations are each decided and tested (ADR-030, point 5).
+   No access code is read, nothing is logged, no secret is added.
+   `/security-review` was run on the branch diff by a reviewer that had not seen the code: no reportable finding in tenant isolation, authorization, CSV output, data exposure, the `paid_cents` change, the frontend or the seed.
+   It noted one thing below its bar, an unquoted `;` or tab letting a formula start a new cell in a spreadsheet that splits on those, which is closed (every text cell is quoted) and tested.
+   Settings, the image and `deploy/` are untouched, so the deploy audit and the rehearsal were not re-run.
+6. **Branch and production guard.**
+   All of it is on `feat/reports`; nothing was committed to `main`, nothing was pushed or merged, and no `fly` command, staging or production access, or migration was run.
+   The branch was rebased once, onto local `main` at `6ef6f78`, before anything had been pushed; the two generated schema files were regenerated at each commit that carries them rather than merged by hand.
+   Tests ran against a database of their own (`pg_reports`); the development database was not touched.

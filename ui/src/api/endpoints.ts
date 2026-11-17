@@ -9,6 +9,7 @@
 import type {
   AccessWarning,
   BillableJob,
+  Collections,
   Customer,
   CustomerImportResult,
   CustomerImportTemplate,
@@ -35,6 +36,7 @@ import type {
   PlanPreview,
   PlatformBilling,
   PublicInvoice,
+  Receivables,
   RecordPaymentRequest,
   RecurringPlan,
   RecurringPlanRequest,
@@ -46,6 +48,7 @@ import type {
   ServiceRequest,
   StripeStatus,
   TimeEntry,
+  Timesheet,
   Url,
 } from './types'
 import { api } from './client'
@@ -591,4 +594,62 @@ export async function getPublicInvoice (token: string): Promise<PublicInvoice> {
 /** Open a Checkout session for the balance. Returns Stripe's URL. */
 export function openCheckout (token: string): Promise<string> {
   return postForUrl(`/api/billing/pay/${token}/checkout/`)
+}
+
+// --- reports ---------------------------------------------------------------
+// Owner and admin only; the API refuses everyone else with a 403. Every
+// figure is computed on the server. The page adds nothing up.
+
+/** Organization-local dates, both inclusive. The backend converts. */
+export interface ReportPeriod {
+  date_from: string
+  date_to: string
+}
+
+export async function getTimesheet (period: ReportPeriod): Promise<Timesheet> {
+  const { data } = await api.get<Timesheet>('/api/scheduling/reports/timesheet/', {
+    params: period,
+  })
+  return data
+}
+
+/** Aged as of the organization's own today unless `asOf` says otherwise. */
+export async function getReceivables (asOf?: string): Promise<Receivables> {
+  const { data } = await api.get<Receivables>('/api/billing/reports/receivables/', {
+    params: asOf ? { as_of: asOf } : {},
+  })
+  return data
+}
+
+export async function getCollections (period: ReportPeriod): Promise<Collections> {
+  const { data } = await api.get<Collections>('/api/billing/reports/collections/', {
+    params: period,
+  })
+  return data
+}
+
+const REPORT_CSV_PATHS = {
+  timesheet: '/api/scheduling/reports/timesheet/csv/',
+  receivables: '/api/billing/reports/receivables/csv/',
+  collections: '/api/billing/reports/collections/csv/',
+} as const
+
+export type ReportName = keyof typeof REPORT_CSV_PATHS
+
+/**
+ * A report as a CSV file.
+ *
+ * Fetched here rather than opened as a link: a plain navigation carries the
+ * session cookie but not the X-Organization header, so someone with two
+ * memberships would have no organization resolved and be refused.
+ */
+export async function downloadReportCsv (
+  report: ReportName,
+  params: Partial<ReportPeriod> & { as_of?: string } = {},
+): Promise<Blob> {
+  const { data } = await api.get<Blob>(REPORT_CSV_PATHS[report], {
+    params,
+    responseType: 'blob',
+  })
+  return data
 }

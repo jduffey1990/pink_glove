@@ -144,6 +144,22 @@ export function addMinutes (instant: Date | string, minutes: number): string {
   return new Date(date.getTime() + minutes * 60_000).toISOString()
 }
 
+/** The first day of the month containing `date`. Date-only, so no zone. */
+export function startOfMonth (date: IsoDate): IsoDate {
+  return `${date.slice(0, 7)}-01`
+}
+
+/**
+ * The last day of the month containing `date`.
+ *
+ * Day zero of the following month, which is how a calendar answers "28, 29,
+ * 30 or 31" without a table of month lengths or a leap-year rule.
+ */
+export function endOfMonth (date: IsoDate): IsoDate {
+  const [year, month] = date.split('-').map(Number)
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
+}
+
 /** e.g. "09:00". Wall-clock time in the organization's zone. */
 export function formatTime (instant: Date | string, timeZone: string): string {
   const date = typeof instant === 'string' ? new Date(instant) : instant
@@ -185,4 +201,14 @@ export function formatDuration (minutes: number | null): string {
     return `${rest} m`
   }
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} m`
+}
+
+/**
+ * "2 h 30 m", for a duration in seconds, which is what the timesheet counts in.
+ *
+ * Whole minutes, rounded down: a figure someone is paid from should never
+ * read higher than the time worked. The exact seconds are in the CSV.
+ */
+export function formatHoursMinutes (seconds: number): string {
+  return formatDuration(Math.floor(seconds / 60))
 }

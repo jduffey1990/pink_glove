@@ -12,7 +12,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 
 /** Which tier a route needs. Absent means "any signed-in user". */
-type Access = 'public' | 'dispatcher' | 'staff'
+type Access = 'public' | 'admin' | 'dispatcher' | 'staff'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -110,6 +110,14 @@ const routes: RouteRecordRaw[] = [
     meta: { access: 'dispatcher', title: 'Recurring plans' },
   },
   {
+    // Hours and money for the whole business: owner and admin, one tier
+    // above the rest of billing. The API refuses a dispatcher independently.
+    path: '/reports',
+    name: 'reports',
+    component: () => import('@/pages/ReportsPage.vue'),
+    meta: { access: 'admin', title: 'Reports' },
+  },
+  {
     // The customer's pay page (Phase 4b). No session: the signed token in the
     // invoice email is the credential, and the API decides what it opens.
     path: '/pay/:token',
@@ -150,6 +158,10 @@ router.beforeEach(async to => {
 
   if (session.needsOrganizationChoice && to.name !== 'choose-organization') {
     return { name: 'choose-organization' }
+  }
+
+  if (to.meta.access === 'admin' && !session.isAdminOrHigher) {
+    return { name: 'home' }
   }
 
   if (to.meta.access === 'dispatcher' && !session.isDispatcherOrHigher) {

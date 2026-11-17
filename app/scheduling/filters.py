@@ -9,8 +9,8 @@ still belongs under the 14th.
 """
 
 from django_filters import rest_framework as filters
-from rest_framework.exceptions import ValidationError
 
+from base.validators import validate_date_range
 from scheduling.enums import JobStatus
 from scheduling.models import Job, TimeEntry, assigned_to
 
@@ -52,18 +52,7 @@ class JobFilterSet(filters.FilterSet):
         date_from = self.form.cleaned_data.get("date_from")
         date_to = self.form.cleaned_data.get("date_to")
 
-        if date_from and date_to:
-            if date_to < date_from:
-                raise ValidationError({"date_to": "date_to cannot fall before date_from."})
-            if (date_to - date_from).days > MAX_RANGE_DAYS:
-                raise ValidationError(
-                    {
-                        "date_to": (
-                            f"That range covers more than {MAX_RANGE_DAYS} days. "
-                            "Ask for a shorter window."
-                        )
-                    }
-                )
+        validate_date_range(date_from, date_to, max_days=MAX_RANGE_DAYS)
 
         start, end = self.request.organization.local_day_bounds(date_from, date_to)
 

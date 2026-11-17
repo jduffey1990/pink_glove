@@ -11,9 +11,12 @@ import { describe, expect, it } from 'vitest'
 import {
   addDays,
   addMinutes,
+  endOfMonth,
   formatDuration,
+  formatHoursMinutes,
   formatTime,
   isoWeekdayOfDate,
+  startOfMonth,
   toIsoDate,
   weekOf,
   zonedInstant,
@@ -210,5 +213,41 @@ describe('addMinutes', () => {
 
     expect(toIsoDate(end, DENVER)).toBe('2027-06-11')
     expect(formatTime(end, DENVER)).toBe('01:00')
+  })
+})
+
+describe('formatHoursMinutes', () => {
+  it.each([
+    [0, '0 m'],
+    [59, '0 m'],
+    [60, '1 m'],
+    [2700, '45 m'],
+    [3600, '1 h'],
+    [5400, '1 h 30 m'],
+    // A minute is never rounded up into existence.
+    [5459, '1 h 30 m'],
+    [7200, '2 h'],
+    // A long week: hours do not roll over into days.
+    [144_000, '40 h'],
+    [360_060, '100 h 1 m'],
+  ])('%i seconds -> %s', (seconds, expected) => {
+    expect(formatHoursMinutes(seconds)).toBe(expected)
+  })
+})
+
+describe('startOfMonth and endOfMonth', () => {
+  it.each([
+    ['2027-06-14', '2027-06-01', '2027-06-30'],
+    ['2027-01-01', '2027-01-01', '2027-01-31'],
+    ['2027-12-31', '2027-12-01', '2027-12-31'],
+    ['2027-02-10', '2027-02-01', '2027-02-28'],
+    // 2028 is a leap year.
+    ['2028-02-10', '2028-02-01', '2028-02-29'],
+    // The months a DST change falls in are still whole months.
+    ['2027-03-14', '2027-03-01', '2027-03-31'],
+    ['2027-11-07', '2027-11-01', '2027-11-30'],
+  ])('%s is in %s to %s', (date, first, last) => {
+    expect(startOfMonth(date)).toBe(first)
+    expect(endOfMonth(date)).toBe(last)
   })
 })
