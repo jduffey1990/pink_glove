@@ -12,7 +12,7 @@ What is never nested is the access codes. Those come only from the audited
 reveal action (ADR-016).
 """
 
-from django.db import transaction
+from django.db import models, transaction
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
@@ -30,7 +30,7 @@ from scheduling.models import (
     TimeEntry,
 )
 from scheduling.models import validate_rrule as _validate_rrule
-from scheduling.services import job_actions, next_statuses
+from scheduling.services import job_actions, job_claims, next_statuses
 from users.enums import DISPATCHER_ROLES, Role
 
 
@@ -143,6 +143,21 @@ class NextStatusSerializer(serializers.Serializer):
     reason_required = serializers.BooleanField()
 
 
+class JobListSerializer(serializers.ListSerializer):
+    """
+    A page of jobs.
+
+    Exists for one reason: whether another app has a claim on a visit
+    (ADR-033) is asked once for the page, not once per row. The child is
+    handed the page before it serializes any of it.
+    """
+
+    def to_representation(self, data):
+        jobs = list(data.all() if isinstance(data, models.Manager) else data)
+        self.child.page = jobs
+        return super().to_representation(jobs)
+
+
 class JobSerializer(TenantModelSerializer):
     """
     The dispatcher's and cleaner's view of a visit.
@@ -172,8 +187,12 @@ class JobSerializer(TenantModelSerializer):
         ),
     )
 
+    #: The jobs being serialized alongside this one, set by `JobListSerializer`.
+    page: list = []
+
     class Meta(TenantModelSerializer.Meta):
         model = Job
+        list_serializer_class = JobListSerializer
         fields = (
             "id",
             "organization",
@@ -228,9 +247,12 @@ class JobSerializer(TenantModelSerializer):
         if not is_dispatcher and role != Role.CLEANER:
             return []
 
+        # Only a dispatcher can reopen, and only reopening can be held.
+        claim = self._claim(obj) if is_dispatcher and obj.is_terminal else None
+
         return [
             {"status": status, "reason_required": status in REASON_REQUIRED_STATUSES}
-            for status in next_statuses(obj, is_dispatcher=is_dispatcher)
+            for status in next_statuses(obj, is_dispatcher=is_dispatcher, claim=claim)
         ]
 
     def get_available_actions(self, obj) -> list[str]:
@@ -242,7 +264,22 @@ class JobSerializer(TenantModelSerializer):
         # the server cannot drift (ADR-023, ADR-032). They read the prefetched
         # time entries: no query per row on a list.
         is_dispatcher, _ = self._caller()
-        return job_actions(obj, is_dispatcher=is_dispatcher)
+        claim = self._claim(obj) if is_dispatcher else None
+        return job_actions(obj, is_dispatcher=is_dispatcher, claim=claim)
+
+    def _claim(self, obj) -> str | None:
+        """
+        Another app's hold on this visit, if any (ADR-033).
+
+        Asked once for the whole page when there is one, and remembered, so
+        the two fields that read it and every row of a list share one lookup.
+        """
+        cache = self.__dict__.setdefault("_claims", {})
+        if obj.pk not in cache:
+            jobs = self.page if obj in self.page else [obj]
+            claims = job_claims(jobs)
+            cache.update({job.pk: claims.get(job.pk) for job in jobs})
+        return cache[obj.pk]
 
     def _caller(self) -> tuple[bool, str | None]:
         """(dispatcher or higher, role) of whoever is asking, off the request."""

@@ -9,6 +9,7 @@ and `scheduling/tests/test_recurrence.py`.
 """
 
 import datetime as dt
+from collections.abc import Callable, Sequence
 
 from django.db import models, transaction
 from django.utils import timezone
@@ -415,7 +416,54 @@ ACTION_DELETE = "delete"
 JOB_ACTIONS = (ACTION_EDIT, ACTION_DELETE)
 
 
-def edit_refusal(job: Job) -> str | None:
+#: Checks other apps have registered to say "this visit is spoken for". Each
+#: takes a batch of jobs and returns {job id: the sentence to show} for the
+#: ones it has a claim on. See `register_job_claim_check`.
+_claim_checks: list[Callable[[Sequence[Job]], dict]] = []
+
+
+def register_job_claim_check(check: Callable[[Sequence[Job]], dict]) -> None:
+    """
+    Let another app hold a visit still (ADR-033).
+
+    A visit on an invoice must not be reopened, edited or deleted from under
+    it. That rule is billing's, and `scheduling` may not import `billing`: the
+    dependency runs one way, and closing the cycle is what CLAUDE.md warns
+    against. So the dependent app registers its check here from its
+    `AppConfig.ready()`, and this module asks whoever has registered without
+    knowing who they are. With nothing registered, nothing is ever claimed.
+
+    The check takes a *batch* of jobs and answers in one query, because the
+    job list asks about a whole page at a time. It returns `{job.pk: reason}`
+    for the jobs it claims; the reason is the registering app's own sentence,
+    shown to the dispatcher as the 409's `detail`.
+
+    Registering the same check twice is harmless.
+    """
+    if check not in _claim_checks:
+        _claim_checks.append(check)
+
+
+def job_claims(jobs: Sequence[Job]) -> dict:
+    """`{job.pk: reason}` for each of `jobs` that a registered app has a claim on."""
+    jobs = list(jobs)
+    claims: dict = {}
+    if not jobs:
+        return claims
+
+    for check in _claim_checks:
+        for job_id, reason in check(jobs).items():
+            # First registered, first heard: one sentence per visit is enough.
+            claims.setdefault(job_id, reason)
+    return claims
+
+
+def claim_on(job: Job) -> str | None:
+    """The reason `job` is held by another app, or None if it is free."""
+    return job_claims([job]).get(job.pk)
+
+
+def edit_refusal(job: Job, *, claim: str | None = None) -> str | None:
     """
     Why `job` may not be edited right now, or None if it may.
 
@@ -424,7 +472,14 @@ def edit_refusal(job: Job) -> str | None:
     correction, and the state machine already has the deliberate step for
     that, so the answer is "reopen it first" rather than a quiet rewrite.
     `assign_user` refuses a finished job for the same reason.
+
+    `claim` is another app's hold on the visit (`claim_on`). It is checked
+    first because it is the more useful sentence: "reopen it first" would
+    only send the dispatcher to a reopen that the claim refuses as well.
     """
+    if claim:
+        return claim
+
     if job.is_terminal:
         return (
             f"This job is {job.get_status_display().lower()} and cannot be changed. "
@@ -433,7 +488,7 @@ def edit_refusal(job: Job) -> str | None:
     return None
 
 
-def delete_refusal(job: Job) -> str | None:
+def delete_refusal(job: Job, *, claim: str | None = None) -> str | None:
     """
     Why `job` may not be deleted right now, or None if it may.
 
@@ -446,7 +501,13 @@ def delete_refusal(job: Job) -> str | None:
     * a visit a plan created comes straight back, because the materializer
       only counts live rows. Deleting a *cancelled* one is the worst case: it
       puts the visit the customer called off back on the board.
+
+    `claim` is another app's hold on the visit (`claim_on`), checked first as
+    in `edit_refusal`: a visit on an invoice is not deleted from under it.
     """
+    if claim:
+        return claim
+
     if job.time_entries.exists():
         return "This job has recorded time. Cancel it instead of deleting it."
 
@@ -465,16 +526,21 @@ def delete_refusal(job: Job) -> str | None:
     return None
 
 
-def job_actions(job: Job, *, is_dispatcher: bool) -> list[str]:
-    """Which of `JOB_ACTIONS` the server will accept for `job` from this caller."""
+def job_actions(job: Job, *, is_dispatcher: bool, claim: str | None = None) -> list[str]:
+    """
+    Which of `JOB_ACTIONS` the server will accept for `job` from this caller.
+
+    `claim` is whatever `claim_on(job)` says. It is a parameter rather than
+    looked up here so that a list can ask about a whole page in one query.
+    """
     if not is_dispatcher:
         return []
 
     refusals = {ACTION_EDIT: edit_refusal, ACTION_DELETE: delete_refusal}
-    return [action for action in JOB_ACTIONS if refusals[action](job) is None]
+    return [action for action in JOB_ACTIONS if refusals[action](job, claim=claim) is None]
 
 
-def next_statuses(job: Job, *, is_dispatcher: bool) -> list[str]:
+def next_statuses(job: Job, *, is_dispatcher: bool, claim: str | None = None) -> list[str]:
     """
     Where `job` may go next, for this kind of caller.
 
@@ -482,12 +548,16 @@ def next_statuses(job: Job, *, is_dispatcher: bool) -> list[str]:
     reopening a finished visit and cancelling one are dispatcher decisions.
     `transition_job` enforces it and `JobSerializer` publishes it, so the
     buttons a page draws and the moves the server accepts cannot drift.
+
+    A finished visit another app has a claim on (`claim_on`: it is on an
+    invoice) goes nowhere: the only move from finished is reopening, and
+    reopening it would pull it out from under the claim (ADR-033).
     """
     allowed = ALLOWED_TRANSITIONS.get(job.status, ())
+    if job.is_terminal and (claim or not is_dispatcher):
+        return []
     if is_dispatcher:
         return list(allowed)
-    if job.is_terminal:
-        return []
     return [status for status in allowed if status != JobStatus.CANCELLED]
 
 
@@ -506,25 +576,34 @@ def transition_job(*, job: Job, to_status: str, actor, reason: str = "") -> Job:
     if to_status not in JobStatus.values:
         raise ValidationError({"status": f"{to_status!r} is not a job status."})
 
+    # Only a finished visit can be held, and only its reopening is at stake,
+    # so the ordinary forward moves never pay for the lookup.
+    claim = claim_on(job) if job.is_terminal else None
+
     allowed = ALLOWED_TRANSITIONS.get(job.status, ())
     if to_status not in allowed:
         raise ConflictError(
             f"A {job.get_status_display().lower()} job cannot become "
             f"{JobStatus(to_status).label.lower()}.",
-            {"status": job.status, "allowed": list(allowed)},
+            # The machine's list, less what a claim rules out: a stale page
+            # redraws from this and must not be handed a reopen that 409s.
+            {"status": job.status, "allowed": next_statuses(job, is_dispatcher=True, claim=claim)},
         )
 
     is_dispatcher = _is_dispatcher_or_higher(actor, job.organization)
-    permitted = next_statuses(job, is_dispatcher=is_dispatcher)
+    permitted = next_statuses(job, is_dispatcher=is_dispatcher, claim=claim)
 
     if to_status not in permitted:
-        # Legal for the machine, not for this caller. Reopening a finished
-        # visit is a correction, and cancelling is a business decision.
-        message = (
-            "Only a dispatcher can reopen a job that is already finished."
-            if job.is_terminal
-            else "Only a dispatcher can cancel a job."
-        )
+        # Legal for the machine, not for this caller or not right now.
+        # Reopening a finished visit is a correction and cancelling is a
+        # business decision, so both are a dispatcher's; and a dispatcher is
+        # refused a reopen only by a claim, in the claimant's own words.
+        if claim and is_dispatcher:
+            message = claim
+        elif job.is_terminal:
+            message = "Only a dispatcher can reopen a job that is already finished."
+        else:
+            message = "Only a dispatcher can cancel a job."
         raise ConflictError(message, {"status": job.status, "allowed": permitted})
 
     if to_status in REASON_REQUIRED_STATUSES and not (reason or "").strip():

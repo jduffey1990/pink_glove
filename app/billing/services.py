@@ -75,6 +75,55 @@ def claimed_job_ids() -> models.QuerySet:
     return live_lines().filter(job__isnull=False).values("job_id")
 
 
+def visit_claims(jobs) -> dict:
+    """
+    Which of `jobs` an invoice is holding, and what to do about it.
+
+    This is the check `BillingConfig.ready` registers with scheduling
+    (ADR-033): `{job.pk: sentence}` for every visit a live line points at,
+    in one query for the whole batch. Scheduling shows the sentence as the
+    409 when a dispatcher tries to reopen, edit or delete such a visit.
+
+    "Live" is `live_lines()` and nothing looser: a removed line, a deleted
+    draft and a voided invoice all let the visit go, because voiding is
+    precisely how a mistaken invoice gives its visits back.
+
+    A draft holds a visit as an issued invoice does. Nothing at issue checks
+    that a draft's visits are still finished, so a visit reopened while on a
+    draft was billed, as it stood, for work nobody had done.
+
+    The line's organization must be the job's own. `TenantModel.save()`
+    already refuses a line that points across tenants; this is the same rule
+    stated where it is relied on, so another organization's invoice can never
+    hold this one's visit.
+    """
+    organization_of = {job.pk: job.organization_id for job in jobs}
+    if not organization_of:
+        return {}
+
+    rows = (
+        live_lines()
+        .filter(
+            job_id__in=organization_of.keys(),
+            organization_id__in=set(organization_of.values()),
+        )
+        .values_list("job_id", "organization_id", "invoice__status", "invoice__number")
+    )
+
+    claims: dict = {}
+    for job_id, organization_id, status, number in rows:
+        if organization_of[job_id] != organization_id:
+            continue
+        if status == InvoiceStatus.ISSUED:
+            # Said last and unconditionally: an issued invoice outranks a draft.
+            claims[job_id] = f"This visit is on invoice {number}. Void the invoice first."
+        else:
+            claims.setdefault(
+                job_id, "This visit is on a draft invoice. Take it off the draft first."
+            )
+    return claims
+
+
 def billable_jobs(organization, customer=None) -> models.QuerySet[Job]:
     """
     The dispatcher's "ready to invoice" list.
