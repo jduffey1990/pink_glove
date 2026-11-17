@@ -988,6 +988,17 @@ The timesheet is in `scheduling`, the money in `billing`, and both use `base.exp
 **Rejected: a `reports` app.**
 It would import both `scheduling` and `billing`, and it would be the first place a combined report (hours against revenue) got written with its own idea of a balance.
 
+**11. A read-only organization still reads its reports, and the platform subscription is in none of them.**
+ADR-028 makes an organization past its grace read-only, not locked out.
+Reports are reads and the data is the tenant's, so the owner of a lapsed organization can read and download all of them, and they keep moving: a deactivated tenant's customers can still pay it by card, and that payment is reported.
+No report view sets `allowed_while_inactive`; `IsOrgMember` only refuses unsafe methods, so the hole ADR-028 opened for the three subscription views is not needed here and stays three views wide.
+The two money relationships of ADR-024 stay apart.
+What the tenant pays the platform is not money the tenant received and not money its customers owe it; platform events write `StripeEvent` rows and fields on the organization, never an `Invoice` or a `Payment`, and those two tables are all the money reports read.
+A test runs every platform event type through the handler and holds both tables and all four money endpoints unchanged.
+
+**Rejected: hiding the reports from a lapsed organization**, as a lever to get the bill paid.
+The hours are owed to the crew and the invoices are owed to the tenant whoever is behind on a subscription, and ADR-028 already chose read-only over locked out for that reason.
+
 **Consequences.**
 A timesheet period is capped at `scheduling.filters.MAX_RANGE_DAYS`, the jobs filter's own cap, and collections at 366 days; the frontend does not copy either and shows the server's refusal.
 A closed month's collections can change when a payment in it is voided.

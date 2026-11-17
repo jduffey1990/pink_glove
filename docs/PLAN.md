@@ -2870,7 +2870,7 @@ Checked and left alone: clock-out of an open entry, unassign, a dispatcher's tim
 
 ## Reports as built
 
-Branch `feat/reports`, cut from `main` at `7843a71` on 2026-11-16.
+Branch `feat/reports`, cut from `main` at `7843a71` on 2026-11-16 and rebased the next day onto `6ef6f78`, which had gained Phase 4c and the no-mistakes gate.
 Three read-only reports for the owner's first two questions, "what do I owe my cleaners this week" and "who owes me".
 No model change and no migration.
 What each report means is ADR-030; read it before changing a number.
@@ -2897,15 +2897,20 @@ Each is one query whatever the number of staff, customers or payments, and is or
   The page adds nothing up.
   Its logic is in `src/lib/reports.ts`, `loadable.ts`, `latest.ts` and `download.ts`, each with a spec, and `ReportsPage.spec.ts` mounts the page against a mocked API.
 - **Seed.** `seed_demo` now records a time entry for each assigned cleaner on each finished visit, as its own additive pass, so the timesheet is not empty on a seeded database and an older seed gains its hours on `--force`.
+- **Beside Phase 4c.** Neither meeting point needed a code change, and both are tested.
+  A lapsed organization is read-only and reports are reads, so its owner can still read and download all six; none of the report views sets `allowed_while_inactive`, because `IsOrgMember` only refuses unsafe methods.
+  The platform subscription is a second money relationship and is in neither money report: platform events write `StripeEvent` rows and fields on the organization, never an `Invoice` or a `Payment`, which are the only tables the reports read.
 
 Also in the branch: the jobs filter's date-range check moved to `base.validators.validate_date_range` unchanged, so the reports did not add a second copy of it.
 
-Backend 1049 → 1265. Frontend 131 → 200 (10 spec files → 15).
+Backend 1234 → 1470. Frontend 146 → 216 (12 spec files → 17).
+Before the rebase, against `7843a71`, the same work read 1049 → 1265 and 131 → 200.
 
 ### Phase gate
 
 1. **Test coverage.**
    Every report has pytest tests for each role on each side of the line (owner and admin in; dispatcher, cleaner, customer and anonymous out), for both the JSON and the CSV form, and a cross-tenant test in which the two organizations work different hours and bill differently, so a wrong-tenant read is a wrong number.
+   Against Phase 4c: an organization deactivated by the coverage rule itself still reads and downloads all six with the figures it had before, a card payment arriving after the lapse is reported, a lapse lets no extra role in, and every event type in `PLATFORM_HANDLERS` leaves the `Invoice` and `Payment` tables and all four money endpoints byte for byte as they were.
    Also covered: someone who owns one organization and cleans for another is refused the second one's reports, a superuser gets a report only with an organization named, a deactivated organization can still read them, the local day of an entry that crosses midnight or a period boundary, a 23 and a 25 hour day in Denver and a 25 hour day in Auckland, open entries, a corrected entry, every edge of every aging bucket, the ledger agreement test, soft-deleted entries, jobs, customers, invoices, lines and payments, flat query counts, byte-identical repeat responses, and formula injection with `=HYPERLINK("http://x","y")` and a typed `-10`.
    The tests were checked for being able to fail by breaking the code under them: 15 mutants of the money reports (13 caught; one survivor was a redundant `order_by` under a comment that was wrong, both since removed, and the other is the fetch-narrowing filter, which changes no answer by design and says so), the timesheet's tenant, soft-delete, open-entry, day-length and formula rules one at a time (all caught), and 14 mutants of the frontend (all caught).
    **Gaps, all of them:**
@@ -2934,7 +2939,7 @@ Backend 1049 → 1265. Frontend 131 → 200 (10 spec files → 15).
 5. **Security.**
    No new model.
    The six views are `APIView`s, so the tenant comes from `request.organization` and is passed to the report as an argument; nothing reads it from request data, and each query filters on it.
-   Every view states `IsAdminOrHigher`; nothing is `AllowAny`.
+   Every view states `IsAdminOrHigher`; nothing is `AllowAny`, and nothing sets `allowed_while_inactive` (the list of views that do is still the three subscription views from Phase 4c).
    No authorization lives only in the UI.
    Joins across soft-deletable relations are each decided and tested (ADR-030, point 5).
    No access code is read, nothing is logged, no secret is added.
@@ -2942,5 +2947,6 @@ Backend 1049 → 1265. Frontend 131 → 200 (10 spec files → 15).
    It noted one thing below its bar, an unquoted `;` or tab letting a formula start a new cell in a spreadsheet that splits on those, which is closed (every text cell is quoted) and tested.
    Settings, the image and `deploy/` are untouched, so the deploy audit and the rehearsal were not re-run.
 6. **Branch and production guard.**
-   All of it is on `feat/reports`; nothing was committed to `main`, nothing was pushed, merged or rebased, and no `fly` command, staging or production access, or migration was run.
+   All of it is on `feat/reports`; nothing was committed to `main`, nothing was pushed or merged, and no `fly` command, staging or production access, or migration was run.
+   The branch was rebased once, onto local `main` at `6ef6f78`, before anything had been pushed; the two generated schema files were regenerated at each commit that carries them rather than merged by hand.
    Tests ran against a database of their own (`pg_reports`); the development database was not touched.
