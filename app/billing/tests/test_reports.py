@@ -15,6 +15,7 @@ import csv
 import datetime as dt
 import io
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from django.db import connection
@@ -23,8 +24,9 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from billing import reports, services
-from billing.enums import InvoiceStatus, PaymentMethod
+from base.permissions import ORGANIZATION_INACTIVE
+from billing import connect, reports, services, webhook
+from billing.enums import InvoiceStatus, PaymentMethod, StripeEventStatus
 from billing.models import Invoice, Payment
 from billing.tests.conftest import completed_job, staff_in
 from billing.tests.factories import (
@@ -32,7 +34,18 @@ from billing.tests.factories import (
     InvoiceLineFactory,
     IssuedInvoiceFactory,
     PaymentFactory,
+    StripeEventFactory,
 )
+from billing.tests.stripe_fixtures import (
+    CUSTOMER_ID,
+    SUBSCRIPTION_ID,
+    invoice_object,
+    platform_event,
+    stripe_object,
+    subscription_checkout_session,
+    subscription_object,
+)
+from organizations import services as coverage
 from organizations.enums import NoAccessFeeType
 from organizations.models import Organization
 from scheduling.tests.factories import (
@@ -902,3 +915,210 @@ class TestCollectionsCSV:
             ["Money order", "1", "100.07", "0.05", "0.00", "100.12", "0"],
             ["Card", "1", "150.00", "0.00", "4.65", "145.35", "0"],
         ]
+
+
+# --- beside the platform subscription (Phase 4c, ADR-028) ------------------
+# Two money relationships share this codebase and the word Stripe: the
+# tenant's customers pay the tenant, and the tenant pays the platform. The
+# reports are about the first and must never show the second. And a tenant
+# that stops paying the platform goes read-only, which must not cost it the
+# sight of its own books.
+
+
+def around_today(org) -> dict:
+    """A period with today in the middle: where anything written just now would land."""
+    today = org.today()
+    return {
+        "date_from": (today - dt.timedelta(days=30)).isoformat(),
+        "date_to": (today + dt.timedelta(days=30)).isoformat(),
+    }
+
+
+def money_reports(client, org) -> dict[str, bytes]:
+    """The four money endpoints' raw bodies, for comparing before and after."""
+    period = around_today(org)
+    answers = {
+        RECEIVABLES: client.get(RECEIVABLES),
+        RECEIVABLES_CSV: client.get(RECEIVABLES_CSV),
+        COLLECTIONS: client.get(COLLECTIONS, period),
+        COLLECTIONS_CSV: client.get(COLLECTIONS_CSV, period),
+    }
+    assert {url: answer.status_code for url, answer in answers.items()} == dict.fromkeys(
+        answers, 200
+    )
+    return {url: answer.content for url, answer in answers.items()}
+
+
+@pytest.fixture
+def books(org):
+    """One invoice part-paid today and one untouched: something in every report."""
+    part_paid = owed(org, total_cents=20000)
+    paid(part_paid, 5000, tip_cents=700, received_on=org.today())
+    owed(org, total_cents=9000, days_past_due=40)
+    return part_paid
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("platform_billing_on")
+class TestALapsedOrganizationCanStillReadItsReports:
+    """
+    ADR-028: an organization past its grace is read-only, not locked out.
+    Reports are reads and the data is the tenant's. None of the report views
+    sets `allowed_while_inactive`; they do not need the hole, because
+    `IsOrgMember` only refuses unsafe methods.
+    """
+
+    @pytest.fixture
+    def lapsed(self, org, books):
+        """Deactivated by the real coverage rule, not by setting the flag."""
+        org.billing_exempt = False
+        org.trial_ends_at = timezone.now() - dt.timedelta(days=60)
+        org.save()
+
+        assert coverage.apply_coverage(org) is True
+        org.refresh_from_db()
+        assert org.is_active is False
+        assert org.deactivated_for_billing_at is not None
+        return org
+
+    def test_it_really_is_read_only(self, lapsed, books, owner_client):
+        """Guards the tests below: they prove nothing if the lapse did not take."""
+        response = owner_client.post(
+            reverse("billing:payment-list"),
+            {
+                "invoice": str(books.pk),
+                "method": "cash",
+                "amount_cents": 100,
+                "received_on": "2027-06-15",
+            },
+            format="json",
+        )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == ORGANIZATION_INACTIVE
+
+    @pytest.mark.parametrize(("url", "query"), ALL_REPORTS)
+    def test_the_owner_can_read_and_download_every_one(self, url, query, lapsed, owner_client):
+        assert owner_client.get(url, query).status_code == 200
+
+    @pytest.mark.parametrize("name", ["report-timesheet", "report-timesheet-csv"])
+    def test_and_the_timesheet_with_them(self, name, lapsed, owner_client):
+        """The crew's hours are still owed to the crew, whoever is behind on a bill."""
+        assert owner_client.get(reverse(f"scheduling:{name}"), JUNE).status_code == 200
+
+    def test_the_figures_are_the_ones_from_before_the_lapse(self, org, books, owner_client):
+        before = money_reports(owner_client, org)
+        org.billing_exempt = False
+        org.trial_ends_at = timezone.now() - dt.timedelta(days=60)
+        org.save()
+        assert coverage.apply_coverage(org) is True
+
+        assert money_reports(owner_client, org) == before
+
+    def test_a_card_payment_that_arrives_after_the_lapse_is_reported(
+        self, lapsed, books, owner_client
+    ):
+        """
+        A deactivated tenant's customers can still pay it (ADR-028): the pay
+        page is public and the Connect webhook writes the row regardless.
+        The reports have to keep up, or the owner cannot see what came in
+        while they were sorting out their own bill.
+        """
+        services.record_provider_payment(
+            books,
+            provider="stripe",
+            provider_reference="pi_after_the_lapse",
+            amount_cents=15000,
+            received_on=lapsed.today(),
+            fee_cents=465,
+        )
+
+        owed_now = owner_client.get(RECEIVABLES).json()["totals"]["total_cents"]
+        received = owner_client.get(COLLECTIONS, around_today(lapsed)).json()
+
+        # The part-paid invoice is settled; only the untouched one is still owed.
+        assert owed_now == 9000
+        assert {row["method"]: row["amount_cents"] for row in received["methods"]} == {
+            "check": 5000,
+            "card": 15000,
+        }
+        assert received["totals"]["amount_cents"] == 20000
+        assert received["totals"]["fee_cents"] == 465
+
+    @pytest.mark.parametrize(("url", "query"), ALL_REPORTS)
+    def test_a_lapse_widens_nothing(self, url, query, lapsed):
+        """Read-only is not a different permission: a dispatcher is still refused."""
+        assert client_for(staff_in(lapsed, Role.DISPATCHER)).get(url, query).status_code == 403
+
+
+@pytest.mark.django_db
+@pytest.mark.usefixtures("platform_billing_on")
+class TestThePlatformSubscriptionIsNeverInTheMoneyReports:
+    """
+    What the tenant pays the platform is not money the tenant received, and
+    not money its customers owe it. Platform events are ledgered as
+    `StripeEvent` rows and move fields on the organization; they must write
+    no `Invoice` and no `Payment`, which are the only tables the reports
+    read. Driven from `PLATFORM_HANDLERS` itself, so a seventh event type
+    is covered the day it is added.
+    """
+
+    @pytest.fixture
+    def subscriber(self, org):
+        org.billing_exempt = False
+        org.trial_ends_at = timezone.now() - dt.timedelta(days=40)
+        org.stripe_customer_id = CUSTOMER_ID
+        org.stripe_subscription_id = SUBSCRIPTION_ID
+        org.subscription_status = "active"
+        org.subscription_paid_through = timezone.now() + dt.timedelta(days=20)
+        org.save()
+        return org
+
+    @pytest.fixture
+    def stripe_api(self):
+        """A fake StripeClient handing back a paid, live subscription."""
+        now = timezone.now()
+        fake = mock.MagicMock(name="StripeClient")
+        fake.v1.subscriptions.retrieve.return_value = stripe_object(
+            subscription_object(
+                period_start=int((now - dt.timedelta(days=10)).timestamp()),
+                period_end=int((now + dt.timedelta(days=20)).timestamp()),
+            )
+        )
+        with mock.patch.object(connect, "client", return_value=fake):
+            yield fake
+
+    @staticmethod
+    def _object_for(type_: str) -> dict:
+        if type_.startswith("invoice."):
+            return invoice_object()
+        if type_.startswith("checkout."):
+            return subscription_checkout_session()
+        return subscription_object(period_start=0, period_end=0)
+
+    @pytest.mark.parametrize("type_", sorted(webhook.PLATFORM_HANDLERS))
+    def test_a_platform_event_changes_no_report(
+        self, type_, subscriber, books, stripe_api, owner_client
+    ):
+        before = money_reports(owner_client, subscriber)
+        ledger_before = (Invoice.all_objects.count(), Payment.all_objects.count())
+        payload = platform_event(type_, self._object_for(type_))
+        row = StripeEventFactory(
+            event_id=payload["id"],
+            account="",
+            type=type_,
+            organization=subscriber,
+            payload=payload,
+        )
+
+        status = webhook.process(str(subscriber.pk), str(row.pk))
+
+        # It ran: an event that was dropped would prove nothing.
+        assert status == StripeEventStatus.PROCESSED
+        stripe_api.v1.subscriptions.retrieve.assert_called_once()
+        assert (Invoice.all_objects.count(), Payment.all_objects.count()) == ledger_before
+        assert money_reports(owner_client, subscriber) == before
+
+    def test_every_platform_event_type_is_covered_above(self):
+        """Guards the guard: an empty table would make the test above vacuous."""
+        assert len(webhook.PLATFORM_HANDLERS) >= 6
