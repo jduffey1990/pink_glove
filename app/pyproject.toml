@@ -25,7 +25,10 @@ dependencies = [
     "dj-database-url>=3.1,<4",
     "gunicorn>=26.0,<27",
     "whitenoise>=6.12,<7",
-    "celery>=5.6,<6",
+    # The redis extra, not bare celery: kombu 5.7 moved `packaging`, which its
+    # Redis transport imports, behind that extra. Without it a fresh install
+    # builds, and the worker and beat die at start (found in rehearsal, 2026-11-16).
+    "celery[redis]>=5.6,<6",
     "redis>=6.0,<7",
     "django-celery-results>=2.6,<3",
     "django-celery-beat>=2.9,<3",    # Phase 3: recurring job materializer
