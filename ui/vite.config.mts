@@ -62,5 +62,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.spec.ts'],
+    // Vuetify's components import their own .css. Node cannot load that, so
+    // a spec that mounts one needs Vite to process the package rather than
+    // leave it external. Without this, mounting fails before the first test.
+    server: { deps: { inline: ['vuetify'] } },
   },
 })

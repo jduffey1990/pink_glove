@@ -1,7 +1,10 @@
+import logging
+
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema
 from rest_framework import filters, status
 from rest_framework.decorators import action
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
@@ -13,11 +16,20 @@ from audit.serializers import (
     RevealRequestSerializer,
 )
 from audit.services import record_reveal, resolve_reveal_job
-from base.permissions import IsDispatcherOrHigher
+from base.permissions import IsAdminOrHigher, IsDispatcherOrHigher
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
+from customers import services
 from customers.models import Customer, ServiceLocation
-from customers.serializers import CustomerSerializer, ServiceLocationSerializer
+from customers.serializers import (
+    CustomerImportResultSerializer,
+    CustomerImportTemplateSerializer,
+    CustomerImportUploadSerializer,
+    CustomerSerializer,
+    ServiceLocationSerializer,
+)
+
+logger = logging.getLogger(__name__)
 
 #: Fields the reveal action returns. Write-only on the normal serializer.
 ACCESS_CODE_FIELDS = ("gate_code", "alarm_code", "key_location")
@@ -32,6 +44,95 @@ class CustomerViewSet(TenantViewSetMixin, ModelViewSet):
     filterset_fields = ["status", "preferred_contact_method"]
     search_fields = ["first_name", "last_name", "company_name", "email", "phone"]
     ordering_fields = ["last_name", "created_at", "status"]
+
+    @extend_schema(
+        request=None,
+        responses={200: CustomerImportTemplateSerializer},
+        summary="The import file's columns, with a template to fill in",
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="import-template",
+        permission_classes=[IsAdminOrHigher],
+    )
+    def import_template(self, request):
+        """
+        What an import file looks like: the header row, one example row, which
+        columns are required and the limits on a file.
+
+        Served rather than written into the page so the list of columns has
+        one source (ADR-023, ADR-031): `customers.import_columns`.
+        """
+        self.get_organization()
+        return Response(services.template())
+
+    @extend_schema(
+        request={"multipart/form-data": CustomerImportUploadSerializer},
+        responses={
+            200: CustomerImportResultSerializer,
+            400: CustomerImportResultSerializer,
+        },
+        summary="Preview or perform an import of customers from a CSV file",
+    )
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="import",
+        permission_classes=[IsAdminOrHigher],
+        parser_classes=[MultiPartParser],
+    )
+    def import_customers(self, request):
+        """
+        Load customers and their service locations from a CSV file (ADR-031).
+
+        `dry_run` defaults to TRUE: the file is read, every row is validated
+        and matched against the customers already here, and the outcome of
+        each row comes back with nothing written. Send `dry_run=false` to
+        import.
+
+        A real import is all or nothing. One row that cannot be imported
+        means no row is, and the answer is a 400 carrying the same per-row
+        outcomes a dry run returns. A file that cannot be read at all
+        (wrong encoding, a missing required column, too large) is a 400 of
+        the usual `{"file": ["..."]}` shape in either mode.
+
+        Owner and admin only. A dispatcher can add a customer by hand, but
+        loading a whole book, access codes included, in one request is an
+        administrative act.
+
+        The response never carries an access code, and the only thing logged
+        is who imported how many rows.
+        """
+        organization = self.get_organization()
+
+        upload = CustomerImportUploadSerializer(data=request.data)
+        upload.is_valid(raise_exception=True)
+        dry_run = upload.validated_data["dry_run"]
+
+        result = services.import_customers(
+            organization=organization,
+            upload=upload.validated_data["file"],
+            dry_run=dry_run,
+            context=self.get_serializer_context(),
+        )
+
+        # Counts only. A row's content, an access code least of all, is never
+        # logged (ADR-014).
+        logger.info(
+            "Customer import: organization=%s user=%s dry_run=%s committed=%s totals=%s",
+            organization.id,
+            request.user.id,
+            dry_run,
+            result.committed,
+            result.totals,
+        )
+
+        refused = not dry_run and not result.committed
+        return Response(
+            CustomerImportResultSerializer(result).data,
+            status=status.HTTP_400_BAD_REQUEST if refused else status.HTTP_200_OK,
+        )
 
 
 class ServiceLocationViewSet(TenantViewSetMixin, ModelViewSet):

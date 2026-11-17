@@ -243,6 +243,9 @@ SPECTACULAR_SETTINGS = {
         "StripeStateEnum": "organizations.enums.StripeState.choices",
         "BillingStateEnum": "organizations.enums.BillingState.choices",
         "NoticeLevelEnum": "organizations.enums.NoticeLevel.choices",
+        # A row's outcome in a customer import is a field called "action",
+        # which would generate as "ActionEnum".
+        "CustomerImportActionEnum": "customers.enums.ImportAction.choices",
     },
 }
 
