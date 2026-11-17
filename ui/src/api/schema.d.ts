@@ -1959,7 +1959,7 @@ export interface components {
             readonly plan: string | null;
             /**
              * Format: date-time
-             * @description The UTC instant this occurrence was originally planned for. Immutable. This, not scheduled_start, is the materializer's idempotency key -- a rescheduled job must not be re-created at its old slot.
+             * @description The UTC instant of the plan occurrence this visit accounts for. No caller can write it: the materializer sets it, and regenerate_plan re-keys a kept visit to the same local day when the plan's time moves. This, not scheduled_start, is the materializer's idempotency key -- a rescheduled job must not be re-created at its old slot.
              */
             readonly plan_occurrence: string | null;
             /** Format: date-time */

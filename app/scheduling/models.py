@@ -13,6 +13,11 @@ Two things here are load-bearing and easy to "simplify" wrongly:
 * `Job.price_cents` -- a snapshot taken at materialization, never read live
   from `Service`. Raising your prices must not retroactively change what last
   month's completed work was worth.
+* `Job.planned_price_cents`, `planned_end`, `planned_notes` -- what the plan
+  wrote when it made the visit. They are how a plan edit tells a visit somebody
+  changed from one nobody did (ADR-032). Comparing against the plan or the
+  service instead is wrong: both change without regenerating anything, so a
+  plan's untouched visits legitimately disagree with each other.
 """
 
 from django.core.exceptions import ValidationError
@@ -155,7 +160,9 @@ class Job(TenantModel):
         blank=True,
         editable=False,
         help_text=(
-            "The UTC instant this occurrence was originally planned for. Immutable. "
+            "The UTC instant of the plan occurrence this visit accounts for. No "
+            "caller can write it: the materializer sets it, and regenerate_plan "
+            "re-keys a kept visit to the same local day when the plan's time moves. "
             "This, not scheduled_start, is the materializer's idempotency key -- a "
             "rescheduled job must not be re-created at its old slot."
         ),
@@ -177,6 +184,19 @@ class Job(TenantModel):
     notes = models.TextField(blank=True, default="")
     cancellation_reason = models.CharField(max_length=255, blank=True, default="")
 
+    # --- What the plan wrote (ADR-032) --------------------------------------
+    # Stamped by `scheduling.services.materialize_plan` and by nothing else:
+    # no serializer accepts them and the admin shows them read-only. A visit
+    # is untouched while `price_cents`, `scheduled_end` and `notes` still
+    # equal these. All three are NULL on a one-off visit, which no plan wrote,
+    # and a plan visit with NULL stamps is treated as touched and kept.
+    planned_price_cents = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    planned_end = models.DateTimeField(null=True, blank=True, editable=False)
+    #: NULL and "" mean different things here, which is why this one text
+    #: column is nullable: NULL is "no plan wrote this visit", "" is "the plan
+    #: wrote it with no note".
+    planned_notes = models.TextField(null=True, blank=True, editable=False)  # noqa: DJ001
+
     class Meta(TenantModel.Meta):
         verbose_name = "Job"
         verbose_name_plural = "Jobs"
@@ -190,6 +210,21 @@ class Job(TenantModel):
                 fields=["plan", "plan_occurrence"],
                 condition=models.Q(plan__isnull=False, deleted_at__isnull=True),
                 name="unique_job_per_plan_occurrence",
+            ),
+            # A stamp is whole or absent. Half of one would read as a hand
+            # edit to the missing part, or hide one.
+            models.CheckConstraint(
+                condition=models.Q(
+                    planned_price_cents__isnull=True,
+                    planned_end__isnull=True,
+                    planned_notes__isnull=True,
+                )
+                | models.Q(
+                    planned_price_cents__isnull=False,
+                    planned_end__isnull=False,
+                    planned_notes__isnull=False,
+                ),
+                name="job_plan_stamp_is_whole",
             ),
         ]
         indexes = [

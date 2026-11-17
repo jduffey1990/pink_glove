@@ -9,8 +9,8 @@ thrown away nor re-created at its old slot. These tests drive that through the
 API a dispatcher actually uses, PATCH then the plan's own endpoints, rather
 than by saving the model.
 
-They also write down what does **not** pin a visit, because the rule reads
-`scheduled_start` and nothing else.
+What a hand edit that leaves the start alone does (a price, a longer slot, a
+note) is in `test_plan_stamps.py`.
 """
 
 import datetime as dt
@@ -311,61 +311,6 @@ class TestAMovedPlanVisit:
 
     def test_a_cleaner_cannot_regenerate(self, cleaner_client, plan):
         assert cleaner_client.post(plan_url(plan, "regenerate")).status_code == 403
-
-
-@pytest.mark.django_db
-class TestWhatDoesNotPinAPlanVisit:
-    """
-    ADR-020's accepted cost, pinned down so it is a known thing rather than a
-    surprise. The rule reads `scheduled_start == plan_occurrence`, so a hand
-    edit that leaves the start alone is lost when the plan is next edited,
-    exactly as a hand-added assignee is. The ADR's own remedy applies: move
-    the visit by a minute.
-
-    If "untouched" is ever widened, these are the tests that change.
-    """
-
-    def test_a_longer_slot_at_the_same_start_is_rebuilt(self, dispatcher_client, plan, future):
-        visit = future[0]
-        dispatcher_client.patch(
-            detail(visit),
-            {"scheduled_end": (visit.scheduled_end + dt.timedelta(hours=1)).isoformat()},
-            format="json",
-        )
-
-        body = dispatcher_client.post(plan_url(plan, "regenerate")).json()
-
-        rebuilt = Job.objects.get(plan=plan, plan_occurrence=visit.plan_occurrence)
-        assert body["kept"] == 0
-        assert rebuilt.pk != visit.pk
-        assert rebuilt.duration_minutes == 120
-
-    def test_a_note_and_a_price_set_by_hand_are_rebuilt(self, dispatcher_client, plan, future):
-        visit = future[0]
-        dispatcher_client.patch(
-            detail(visit), {"notes": "Bring the ladder.", "price_cents": 99900}, format="json"
-        )
-
-        dispatcher_client.post(plan_url(plan, "regenerate"))
-
-        rebuilt = Job.objects.get(plan=plan, plan_occurrence=visit.plan_occurrence)
-        assert rebuilt.pk != visit.pk
-        assert rebuilt.notes == ""
-        assert rebuilt.price_cents == 15000
-
-    def test_moving_it_by_a_minute_keeps_all_of_it(self, dispatcher_client, plan, future):
-        visit = future[0]
-        dispatcher_client.patch(
-            detail(visit), {"notes": "Bring the ladder.", "price_cents": 99900}, format="json"
-        )
-        move(dispatcher_client, visit, by=dt.timedelta(minutes=1))
-
-        dispatcher_client.post(plan_url(plan, "regenerate"))
-
-        kept = Job.objects.get(plan=plan, plan_occurrence=visit.plan_occurrence)
-        assert kept.pk == visit.pk
-        assert kept.notes == "Bring the ladder."
-        assert kept.price_cents == 99900
 
 
 @pytest.mark.django_db

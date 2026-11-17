@@ -181,6 +181,12 @@ def materialize_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> in
             status=JobStatus.SCHEDULED,
             price_cents=price_cents,
             notes=plan.notes,
+            # The stamp: what this run wrote, kept beside the live values so a
+            # later plan edit can tell whether a person has changed them
+            # (ADR-032). This is the only place it is ever written.
+            planned_price_cents=price_cents,
+            planned_end=occurrence + duration,
+            planned_notes=plan.notes,
         )
         for occurrence in missing
     ]
@@ -221,7 +227,18 @@ def _untouched_future_jobs(plan: RecurringPlan, *, now: dt.datetime | None = Non
 
     "Untouched" is derived from state that is already there rather than from a
     flag someone has to remember to set (ADR-020): still SCHEDULED, still
-    sitting at the instant the plan put it, and never worked.
+    sitting at the instant the plan put it, never worked, and still saying
+    what the plan wrote for its price, its end and its note (ADR-032).
+
+    Those last three are compared with the visit's own stamp, not with the
+    plan or a fresh quote. A service's price, a location's square footage and
+    a plan's note all change without regenerating anything, so the visits of
+    one plan legitimately carry different prices and notes, and each is
+    exactly what the plan wrote on the day it wrote it.
+
+    A NULL stamp never equals anything in SQL, so a plan visit without one
+    falls out of this set and is kept. That is the safe direction: not
+    knowing what the plan wrote is not evidence that nobody changed it.
     """
     now = now or timezone.now()
 
@@ -232,7 +249,12 @@ def _untouched_future_jobs(plan: RecurringPlan, *, now: dt.datetime | None = Non
             status=JobStatus.SCHEDULED,
             plan_occurrence__isnull=False,
         )
-        .filter(scheduled_start=models.F("plan_occurrence"))
+        .filter(
+            scheduled_start=models.F("plan_occurrence"),
+            price_cents=models.F("planned_price_cents"),
+            scheduled_end=models.F("planned_end"),
+            notes=models.F("planned_notes"),
+        )
         .exclude(time_entries__isnull=False)
     )
 

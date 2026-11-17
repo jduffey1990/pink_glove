@@ -71,6 +71,19 @@ class TestSeededSchedule:
         for organization in Organization.objects.all():
             assert Job.objects.filter(organization=organization).exists()
 
+    def test_every_plan_visit_is_stamped_with_what_the_plan_wrote(self, seeded):
+        """
+        The seed works its past by hand after materializing. If it ever built
+        plan visits itself, they would have no stamp, and an unstamped visit
+        is one no plan edit will rebuild (ADR-032).
+        """
+        plan_visits = Job.all_objects.filter(plan_occurrence__isnull=False)
+
+        assert plan_visits.exists()
+        assert not plan_visits.filter(planned_end__isnull=True).exists()
+        assert not plan_visits.filter(planned_price_cents__isnull=True).exists()
+        assert not plan_visits.filter(planned_notes__isnull=True).exists()
+
     def test_the_cleaner_is_on_the_weekly_plans_jobs(self, seeded):
         for organization in Organization.objects.all():
             cleaner = CustomUser.objects.get(email=f"cleaner@{organization.slug}.test")

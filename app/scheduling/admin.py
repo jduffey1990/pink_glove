@@ -67,9 +67,15 @@ class JobAdmin(admin.ModelAdmin):
     raw_id_fields = ("organization", "customer", "location", "service", "plan")
     # plan_occurrence is the materializer's idempotency key. Editing it by hand
     # would let the next daily run re-create a duplicate of this visit.
+    # The three stamps are what the plan wrote (ADR-032). Editing one by hand
+    # would make a hand-set price look like the plan's, and the next plan
+    # edit would throw it away.
     readonly_fields = (
         "id",
         "plan_occurrence",
+        "planned_price_cents",
+        "planned_end",
+        "planned_notes",
         "status_changed_at",
         "created_at",
         "updated_at",
