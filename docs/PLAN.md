@@ -34,7 +34,7 @@ DATABASE_URL=postgres://pink_glove:pink_glove@localhost:5432/pink_glove \
 REDIS_URL=redis://localhost:6379/0 .venv/bin/pytest -q
 ```
 
-Expect **2185 passing** in `app/`, and **146** in `ui/` (`cd ui && npm test`).
+Expect **2185 passing** in `app/`, and **427** in `ui/` (`cd ui && npm test`).
 Read `CLAUDE.md` first — it has the invariants and the
 testing gotchas that will otherwise cost you an hour each.
 
@@ -2956,7 +2956,7 @@ Before the rebase, against `7843a71`, the same work read 1049 → 1265 and 131 �
 ## Team management as built
 
 Branch `feat/team-management`, on `main` at cbe39bd (after Phase 4c, the customer import, visit booking and reports).
-Backend 1820 → 2185 (+365), frontend +63 (146 → 209 when counted on 6ef6f78, before the rebase).
+Backend 1820 → 2185 (+365), frontend 367 → 427 (+60, 24 spec files → 28).
 Decision record: ADR-034.
 The problem was that `MembershipViewSet` was read-only, so every new cleaner and every lost password meant the developer in the Django admin.
 
@@ -3021,7 +3021,7 @@ The `/no-access` redirect is covered through the session store's `hasNoOrganizat
 Reviewed by the author, by mutation (each rule broken in turn to see its tests fail), and by one independent `/security-review` pass over the branch diff.
 
 **1. Test coverage.**
-Backend 1820 → 2185 (+365), frontend +63 (146 → 209 when counted on 6ef6f78).
+Backend 1820 → 2185 (+365), frontend 367 → 427 (+60).
 Every new endpoint, service, model method and the Celery task has direct tests.
 Each permission rule is tested from every role on both sides of the line (one table of who may manage whom drives invite, role change, deactivate, reactivate and resend), each tenant-scoped endpoint has a cross-tenant test for every verb, and mass assignment is tested on the invite body and the role PATCH.
 Token replay and cross-purpose use are tested in all six directions.
