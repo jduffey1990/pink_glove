@@ -251,6 +251,13 @@ class JobSerializer(TenantModelSerializer):
         if user is None or not user.is_authenticated:
             return False, None
 
+        # A deactivated organization is read-only: `IsOrgMember` refuses every
+        # write from anyone but a superuser (ADR-028). So nothing is offered
+        # there either, or the page would draw buttons that can only 403.
+        organization = getattr(request, "organization", None)
+        if organization is not None and not organization.is_active and not user.is_superuser:
+            return False, None
+
         role = getattr(getattr(request, "membership", None), "role", None)
         return user.is_superuser or role in DISPATCHER_ROLES, role
 
