@@ -24,9 +24,16 @@ class VisitReminder(TenantModel):
     customer may already have the email. A send that fails with an exception
     removes its row, so the next hourly run tries again.
 
-    Keyed on `scheduled_start`, not on the visit alone: a visit moved after
-    its reminder went out is at a time the customer has not been told about,
-    and earns a reminder of its own.
+    A visit is due again whenever its current start differs from the start
+    in its latest row (highest `sequence`): a visit moved after its reminder
+    is at a time the customer has not been told about, and so is one moved
+    back to an earlier time after a second reminder. The latest reminder is
+    the one that counts.
+
+    `sequence` numbers a visit's reminders 1, 2, 3... and is unique per
+    visit among live rows: two runs that both saw reminder n insert n + 1,
+    and only one succeeds. That keeps the claim-before-send lock while
+    letting the same start be reminded again after a move away and back.
     """
 
     job = models.ForeignKey("scheduling.Job", on_delete=models.CASCADE, related_name="+")
@@ -36,6 +43,8 @@ class VisitReminder(TenantModel):
     #: Where it went. Copied, because the customer's address can change after.
     recipient = models.EmailField()
     sent_at = models.DateTimeField(null=True, blank=True)
+    #: 1 for a visit's first reminder, one more for each after it.
+    sequence = models.PositiveIntegerField()
 
     class Meta(TenantModel.Meta):
         verbose_name = "Visit reminder"
@@ -43,9 +52,9 @@ class VisitReminder(TenantModel):
         ordering = ("-created_at",)
         constraints = [
             models.UniqueConstraint(
-                fields=["job", "scheduled_start"],
+                fields=["job", "sequence"],
                 condition=models.Q(deleted_at__isnull=True),
-                name="one_reminder_per_visit_time",
+                name="one_reminder_per_visit_sequence",
             ),
         ]
 

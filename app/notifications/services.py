@@ -19,7 +19,7 @@ import logging
 from django.conf import settings
 from django.core.mail import EmailMessage
 from django.db import IntegrityError, transaction
-from django.db.models import Exists, OuterRef, QuerySet
+from django.db.models import F, OuterRef, Q, QuerySet, Subquery
 from django.template.loader import render_to_string
 
 from customers.enums import CustomerStatus
@@ -59,8 +59,8 @@ def reminder_window(
 
 def due_reminders(organization: Organization, now: dt.datetime) -> QuerySet[Job]:
     """
-    The visits in `organization` that should be reminded at `now` and have
-    not been, at their current time.
+    The visits in `organization` that should be reminded at `now` and whose
+    latest reminder, if any, was for a different start.
 
     Every condition is here and nowhere else, so the tests can walk each
     one. The joins name `deleted_at` themselves: the default manager hides a
@@ -71,8 +71,10 @@ def due_reminders(organization: Organization, now: dt.datetime) -> QuerySet[Job]
 
     start, end = reminder_window(organization, now)
 
-    already_sent = VisitReminder.objects.filter(
-        job=OuterRef("pk"), scheduled_start=OuterRef("scheduled_start")
+    latest_reminded_start = Subquery(
+        VisitReminder.objects.filter(job=OuterRef("pk"))
+        .order_by("-sequence")
+        .values("scheduled_start")[:1]
     )
 
     return (
@@ -88,7 +90,15 @@ def due_reminders(organization: Organization, now: dt.datetime) -> QuerySet[Job]
             location__deleted_at__isnull=True,
         )
         .exclude(customer__email="")
-        .exclude(Exists(already_sent))
+        .annotate(reminded_start=latest_reminded_start)
+        # Spelled out rather than `~Q(reminded_start=...)`: negating an
+        # equality with a NULL side is NULL in SQL, which would drop every
+        # visit never reminded at all.
+        .filter(
+            Q(reminded_start__isnull=True)
+            | Q(reminded_start__lt=F("scheduled_start"))
+            | Q(reminded_start__gt=F("scheduled_start"))
+        )
         .select_related("organization", "customer", "location", "service")
         .order_by("scheduled_start")
     )
@@ -124,12 +134,16 @@ def reminder_email_context(job: Job) -> dict:
 
 def _claim(job: Job) -> VisitReminder | None:
     """
-    Record the reminder before sending it. None if another run already has.
+    Record the reminder before sending it. None if it is not this call's to send.
 
-    The insert is the lock: two runs racing for one visit both reach here,
-    and Postgres lets one insert through and makes the other wait, then
-    raise on the unique constraint.
+    Not ours when the latest reminder is already for this start, or when
+    another run inserts the next `sequence` first: two runs racing for one
+    visit both reach the insert, and Postgres lets one through and makes the
+    other wait, then raise on the unique constraint.
     """
+    latest = VisitReminder.objects.filter(job=job).order_by("-sequence").first()
+    if latest is not None and latest.scheduled_start == job.scheduled_start:
+        return None
     try:
         with transaction.atomic():
             return VisitReminder.objects.create(
@@ -137,6 +151,7 @@ def _claim(job: Job) -> VisitReminder | None:
                 job=job,
                 scheduled_start=job.scheduled_start,
                 recipient=job.customer.email,
+                sequence=(latest.sequence if latest else 0) + 1,
             )
     except IntegrityError:
         return None

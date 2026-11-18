@@ -70,6 +70,7 @@ class TestOnce:
             job=visit,
             scheduled_start=visit.scheduled_start,
             recipient=visit.customer.email,
+            sequence=1,
         )
 
         assert send_due_reminders(org, NOW) == 0
@@ -122,21 +123,57 @@ class TestRescheduled:
         assert "4:00 PM" in mail.outbox[1].subject
         assert VisitReminder.objects.count() == 2
 
-    def test_moved_back_to_a_time_already_reminded_it_is_not_sent_again(self, org, make_visit):
-        """An accepted gap (ADR-035): the customer heard both times and is not told which."""
+    def test_moved_back_to_a_time_already_reminded_it_is_reminded_again(self, org, make_visit):
+        """The latest reminder said 4:00 PM; the customer must hear 2:00 PM stands again."""
         visit = make_visit(org, TOMORROW_2PM)
         send_due_reminders(org, NOW)
-        visit.scheduled_start += dt.timedelta(hours=2)
-        visit.scheduled_end += dt.timedelta(hours=2)
-        visit.save()
+        move(visit, hours=2)
         send_due_reminders(org, NOW)
 
-        visit.scheduled_start -= dt.timedelta(hours=2)
-        visit.scheduled_end -= dt.timedelta(hours=2)
-        visit.save()
+        move(visit, hours=-2)
 
+        assert send_due_reminders(org, NOW) == 1
+        assert len(mail.outbox) == 3
+        assert "2:00 PM" in mail.outbox[2].subject
+        assert list(
+            VisitReminder.objects.order_by("sequence").values_list("sequence", "scheduled_start")
+        ) == [
+            (1, TOMORROW_2PM),
+            (2, TOMORROW_2PM + dt.timedelta(hours=2)),
+            (3, TOMORROW_2PM),
+        ]
         assert send_due_reminders(org, NOW) == 0
+
+    def test_moved_twice_in_a_minute_it_sends_twice(self, org, make_visit):
+        """The accepted cost (ADR-035): each move is a time worth telling."""
+        visit = make_visit(org, TOMORROW_2PM)
+        send_due_reminders(org, NOW)
+        move(visit, hours=1)
+        send_due_reminders(org, NOW)
+        move(visit, hours=1)
+        send_due_reminders(org, NOW + dt.timedelta(minutes=1))
+
+        assert [m.subject.rsplit(" at ", 1)[1] for m in mail.outbox] == [
+            "2:00 PM",
+            "3:00 PM",
+            "4:00 PM",
+        ]
+
+    def test_a_run_that_lost_the_race_for_the_next_reminder_sends_nothing(self, org, make_visit):
+        visit = make_visit(org, TOMORROW_2PM)
+        send_due_reminders(org, NOW)
+        move(visit, hours=1)
+        selected_by_the_loser = list(due_reminders(org, NOW))
+
+        assert send_due_reminders(org, NOW) == 1
+        assert send_reminder(selected_by_the_loser[0], NOW) is False
         assert len(mail.outbox) == 2
+
+
+def move(visit, *, hours):
+    visit.scheduled_start += dt.timedelta(hours=hours)
+    visit.scheduled_end += dt.timedelta(hours=hours)
+    visit.save()
 
 
 @pytest.mark.django_db

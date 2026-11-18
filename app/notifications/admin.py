@@ -10,7 +10,15 @@ class VisitReminderAdmin(admin.ModelAdmin):
     Deleting a row here would let the task send that reminder again.
     """
 
-    list_display = ("job", "organization", "scheduled_start", "recipient", "sent_at", "created_at")
+    list_display = (
+        "job",
+        "organization",
+        "sequence",
+        "scheduled_start",
+        "recipient",
+        "sent_at",
+        "created_at",
+    )
     list_filter = ("organization",)
     list_select_related = ("job__customer", "job__service", "organization")
     search_fields = ("recipient",)
@@ -18,6 +26,7 @@ class VisitReminderAdmin(admin.ModelAdmin):
         "id",
         "organization",
         "job",
+        "sequence",
         "scheduled_start",
         "recipient",
         "sent_at",

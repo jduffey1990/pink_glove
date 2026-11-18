@@ -137,6 +137,7 @@ class TestWhatIsSkipped:
             job=visit,
             scheduled_start=visit.scheduled_start,
             recipient=visit.customer.email,
+            sequence=1,
         )
 
         assert due(org) == []
@@ -152,6 +153,7 @@ class TestRescheduled:
             job=visit,
             scheduled_start=visit.scheduled_start,
             recipient=visit.customer.email,
+            sequence=1,
         )
 
         visit.scheduled_start += dt.timedelta(hours=1)
@@ -159,6 +161,25 @@ class TestRescheduled:
         visit.save()
 
         assert due(org) == [visit]
+
+    @pytest.mark.parametrize(
+        ("current", "is_due"), [(TOMORROW_2PM, True), (TOMORROW_2PM + dt.timedelta(hours=2), False)]
+    )
+    def test_only_the_latest_reminder_counts(self, org, make_visit, current, is_due):
+        """Reminded at 2:00, then at 4:00: back at 2:00 is due, still at 4:00 is not."""
+        visit = make_visit(org, current)
+        for sequence, start in enumerate(
+            [TOMORROW_2PM, TOMORROW_2PM + dt.timedelta(hours=2)], start=1
+        ):
+            VisitReminder.objects.create(
+                organization=org,
+                job=visit,
+                scheduled_start=start,
+                recipient=visit.customer.email,
+                sequence=sequence,
+            )
+
+        assert due(org) == ([visit] if is_due else [])
 
     def test_a_reminder_for_a_withdrawn_claim_does_not_count(self, org, make_visit):
         """A soft-deleted ledger row is not a reminder anyone received."""
@@ -168,6 +189,7 @@ class TestRescheduled:
             job=visit,
             scheduled_start=visit.scheduled_start,
             recipient=visit.customer.email,
+            sequence=1,
         ).delete()
 
         assert due(org) == [visit]
