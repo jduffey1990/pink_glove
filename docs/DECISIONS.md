@@ -1757,3 +1757,55 @@ That attribute is SendGrid's; another provider would need its own equivalent, an
 The SPA paths are `/pay`, `/accept-invite` and `/reset-password`, with the old `/:token` forms as redirect records beside them in `ui/src/router/index.ts`; `billing/connect.py` builds `pay_url` and `stripe_return_url`, both in the fragment form through `token_link`; and the old `/pay/:token` route must outlive the longest Checkout session opened before the deploy, which the 120 days already do.
 The fragment key `token` is spelled in `app/base/links.py` and `ui/src/lib/linkToken.ts`.
 `App.vue` keys the routed page by the link token, so any future page that reads a token from the hash starts over when the token changes.
+
+---
+
+## ADR-038: Every Referer the site causes carries only its origin
+
+**Decided (2026-11-18).**
+`SECURE_REFERRER_POLICY` is `strict-origin`, set once in `settings/base.py`; before this it was `same-origin`, set only in `settings/production.py`.
+`SecurityMiddleware` puts it on every response it sees: the SPA's `index.html` from the catch-all, every API response, and the files whitenoise answers, because it sits above whitenoise in `MIDDLEWARE`.
+Nothing else sets the header: `ui/index.html` has no `<meta name="referrer">`, and neither gunicorn, whitenoise nor the catch-all view writes one.
+
+**Why.**
+Emailed links carry a token in the page's path (`/pay/<token>`, `/accept-invite/<token>`, `/reset-password/<token>`, the magic link), and paths that old emails point at will be served for as long as those emails exist, even once new links carry the token in the fragment.
+Under `same-origin` the page's full address went out as the `Referer` of every stylesheet, script, font and API call it made, and gunicorn's access log writes the `Referer` (`%(f)s`).
+In the rehearsal, one first load of an old-form pay link wrote the token into 27 of the 29 access log lines that followed it; under `strict-origin` it wrote it into none of them, and every one read `https://localhost/`.
+The document's policy is what governs the `Referer` of everything the page fetches, which is why the header on `index.html` is the one that matters; a stylesheet's own policy governs what the stylesheet fetches, which is why the assets carry it too.
+The same policy also keeps any path from reaching a third party: the navigation to Stripe Checkout or Connect onboarding, and anything a page loads from another origin, carries the origin only.
+
+**CSRF still holds.**
+Over https, `CsrfViewMiddleware.process_view` checks `Origin` when the request has one and only otherwise falls back to `_check_referer` (Django 5.2.17, `django/middleware/csrf.py` lines 436 to 462 for the branch, 297 to 340 for the check).
+That check compares the `Referer`'s scheme and host with the trusted origins or the request's own host; it never reads the path, so `https://host/` passes exactly as the full address did.
+Browsers send `Origin` on every POST, PUT, PATCH and DELETE, same-origin included, so the fallback is for clients that leave `Origin` out, and those still send a usable `Referer`.
+`app/tests/test_referrer_policy.py` signs a POST over `secure=True` with no `Origin` and an origin-only `Referer` (passes), a foreign one (403) and none (403), and the rehearsal did the same over TLS with curl.
+
+**Here, not in production.py.**
+One value for every environment, so the suite asserts what a deployment sends and the API answers the same on a laptop as on Fly.
+A production-only setting is how the old value stayed invisible to every test.
+
+**Rejected -- `no-referrer`.**
+It sends nothing, which is tidier, but then a client over https that omits `Origin` has neither header and Django refuses its POST with "Referer checking failed - no Referer".
+Browsers would be unaffected today; any other client, or a browser that ever stops sending `Origin` in some case, would fail CSRF for a reason that looks like nothing to do with privacy.
+The origin is not a secret, so withholding it buys nothing.
+
+**Rejected -- `strict-origin-when-cross-origin` (the browser default).**
+It trims the `Referer` to the origin only for cross-origin requests and sends the full address same-origin, which is every request a page makes to us.
+That is exactly the access log this exists to clean.
+
+**Rejected -- `same-origin` (the status quo).**
+The same problem as above for our own log; it only differs by sending nothing cross-origin.
+
+**Rejected -- dropping `%(f)s` from gunicorn's access log format.**
+It would clean our own log and nothing else: the full address would still reach a CDN, a proxy log, or any third party a page talks to, and Sentry's request data would still carry it (redacted, ADR-029, but only by its shape).
+The `Referer` is also useful in the log for every request that carries no token; with this policy it stays, minus the part that was ever sensitive.
+
+**Accepted costs.**
+The token still appears in the request line of the document itself and of any API call that puts it in a path (`/api/billing/pay/<token>/`); this decision cannot touch that, and moving the token into the fragment is what does.
+Analytics on which page a request came from are gone, and none are kept today.
+An https page linking to an http address sends no `Referer` at all under `strict-origin`; nothing here links to http.
+
+**Consequences.**
+In development the page is served by the Vite dev server, which sends no `Referrer-Policy`, so the browser's default governs the dev page's own requests; the API's responses and the suite carry the deployed value.
+A change of policy is a change to `settings/base.py` and to the tests that name the value (`app/tests/test_referrer_policy.py`, `app/tests/test_spa.py`, `app/tests/test_settings_production.py`).
+`SecurityMiddleware` must stay above whitenoise in `MIDDLEWARE` for the assets to carry the header; `app/tests/test_spa.py` asserts the order, as it already did for the clickjacking header.
