@@ -45,6 +45,16 @@ class TestSpaIndex:
 
         assert response["Cache-Control"] == "no-cache"
 
+    def test_the_document_sends_only_its_origin_as_referer(self, api_client, dist):
+        """
+        The document's policy governs the Referer of every asset and API call
+        the page makes, so a token in this page's path stays out of them
+        (ADR-038).
+        """
+        response = api_client.get("/pay/a-token-in-the-path")
+
+        assert response["Referrer-Policy"] == "strict-origin"
+
     def test_head_is_answered_for_monitors(self, api_client, dist):
         response = api_client.head("/schedule")
 
@@ -227,6 +237,25 @@ class TestImmutableAssets:
         assert base_names.index("XFrameOptionsMiddleware") < base_names.index(
             "WhiteNoiseMiddleware"
         )
+
+    def test_a_served_file_carries_the_referrer_policy(self, dist, settings, tmp_path):
+        """A stylesheet's own policy governs what it fetches (fonts, images),
+        and SecurityMiddleware sits above whitenoise so its response hook runs
+        on the files whitenoise answers (ADR-038)."""
+        from django.middleware.security import SecurityMiddleware
+
+        from app.middleware.static_files import WhiteNoiseMiddleware
+
+        (tmp_path / "static-root").mkdir(exist_ok=True)
+        settings.STATIC_ROOT = str(tmp_path / "static-root")
+        settings.WHITENOISE_ROOT = str(dist)
+        chain = SecurityMiddleware(WhiteNoiseMiddleware(lambda request: None))
+        base_names = [m.rsplit(".", 1)[-1] for m in _base_middleware()]
+
+        response = chain(_request("/assets/index-DGeD55ZR.js"))
+
+        assert response["Referrer-Policy"] == "strict-origin"
+        assert base_names.index("SecurityMiddleware") < base_names.index("WhiteNoiseMiddleware")
 
 
 def _request(path):

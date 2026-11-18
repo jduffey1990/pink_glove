@@ -301,6 +301,17 @@ SESSION_COOKIE_HTTPONLY = True
 # The SPA reads the CSRF token from its cookie, so this one cannot be HttpOnly.
 CSRF_COOKIE_HTTPONLY = False
 
+# Every Referer this site causes carries the origin and nothing more, to us
+# and to anyone else (ADR-038). An emailed token in a page's path would
+# otherwise be repeated in the Referer of every asset and API call that page
+# makes -- into our own access log -- and a path would reach Stripe Checkout.
+# Not "no-referrer": over https CsrfViewMiddleware falls back to the Referer
+# when a client sends no Origin, and it only compares scheme and host, which
+# an origin still carries. Here, not in production.py, so the dev server and
+# the suite send what a deployment sends. SecurityMiddleware sits above
+# whitenoise, so the files whitenoise answers carry it as well.
+SECURE_REFERRER_POLICY = "strict-origin"
+
 SESSION_COOKIE_AGE = config("SESSION_COOKIE_AGE", default=60 * 60 * 12, cast=int)
 
 # --------------------------------------------------------------------------

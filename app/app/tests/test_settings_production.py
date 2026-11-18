@@ -389,6 +389,12 @@ class TestHsts:
         assert production.SECURE_HSTS_PRELOAD is False
 
 
+class TestReferrerPolicy:
+    def test_production_sends_what_every_environment_sends(self, load):
+        """Set once in base.py (ADR-038); production must not narrow or widen it."""
+        assert load().SECURE_REFERRER_POLICY == "strict-origin"
+
+
 class TestProxies:
     def test_num_proxies_defaults_to_the_one_fly_proxy(self, load):
         production = load(unset=("NUM_PROXIES",))
