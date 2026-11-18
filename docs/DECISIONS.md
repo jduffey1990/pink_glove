@@ -1598,7 +1598,7 @@ They make a task run again; only something stored makes the second run a no-op.
 - the visit's start differs from the start in its latest reminder.
 
 A lead is reminded because a lead with a booked visit is in practice a customer.
-Promoting a lead to active when a visit is booked is approved as a separate, later branch and is not built here; when it lands, this rule needs no change.
+Promoting a lead to active when a visit is booked landed later as ADR-037, and this rule needed no change.
 
 **The customer's contact preference is not consulted, and "Text message" cannot be chosen.**
 Email is the only channel there is, so every customer with an address gets the reminder whatever their preference says.
