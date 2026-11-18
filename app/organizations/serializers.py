@@ -173,6 +173,7 @@ class OrganizationSerializer(serializers.ModelSerializer):
             "invoice_prefix",
             "invoice_terms_days",
             "invoice_footer",
+            "visit_reminders_enabled",
             "stripe",
             "billing",
             "is_active",

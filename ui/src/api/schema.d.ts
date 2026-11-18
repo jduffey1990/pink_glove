@@ -2736,6 +2736,8 @@ export interface components {
             invoice_terms_days?: number;
             /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
             invoice_footer?: string;
+            /** @description Email customers a reminder the day before each scheduled visit. */
+            visit_reminders_enabled?: boolean;
             readonly stripe: components["schemas"]["StripeStatus"];
             readonly billing: components["schemas"]["PlatformBilling"];
             readonly is_active: boolean;
@@ -2787,6 +2789,8 @@ export interface components {
             invoice_terms_days?: number;
             /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
             invoice_footer?: string;
+            /** @description Email customers a reminder the day before each scheduled visit. */
+            visit_reminders_enabled?: boolean;
         };
         /**
          * @description The organization as the shell sees it: enough to name it, reckon dates
@@ -3189,6 +3193,8 @@ export interface components {
             invoice_terms_days?: number;
             /** @description Printed at the foot of every invoice, e.g. "Make checks payable to ...". */
             invoice_footer?: string;
+            /** @description Email customers a reminder the day before each scheduled visit. */
+            visit_reminders_enabled?: boolean;
         };
         /**
          * @description Base serializer for tenant-owned models.

@@ -142,6 +142,17 @@ class Organization(Base):
         help_text='Printed at the foot of every invoice, e.g. "Make checks payable to ...".',
     )
 
+    # --- Customer notifications (ADR-035) ----------------------------------
+
+    #: Email each customer a reminder the day before a scheduled visit. Off
+    #: until an owner or admin turns it on: a tenant who already phones their
+    #: customers must not find them getting a second, unannounced message.
+    #: Read by `notifications.services`, which owns what a reminder is.
+    visit_reminders_enabled = models.BooleanField(
+        default=False,
+        help_text="Email customers a reminder the day before each scheduled visit.",
+    )
+
     # --- Platform subscription (Phase 4c, ADR-024, ADR-028) -----------------
     # The tenant paying for pink_glove, as distinct from the tenant's own
     # customers paying invoices. The Stripe fields are written only by

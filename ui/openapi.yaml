@@ -6144,6 +6144,9 @@ components:
           type: string
           description: Printed at the foot of every invoice, e.g. "Make checks payable
             to ...".
+        visit_reminders_enabled:
+          type: boolean
+          description: Email customers a reminder the day before each scheduled visit.
         stripe:
           allOf:
           - $ref: '#/components/schemas/StripeStatus'
@@ -6265,6 +6268,9 @@ components:
           type: string
           description: Printed at the foot of every invoice, e.g. "Make checks payable
             to ...".
+        visit_reminders_enabled:
+          type: boolean
+          description: Email customers a reminder the day before each scheduled visit.
       required:
       - name
       - timezone
@@ -6947,6 +6953,9 @@ components:
           type: string
           description: Printed at the foot of every invoice, e.g. "Make checks payable
             to ...".
+        visit_reminders_enabled:
+          type: boolean
+          description: Email customers a reminder the day before each scheduled visit.
     PatchedRecurringPlanRequest:
       type: object
       description: |-
