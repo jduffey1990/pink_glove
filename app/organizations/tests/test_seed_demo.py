@@ -172,13 +172,30 @@ class TestSeedGuards:
             call_command("seed_demo", verbosity=0)
 
     def test_force_makes_it_idempotent_rather_than_duplicating(self, seeded, settings):
+        """
+        Invoices and payments too. A second round drawn from the visits still
+        unbilled used to add two more issued invoices per tenant on every
+        `--force` run, which doubled the demo's money.
+        """
+        from billing.models import Invoice, Payment
+
         settings.DEBUG = True
-        before = (Organization.objects.count(), Job.objects.count(), TimeEntry.objects.count())
+
+        def counts():
+            return (
+                Organization.objects.count(),
+                Customer.objects.count(),
+                Job.objects.count(),
+                TimeEntry.objects.count(),
+                Invoice.all_objects.count(),
+                Payment.all_objects.count(),
+            )
+
+        before = counts()
 
         call_command("seed_demo", "--force", verbosity=0)
 
-        after = (Organization.objects.count(), Job.objects.count(), TimeEntry.objects.count())
-        assert after == before
+        assert counts() == before
 
     def test_force_moves_an_older_seeds_booked_customers_out_of_lead(self, seeded, settings):
         """
@@ -261,12 +278,16 @@ class TestSeededBilling:
         from billing.enums import InvoiceStatus
         from billing.models import Invoice
 
+        counts = {}
         for organization in Organization.objects.all():
             invoices = Invoice.objects.filter(organization=organization)
             statuses = set(invoices.values_list("status", flat=True))
 
-            assert invoices.count() == 4
+            counts[organization.name] = invoices.count()
             assert {InvoiceStatus.DRAFT, InvoiceStatus.ISSUED} <= statuses
+
+        # Different on purpose: Sparkle issues its no-access fee, Rival drafts it.
+        assert counts == {"Sparkle Clean": 5, "Rival Cleaners": 4}
 
     def test_numbers_use_the_organizations_own_prefix_and_sequence(self, seeded):
         from billing.models import Invoice
@@ -303,6 +324,98 @@ class TestSeededBilling:
         assert tipped.exists()
         for payment in tipped:
             assert payment.amount_cents < payment.invoice.total_cents
+
+    def test_every_invoice_is_dated_after_the_work_it_bills(self, seeded):
+        """
+        Issued on or after its last visit, due after it was issued, paid
+        between issue and today. The seed once issued its overdue invoice sixty
+        days back for a visit three weeks old, so the pay page asked for money
+        a month before the clean it was for.
+        """
+        from billing.enums import InvoiceStatus
+        from billing.models import Invoice, Payment
+
+        issued = Invoice.objects.filter(status=InvoiceStatus.ISSUED).select_related("organization")
+        assert issued.exists()
+
+        for invoice in issued:
+            organization = invoice.organization
+            visits = [
+                line.job.scheduled_start.astimezone(organization.tz).date()
+                for line in invoice.lines.select_related("job")
+                if line.job_id
+            ]
+            assert visits, invoice.number
+            assert invoice.issued_on >= max(visits), invoice.number
+            assert invoice.due_on > invoice.issued_on, invoice.number
+            assert invoice.issued_on <= organization.today(), invoice.number
+
+        for payment in Payment.objects.select_related("invoice__organization"):
+            invoice = payment.invoice
+            assert invoice.issued_on <= payment.received_on <= invoice.organization.today()
+
+    def test_one_invoice_per_tenant_is_overdue_on_its_dates(self, seeded):
+        """
+        Overdue because its due date is behind today, and its due date is
+        behind today because its visits are old, not because the issue date
+        was moved on its own. Rival's thirty-day terms are the hard case.
+        """
+        from billing import services as billing
+        from billing.enums import InvoiceStatus
+        from billing.models import Invoice
+
+        for organization in Organization.objects.all():
+            overdue = [
+                invoice
+                for invoice in Invoice.objects.filter(
+                    organization=organization, status=InvoiceStatus.ISSUED
+                )
+                if billing.is_overdue(invoice)
+            ]
+            assert overdue, organization.name
+            for invoice in overdue:
+                assert invoice.due_on < organization.today()
+
+    def test_the_taxed_tenant_charges_tax_and_the_other_does_not(self, seeded):
+        """The move-out clean is the one taxable line; only Sparkle has a rate."""
+        from billing.enums import InvoiceStatus
+        from billing.models import Invoice
+
+        issued = Invoice.objects.filter(status=InvoiceStatus.ISSUED)
+
+        assert issued.filter(organization__name="Sparkle Clean", tax_cents__gt=0).exists()
+        assert issued.filter(organization__name="Rival Cleaners").exists()
+        assert not issued.filter(organization__name="Rival Cleaners", tax_cents__gt=0).exists()
+
+    def test_each_no_access_fee_follows_its_own_tenants_rule(self, seeded):
+        """Sparkle's is a flat $25; Rival's is half the visit it replaced."""
+        from billing.enums import LineKind
+        from billing.models import InvoiceLine
+
+        sparkle = InvoiceLine.objects.get(
+            organization__name="Sparkle Clean", kind=LineKind.NO_ACCESS_FEE
+        )
+        rival = InvoiceLine.objects.select_related("job").get(
+            organization__name="Rival Cleaners", kind=LineKind.NO_ACCESS_FEE
+        )
+
+        assert sparkle.amount_cents == 2500
+        assert rival.amount_cents == rival.job.price_cents // 2
+        assert rival.amount_cents != sparkle.amount_cents
+
+    def test_some_invoices_bill_more_than_one_visit(self, seeded):
+        """One line per invoice never shows how lines add up."""
+        from django.db.models import Count
+
+        from billing.models import Invoice
+
+        for organization in Organization.objects.all():
+            multi = (
+                Invoice.objects.filter(organization=organization)
+                .annotate(n=Count("lines"))
+                .filter(n__gt=1)
+            )
+            assert multi.exists(), organization.name
 
 
 @pytest.mark.django_db
@@ -382,15 +495,35 @@ class TestSeededReports:
             assert reports["collections"]["totals"]["tip_cents"] > 0
 
     def test_each_timesheet_names_its_own_cleaner_and_nobody_elses(self, seeded):
-        """
-        The staff are what tells the two seeded reports apart. The money does
-        not: every seeded invoice is one untaxed Standard Clean, so both
-        tenants are owed the same amount whatever their tax settings say.
-        """
         for organization in Organization.objects.all():
             names = [person["name"] for person in self._reports(organization)["timesheet"]["staff"]]
 
             assert names == [f"Cleaner {organization.name.split()[0]}"]
+
+    def test_the_two_tenants_disagree_on_every_total(self, seeded):
+        """
+        Owed, received and hours worked all differ between the tenants, so a
+        report that read the other tenant's rows shows a wrong number rather
+        than a right-looking one. They differ by tax, by the no-access fee
+        rule, by the price and length of the standard clean, and by how many
+        invoices were issued.
+        """
+        sparkle, rival = (
+            self._reports(Organization.objects.get(name=name))
+            for name in ("Sparkle Clean", "Rival Cleaners")
+        )
+
+        for report, total in (
+            ("receivables", "total_cents"),
+            ("receivables", "invoice_count"),
+            ("collections", "amount_cents"),
+            ("timesheet", "total_seconds"),
+        ):
+            mine = sparkle[report]
+            theirs = rival[report]
+            if report != "timesheet":
+                mine, theirs = mine["totals"], theirs["totals"]
+            assert mine[total] != theirs[total], (report, total)
 
 
 @pytest.mark.django_db

@@ -1088,7 +1088,7 @@ The hours are owed to the crew and the invoices are owed to the tenant whoever i
 A timesheet period is capped at `scheduling.filters.MAX_RANGE_DAYS`, the jobs filter's own cap, and collections at 366 days; the frontend does not copy either and shows the server's refusal.
 A closed month's collections can change when a payment in it is voided.
 The figure `with_paid_cents` carries is as old as the queryset, so it is for reading: nothing that writes to an invoice may be handed an annotated instance.
-The demo seed's two tenants are owed identical amounts, because every seeded invoice is one untaxed service; tenant isolation on these reports is proved by the tests, not by the seed.
+The demo seed's two tenants are owed, paid and worked different amounts, because their invoices differ in count, tax, no-access fee and the price and length of the standard clean; a report that read the other tenant's rows shows a wrong number on the seeded data, but tenant isolation on these reports is still proved by the tests, not by the seed.
 
 ---
 

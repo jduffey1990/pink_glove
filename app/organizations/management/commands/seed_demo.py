@@ -17,6 +17,7 @@ from django.utils import timezone
 
 from billing import services as billing
 from billing.enums import PaymentMethod
+from billing.models import Invoice
 from catalog.enums import PricingModel
 from catalog.models import Service
 from customers.models import Customer, ServiceLocation
@@ -24,7 +25,12 @@ from organizations.enums import NoAccessFeeType
 from organizations.models import Organization
 from scheduling.enums import JobStatus
 from scheduling.models import Job, RecurringPlan, TimeEntry
-from scheduling.services import activate_booked_customer, materialize_plan, transition_job
+from scheduling.services import (
+    activate_booked_customer,
+    materialize_plan,
+    quote_job_price,
+    transition_job,
+)
 from scheduling.tasks import materialize_organization
 from users.enums import Role
 from users.models import CustomUser, Membership
@@ -142,6 +148,43 @@ SERVICES = [
 ]
 
 
+#: Rival's standard clean is a shorter, cheaper visit than Sparkle's, so every
+#: visit line and every total built from one differs between the two tenants
+#: before tax and the no-access fee do, and so do the hours on the timesheet.
+SERVICE_OVERRIDES = {
+    "Rival Cleaners": {
+        "Standard Clean": {"base_price_cents": 13500, "default_duration_minutes": 90},
+    },
+}
+
+#: The invoices each tenant gets, in the order they are drafted, as (state,
+#: which visits). `_invoice_jobs` resolves the second against what is still
+#: unbilled at that moment: "dana" is Dana's two oldest finished visits,
+#: "priya" is Priya's oldest plan visit with the move-out clean at the same
+#: rental (the seed's one taxable line), and "locked-out" is the no-access
+#: visit, which bills as the organization's fee.
+#:
+#: Different on purpose. Sparkle has its no-access fee issued and not yet due;
+#: Rival leaves its fee on a draft. So the tenants differ in invoice count as
+#: well as in every amount, and a receivables or collections figure read from
+#: the wrong tenant shows up as a wrong number.
+INVOICES = {
+    "Sparkle Clean": [
+        ("paid", "dana"),
+        ("overdue", "priya"),
+        ("part-paid", "dana"),
+        ("open", "locked-out"),
+        ("draft", "dana"),
+    ],
+    "Rival Cleaners": [
+        ("paid", "dana"),
+        ("overdue", "priya"),
+        ("part-paid", "dana"),
+        ("draft", "locked-out"),
+    ],
+}
+
+
 class Command(BaseCommand):
     help = "Seed two demo organizations with users, customers, services, plans and jobs."
 
@@ -168,13 +211,14 @@ class Command(BaseCommand):
             customers = self._customers(organization)
             services = self._services(organization)
             plans = self._plans(organization, customers, services, cleaner=users[Role.CLEANER])
+            self._move_out(organization, customers[2], services[2], plans[0].starts_on)
 
             created = self._materialize(organization, plans)
             self.stdout.write(f"  materialized {created} jobs")
 
             self._close_the_past(organization, actor=users[Role.OWNER])
             self._record_time(organization)
-            self._billing(organization, actor=users[Role.DISPATCHER])
+            self._billing(organization, customers, actor=users[Role.DISPATCHER])
 
         self.stdout.write("")
         self.stdout.write(self.style.WARNING(f"All demo passwords: {DEMO_PASSWORD}"))
@@ -289,11 +333,12 @@ class Command(BaseCommand):
 
     def _services(self, organization) -> list[Service]:
         services = []
+        overrides = SERVICE_OVERRIDES.get(organization.name, {})
         for spec in SERVICES:
+            defaults = {k: v for k, v in spec.items() if k != "name"}
+            defaults.update(overrides.get(spec["name"], {}))
             service, _ = Service.objects.get_or_create(
-                organization=organization,
-                name=spec["name"],
-                defaults={k: v for k, v in spec.items() if k != "name"},
+                organization=organization, name=spec["name"], defaults=defaults
             )
             services.append(service)
 
@@ -309,12 +354,14 @@ class Command(BaseCommand):
         something in it without anyone clicking Assign.
         """
         today = organization.today()
-        # Three weeks back, so the seeded board has recent history as well as a
-        # future. A calendar that starts empty behind today looks broken. Three
-        # and not two: `_billing` needs four finished visits on any day of the
-        # week, and a fortnight of a Tuesday plan and a fortnightly Thursday one
-        # is only sure of three until Tuesday evening has passed.
-        monday = today - dt.timedelta(days=today.weekday() + 21)
+        # Seven weeks back, so the seeded board has history as well as a
+        # future, and the history is old enough to bill honestly: an invoice
+        # is issued after the visits on it, and the overdue one must have been
+        # issued more than Rival's thirty-day terms ago. Seven and not eight:
+        # the first materialization reaches eight weeks past the start and the
+        # nightly task fills only from today, so an older start would leave
+        # the days between the two empty.
+        monday = today - dt.timedelta(days=today.weekday() + 49)
 
         specs = [
             {
@@ -364,6 +411,43 @@ class Command(BaseCommand):
         self.stdout.write(f"  {len(plans)} recurring plans (weekly + fortnightly)")
         return plans
 
+    def _move_out(self, organization, customer, service, starts_on) -> None:
+        """
+        One one-off visit: a move-out clean at the rental, between tenants.
+
+        The seed's one taxable line, so the organization that charges tax has
+        an invoice that shows it. The Wednesday of the plans' second week, so
+        it is finished history by the time `_close_the_past` runs and is never
+        the most recent visit, which that pass locks out.
+
+        Priced as the API prices a one-off (`quote_job_price` with no plan),
+        and its customer activated as the API's job create does. Found by
+        customer and service rather than by date, so a later `--force` run
+        adds no second one.
+        """
+        exists = Job.objects.filter(
+            organization=organization, customer=customer, service=service, plan__isnull=True
+        ).exists()
+        if not exists:
+            location = customer.locations.first()
+            day = starts_on + dt.timedelta(days=9)
+            start = dt.datetime.combine(day, dt.time(10, 0), tzinfo=organization.tz)
+            minutes = service.default_duration_minutes
+            Job.objects.create(
+                organization=organization,
+                customer=customer,
+                location=location,
+                service=service,
+                scheduled_start=start,
+                scheduled_end=start + dt.timedelta(minutes=minutes),
+                price_cents=quote_job_price(
+                    plan=None, service=service, location=location, duration_minutes=minutes
+                ),
+                notes="Tenant moved out. Inside the oven and every cupboard.",
+            )
+            self.stdout.write("  1 one-off visit (move-out clean)")
+        activate_booked_customer(customer)
+
     # -- history, and the money that follows from it -------------------------
 
     def _close_the_past(self, organization, *, actor) -> None:
@@ -371,7 +455,7 @@ class Command(BaseCommand):
         Finish every visit that has already happened.
 
         The materializer has no business inventing history, so a seeded board
-        has a fortnight of past visits all still "scheduled" -- which reads as
+        has weeks of past visits all still "scheduled" -- which reads as
         a business that never turned up. Walking them through the real state
         machine rather than setting the column keeps the demo honest about
         what the transitions allow.
@@ -409,7 +493,7 @@ class Command(BaseCommand):
         Put hours on the finished visits that had a crew.
 
         Closing a visit through the state machine clocks nobody in, so a
-        seeded board had a fortnight of completed work and a timesheet with
+        seeded board had weeks of completed work and a timesheet with
         nothing on it. Each assigned cleaner gets one entry per completed
         visit: on site five minutes after the slot began, away ten minutes
         before it ended, because a timesheet of exact two-hour blocks reads
@@ -444,63 +528,90 @@ class Command(BaseCommand):
 
         self.stdout.write(f"  recorded time on {recorded} finished visits")
 
-    def _billing(self, organization, *, actor) -> None:
+    def _billing(self, organization, customers, *, actor) -> None:
         """
-        Four invoices in the four states a dispatcher actually sees: paid,
-        part-paid with a tip, overdue, and still a draft.
+        The invoices in `INVOICES`: paid, overdue, part-paid with a tip, a
+        draft, and for Sparkle an issued no-access fee not yet due.
 
         Built from `billing.services`, not by writing rows, so the seed
         exercises the same numbering, snapshot and ledger rules the API does --
         and breaks loudly here if any of them changes.
+
+        Every date follows from the visits, as it would for a dispatcher who
+        invoices after the work: an invoice is issued the day after its last
+        visit (or today, for one finished today), so it is never dated before
+        the work it bills, and the terms put the due date after that. The
+        overdue one is overdue because its visits are old enough, not because
+        its issue date was pushed into the past on its own.
+
+        Once only. An organization that has any invoice, deleted or not, gets
+        no more: what was issued cannot be edited (ADR-026), and a second
+        round drawn from whatever visits are still unbilled would double the
+        demo's money on every `--force` run.
         """
-        today = organization.today()
-        billable = list(billing.billable_jobs(organization))
-        if not billable:
-            self.stdout.write("  no billable visits, so no invoices")
+        if Invoice.all_objects.filter(organization=organization).exists():
+            self.stdout.write("  invoices already seeded, none added")
             return
 
-        # One job per invoice, oldest first, so each invoice is legible.
-        plans = [
-            ("paid", 0),
-            ("part-paid", 1),
-            ("overdue", 2),
-            ("draft", 3),
-        ]
-
+        today = organization.today()
         made = []
-        for kind, index in plans:
-            if index >= len(billable):
-                break
-            job = billable[index]
-            invoice = billing.draft_invoice(customer=job.customer, jobs=[job], actor=actor)
-
-            if kind == "draft":
-                made.append(f"{kind}")
+        for state, selector in INVOICES[organization.name]:
+            jobs = self._invoice_jobs(organization, customers, selector)
+            if not jobs:
+                made.append(f"no {state} ({selector} has nothing to bill)")
                 continue
 
-            issued_on = today - dt.timedelta(days=60 if kind == "overdue" else 3)
+            invoice = billing.draft_invoice(customer=jobs[0].customer, jobs=jobs, actor=actor)
+            if state == "draft":
+                made.append(state)
+                continue
+
+            last_visit = max(job.scheduled_start for job in jobs).astimezone(organization.tz)
+            issued_on = min(last_visit.date() + dt.timedelta(days=1), today)
             billing.issue_invoice(invoice, actor=actor, today=issued_on)
 
-            if kind == "paid":
+            if state == "paid":
                 billing.record_payment(
                     invoice,
                     method=PaymentMethod.CHECK,
                     amount_cents=invoice.total_cents,
-                    received_on=issued_on + dt.timedelta(days=2),
+                    received_on=min(issued_on + dt.timedelta(days=5), today),
                     reference="Check 1047",
                     actor=actor,
                 )
-            elif kind == "part-paid":
+            elif state == "part-paid":
                 billing.record_payment(
                     invoice,
                     method=PaymentMethod.CASH,
                     amount_cents=invoice.total_cents // 2,
                     tip_cents=2000,
-                    received_on=issued_on + dt.timedelta(days=1),
+                    received_on=min(issued_on + dt.timedelta(days=1), today),
                     reference="Left on the counter",
                     actor=actor,
                 )
 
-            made.append(f"{invoice.number} {kind}")
+            made.append(f"{invoice.number} {state}")
 
         self.stdout.write(f"  invoices: {', '.join(made)}")
+
+    def _invoice_jobs(self, organization, customers, selector) -> list[Job]:
+        """
+        The visits one `INVOICES` entry bills, from what is still unbilled.
+
+        Read through `billing.billable_jobs`, the dispatcher's own "ready to
+        invoice" list, so a visit already on an invoice is never offered twice.
+        """
+        dana, _, priya = customers
+        billable = list(billing.billable_jobs(organization))
+        finished = [job for job in billable if job.status == JobStatus.COMPLETE]
+
+        if selector == "dana":
+            return [job for job in finished if job.customer_id == dana.pk][:2]
+        if selector == "priya":
+            visits = [job for job in finished if job.customer_id == priya.pk]
+            planned = [job for job in visits if job.plan_id is not None][:1]
+            one_off = [job for job in visits if job.plan_id is None][:1]
+            return planned + one_off
+        if selector == "locked-out":
+            return [job for job in billable if job.status == JobStatus.NO_ACCESS][:1]
+        raise CommandError(f"Unknown invoice selector {selector!r}.")
