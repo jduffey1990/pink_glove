@@ -13,6 +13,7 @@ resolved tenant and never from request data.
 import datetime as dt
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -56,6 +57,7 @@ from scheduling.services import (
     edit_refusal,
     expand_occurrences,
     materialize_plan,
+    promote_lead,
     regenerate_plan,
     transition_job,
     unassign_user,
@@ -96,10 +98,18 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
         """
         Materialize straight away rather than waiting for tonight's beat run.
         A dispatcher who creates a plan expects to see the visits appear.
+
+        One transaction for the plan, its visits and the customer's promotion
+        from Lead (ADR-037): a plan whose visits cannot be priced is a 400, and
+        a 400 leaves nothing behind -- not the plan, and not an Active customer
+        with nothing booked.
         """
-        super().perform_create(serializer)
         try:
-            materialize_plan(serializer.instance)
+            with transaction.atomic():
+                super().perform_create(serializer)
+                materialize_plan(serializer.instance)
+                if serializer.instance.is_active:
+                    promote_lead(serializer.instance.customer)
         except ValueError as exc:
             raise DjangoValidationError({"service": str(exc)}) from exc
 

@@ -15,6 +15,8 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from app.exceptions import ConflictError
+from customers.enums import CustomerStatus
+from customers.models import Customer
 from scheduling.enums import ALLOWED_TRANSITIONS, REASON_REQUIRED_STATUSES, JobStatus
 from scheduling.models import Job, JobAssignment, RecurringPlan, TimeEntry
 
@@ -345,6 +347,36 @@ def _rekey_kept_jobs(plan: RecurringPlan, *, today: dt.date) -> None:
         taken.add(free[0])
         job.plan_occurrence = free[0]
         job.save(update_fields=["plan_occurrence", "updated_at"])
+
+
+# ---------------------------------------------------------------------------
+# Booking side effects
+# ---------------------------------------------------------------------------
+
+
+def promote_lead(customer: Customer) -> bool:
+    """
+    A Lead who has work booked is Active (ADR-037). Returns whether it moved.
+
+    Called by the two booking paths -- a one-off visit created through the API
+    and a recurring plan created through the API -- inside their transaction,
+    so a refused booking leaves the Lead a Lead. Only `lead` moves: inactive
+    and archived are a person's decision and booking does not overrule it.
+
+    One conditional UPDATE of the status column and `updated_at`, not a
+    `save()` of the instance: the row is re-read by the WHERE clause, so a
+    status somebody changed since the booking's form was loaded is not
+    overwritten, and no other field the in-memory copy carries is written back.
+    The organization is in the WHERE clause as well as implied by the pk.
+    """
+    moved = Customer.objects.filter(
+        pk=customer.pk,
+        organization_id=customer.organization_id,
+        status=CustomerStatus.LEAD,
+    ).update(status=CustomerStatus.ACTIVE, updated_at=timezone.now())
+    if moved:
+        customer.status = CustomerStatus.ACTIVE
+    return bool(moved)
 
 
 # ---------------------------------------------------------------------------

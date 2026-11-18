@@ -34,7 +34,7 @@ from scheduling.models import (
     TimeEntry,
 )
 from scheduling.models import validate_rrule as _validate_rrule
-from scheduling.services import job_actions, job_claims, next_statuses
+from scheduling.services import job_actions, job_claims, next_statuses, promote_lead
 from users.enums import DISPATCHER_ROLES, Role
 
 
@@ -350,6 +350,8 @@ class JobSerializer(TenantModelSerializer):
 
         job = super().create(validated_data)
         self._assign(job, assignee_ids)
+        # Last, so a refused crew rolls the booking back before it promotes.
+        promote_lead(job.customer)
         return job
 
     def _assign(self, job, user_ids) -> None:
