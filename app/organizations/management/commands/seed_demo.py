@@ -24,7 +24,7 @@ from organizations.enums import NoAccessFeeType
 from organizations.models import Organization
 from scheduling.enums import JobStatus
 from scheduling.models import Job, RecurringPlan, TimeEntry
-from scheduling.services import materialize_plan, transition_job
+from scheduling.services import activate_booked_customer, materialize_plan, transition_job
 from scheduling.tasks import materialize_organization
 from users.enums import Role
 from users.models import CustomUser, Membership
@@ -353,6 +353,12 @@ class Command(BaseCommand):
             )
             if created and spec["assignees"]:
                 plan.default_assignees.set(spec["assignees"])
+            # An active plan is a booking, and the API's plan create makes its
+            # customer Active through this same call (ADR-037). Every run, not
+            # only on create, so a database seeded before this gets its booked
+            # customers out of Lead on a `--force` run; the call only ever
+            # moves a Lead or an Inactive customer.
+            activate_booked_customer(spec["customer"])
             plans.append(plan)
 
         self.stdout.write(f"  {len(plans)} recurring plans (weekly + fortnightly)")

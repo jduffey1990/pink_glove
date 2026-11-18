@@ -44,6 +44,26 @@ class TestSeedShape:
             assert Service.objects.filter(organization=organization).count() == 3
             assert RecurringPlan.objects.filter(organization=organization).count() == 2
 
+    def test_booked_customers_are_active_and_one_lead_is_left(self, seeded):
+        """
+        ADR-037: booking work makes a customer Active. Each tenant keeps
+        exactly one customer with nothing booked, as a Lead, so the customers
+        list still shows that state.
+        """
+        from customers.enums import CustomerStatus
+
+        for organization in Organization.objects.all():
+            customers = Customer.objects.filter(organization=organization)
+            booked = customers.filter(jobs__isnull=False).distinct()
+
+            assert booked.exists()
+            assert set(booked.values_list("status", flat=True)) == {CustomerStatus.ACTIVE}
+
+            leads = customers.filter(status=CustomerStatus.LEAD)
+            assert leads.count() == 1
+            assert not leads.filter(jobs__isnull=False).exists()
+            assert not leads.filter(plans__isnull=False).exists()
+
     def test_the_locations_cover_the_interesting_shapes(self, seeded):
         """Square footage, pets, and codes each drive a different code path."""
         for organization in Organization.objects.all():
@@ -159,6 +179,25 @@ class TestSeedGuards:
 
         after = (Organization.objects.count(), Job.objects.count(), TimeEntry.objects.count())
         assert after == before
+
+    def test_force_moves_an_older_seeds_booked_customers_out_of_lead(self, seeded, settings):
+        """
+        A database seeded before ADR-037 has its booked customers as Leads.
+        Running again activates them, through the same call a booking makes,
+        and leaves the one with nothing booked alone.
+        """
+        from customers.enums import CustomerStatus
+
+        settings.DEBUG = True
+        Customer.objects.update(status=CustomerStatus.LEAD)
+
+        call_command("seed_demo", "--force", verbosity=0)
+
+        for organization in Organization.objects.all():
+            statuses = Customer.objects.filter(organization=organization).values_list(
+                "status", flat=True
+            )
+            assert sorted(statuses) == ["active", "active", "lead"]
 
     def test_force_gives_an_older_seed_its_hours(self, seeded, settings):
         """
