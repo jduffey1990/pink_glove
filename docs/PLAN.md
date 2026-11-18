@@ -3580,22 +3580,24 @@ Not driven: a real cross-origin navigation to Stripe (no Stripe keys in the rehe
 
 ---
 
-## Lead promotion on booking as built
+## Customer status on booking as built
 
 Branch `feat/promote-lead-on-booking`, cut from `main` at `e39bae2`.
-Booking work for a Lead promotes them to Active (ADR-037).
+Booking work moves a Lead or an Inactive customer to Active, and booking work for an Archived customer is refused (ADR-037).
 
-- `scheduling.services.promote_lead(customer)` is one conditional UPDATE of `status` and `updated_at`, scoped by pk, organization and `status = 'lead'`.
-- A one-off visit: called last in `JobSerializer.create`, inside its existing transaction.
-- A recurring plan: `RecurringPlanViewSet.perform_create` now wraps the plan row, `materialize_plan` and the promotion in one transaction; a paused plan promotes no one.
-- Behaviour change beyond the status: a plan whose visits cannot be priced was a 400 that left the plan row behind; it is now rolled back.
-- No schema change, no migration, no frontend change: no response carries the customer's status, and the customers page refetches on mount with no store caching customers.
+- Booking is five writes through the API: a new visit, a new active plan, a paused plan made active, and a visit or active plan handed to another customer. The old customer of a hand-over is never demoted.
+- `scheduling.services.activate_booked_customer(customer)` (first written as `promote_lead`) is one conditional UPDATE of `status` and `updated_at`, scoped by pk, organization and `status IN ('lead', 'inactive')`.
+- Archived: each of the five writes is a 400 on `customer` ("This customer is archived. Unarchive them before booking work."), checked by `refuses_booking` in the serializers' `validate`. An active plan for an archived customer is not saved at all except to pause it, because any other edit can regenerate its visits.
+- Nightly: `materialize_plan` makes no new visits for an archived customer's plan and leaves the existing ones as they are; unarchiving lets the next run resume.
+- Transactions: a new visit already was one; a visit edit, a plan create and a plan update now are. Behaviour change beyond the status: a plan create or a plan update whose visits cannot be priced was a 400 that kept the write; it is now rolled back.
+- Schema: only the plan update's description changed (regenerated with the code). No migration. No frontend change: no response carries the status, the customers page refetches when opened, and no store caches customers.
+- Not done here: `seed_demo` still leaves its booked customers as Leads (a later demo-seed branch); the visit dialog and plans page still list archived customers, so the 400 is the only guard there.
 
 ### Phase gate - as built
 
-1. **Test coverage.** Backend 2351 to 2376 (+25), all in `scheduling/tests/test_lead_promotion.py`: both booking paths, every role that may book, the three statuses that do not move, all seven 400 paths, delete and cancel do not demote, nightly materialization does not promote, three cross-tenant tests. Run twice; turning the promotion into a no-op turns 7 red, and dropping the plan transaction turns 1 red. Frontend unchanged at 427, not re-run. Gaps: admin and `seed_demo` paths untested (they do not promote by design); nothing was run in a browser.
-2. **DRY.** One function, called from the two booking paths; no client-side copy of the rule.
-3. **Modularity.** The rule lives in `scheduling/services.py`; the serializer and the view call it.
-4. **Orthogonality.** No new coupling beyond `scheduling.services` importing `customers.enums` and `customers.models`, the direction that already existed. Nothing in `customers` imports scheduling for this.
-5. **Security.** No new endpoint, model, task, `AllowAny` or `allowed_while_inactive`. The update filters on the customer's own organization and the booking's customer is tenant-validated before it. `/security-review` was run on the diff: no findings.
+1. **Test coverage.** Backend 2351 to 2412 (+61), all in `scheduling/tests/test_booking_status.py`: every trigger against every status (Lead and Inactive move, Active is not written, Archived is a 400 with nothing written), every role that may book, every 400 path on both create and edit leaving the status unchanged, the archived customer's existing work (edit a visit, pause a plan, refuse other plan edits, a paused plan may be created), soft-deleted customers still refused, the nightly run and the organization task for an archived customer, delete and cancel do not demote, and four cross-tenant tests. Run twice. Mutation-checked once per rule: the create promotion (7 red), the plan create transaction (1), the edit triggers (3), the plan update transaction (1), Inactive moving (5), the visit archived refusal (2), the plan archived refusal (5), the nightly guard (2). Frontend unchanged at 427; lint, type-check and vitest re-run green after the schema regeneration. Gaps: admin and `seed_demo` paths untested (they do not move statuses by design); nothing was run in a browser.
+2. **DRY.** One function moves the status and one decides the refusal, each called from every booking path; the refusal text is one constant. No client-side copy of either rule.
+3. **Modularity.** Both rules live in `scheduling/services.py`; the serializers and the view call them.
+4. **Orthogonality.** No new coupling beyond `scheduling.services` importing `customers.enums` and `customers.models`, the direction that already existed. Nothing in `customers` imports scheduling for this. The `ui/` pickers know nothing of the rule; the 400 reaches them as an ordinary field error.
+5. **Security.** No new endpoint, model, task, `AllowAny` or `allowed_while_inactive`. The update filters on the customer's own organization and the booking's customer is tenant-validated before it. The change only refuses more and writes one column. `/security-review` was run on the first diff (no findings); the later commits were reviewed by hand with the same checks.
 6. **Branch and production guard.** All work is on `feat/promote-lead-on-booking`; nothing committed to `main`, pushed or merged; no `fly`, no `migrate` against the dev database.
