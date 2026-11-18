@@ -12,9 +12,9 @@ from zoneinfo import ZoneInfo
 DENVER = ZoneInfo("America/Denver")
 AUCKLAND = ZoneInfo("Pacific/Auckland")
 
-#: 10:00 on Wednesday 18 November 2026 in Denver (MST, UTC-7): past the
+#: 18:00 on Wednesday 18 November 2026 in Denver (MST, UTC-7): past the
 #: reminder hour, so Thursday the 19th's visits are due.
-NOW = dt.datetime(2026, 11, 18, 10, 0, tzinfo=DENVER)
+NOW = dt.datetime(2026, 11, 18, 18, 0, tzinfo=DENVER)
 
 #: 14:00 on Thursday the 19th, Denver: tomorrow, as NOW reckons it.
 TOMORROW_2PM = dt.datetime(2026, 11, 19, 14, 0, tzinfo=DENVER)

@@ -40,8 +40,15 @@ class TestWhatIsDue:
 
         assert due(org) == [first, last]
 
-    def test_not_a_visit_later_today(self, org, make_visit):
-        make_visit(org, local(DENVER, 2026, 11, 18, 15, 0))
+    def test_a_visit_later_today_is_still_due(self, org, make_visit):
+        """Its day-before 17:00 is long past and it has not started."""
+        later = make_visit(org, local(DENVER, 2026, 11, 18, 19, 0))
+
+        assert due(org) == [later]
+
+    def test_not_a_visit_that_has_started(self, org, make_visit):
+        make_visit(org, local(DENVER, 2026, 11, 18, 17, 30))
+        make_visit(org, NOW)
 
         assert due(org) == []
 
@@ -50,17 +57,29 @@ class TestWhatIsDue:
 
         assert due(org) == []
 
-    def test_nothing_before_the_reminder_hour(self, org, make_visit):
+    def test_tomorrow_waits_for_the_reminder_hour(self, org, make_visit):
         make_visit(org, TOMORROW_2PM)
 
-        assert due(org, local(DENVER, 2026, 11, 18, 8, 59)) == []
-        assert len(due(org, local(DENVER, 2026, 11, 18, 9, 0))) == 1
+        assert due(org, local(DENVER, 2026, 11, 18, 16, 59)) == []
+        assert len(due(org, local(DENVER, 2026, 11, 18, 17, 0))) == 1
+
+    def test_before_the_hour_the_rest_of_today_is_due(self, org, make_visit):
+        """A visit booked at 08:00 for 15:00 the same day is reminded at once."""
+        this_afternoon = make_visit(org, local(DENVER, 2026, 11, 18, 15, 0))
+        make_visit(org, TOMORROW_2PM)
+
+        assert due(org, local(DENVER, 2026, 11, 18, 8, 0)) == [this_afternoon]
 
     def test_still_due_late_in_the_evening(self, org, make_visit):
-        """A missed tick or an afternoon booking is still reminded the same day."""
         make_visit(org, TOMORROW_2PM)
 
         assert len(due(org, local(DENVER, 2026, 11, 18, 23, 30))) == 1
+
+    def test_still_due_after_midnight_if_it_was_missed(self, org, make_visit):
+        """Booked after the last tick before midnight: the next tick still catches it."""
+        visit = make_visit(org, local(DENVER, 2026, 11, 19, 8, 0))
+
+        assert due(org, local(DENVER, 2026, 11, 19, 0, 15)) == [visit]
 
 
 @pytest.mark.django_db

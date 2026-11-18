@@ -1,16 +1,16 @@
 """
 Visit reminders: which visits are due one, and sending it (ADR-035).
 
-A reminder goes out on the organization-local day before the visit, from
-`REMINDER_LOCAL_HOUR` onward. The task runs hourly, so "from the hour on"
-rather than "at the hour" is what lets a missed tick, a worker that was down
-or a visit booked in the afternoon still be reminded the same day. What
-stops the hourly runs from repeating one is the `VisitReminder` ledger, not
-the clock.
+A visit is due its reminder once it is `REMINDER_LOCAL_HOUR` on the
+organization-local day before it, until it starts. The hourly task asks
+that question every hour, so a missed tick, a worker that was down, or a
+visit booked at 23:30 for the next morning is still reminded before it
+begins (at the next tick). What stops a reminder being
+repeated is the `VisitReminder` ledger, not the clock.
 
 Reckoned in `Organization.timezone` and compared in UTC (invariant 8):
-"tomorrow" is the organization's tomorrow, and `local_day_bounds` turns it
-into a UTC interval that is 23 or 25 hours long across a DST change.
+"the day before" is the organization's, and `local_day_bounds` turns the
+last due day into a UTC boundary that is right across a DST change.
 """
 
 import datetime as dt
@@ -31,9 +31,8 @@ from scheduling.models import Job
 logger = logging.getLogger(__name__)
 
 #: The organization-local hour on the day before a visit from which its
-#: reminder may go. Inside the default business hours, so a customer who
-#: replies or rings about the visit reaches somebody the same day.
-REMINDER_LOCAL_HOUR = 9
+#: reminder may go: the evening before, when people plan the next day.
+REMINDER_LOCAL_HOUR = 17
 
 #: A lead with a visit booked is about to be a customer; an inactive or
 #: archived one has been told nothing about a visit that somebody forgot to
@@ -43,16 +42,19 @@ REMINDABLE_CUSTOMER_STATUSES = (CustomerStatus.LEAD, CustomerStatus.ACTIVE)
 
 def reminder_window(
     organization: Organization, now: dt.datetime
-) -> tuple[dt.datetime, dt.datetime] | None:
+) -> tuple[dt.datetime, dt.datetime]:
     """
-    The UTC interval whose visits are due a reminder at `now`, or None
-    before the reminder hour. Half-open, like `local_day_bounds`.
+    The UTC interval of starts that are due a reminder at `now`: open at
+    `now` (a visit that has started is past reminding) and closed at the end
+    of the last local day whose day-before has reached the reminder hour.
+
+    Before the hour that is the end of today, so a visit later today is still
+    due; from the hour on, the end of tomorrow.
     """
     local_now = now.astimezone(organization.tz)
-    if local_now.hour < REMINDER_LOCAL_HOUR:
-        return None
-    tomorrow = local_now.date() + dt.timedelta(days=1)
-    return organization.local_day_bounds(tomorrow, tomorrow)
+    days_ahead = 1 if local_now.hour >= REMINDER_LOCAL_HOUR else 0
+    _, end = organization.local_day_bounds(None, local_now.date() + dt.timedelta(days=days_ahead))
+    return now, end
 
 
 def due_reminders(organization: Organization, now: dt.datetime) -> QuerySet[Job]:
@@ -67,10 +69,7 @@ def due_reminders(organization: Organization, now: dt.datetime) -> QuerySet[Job]
     if not (organization.is_active and organization.visit_reminders_enabled):
         return Job.objects.none()
 
-    window = reminder_window(organization, now)
-    if window is None:
-        return Job.objects.none()
-    start, end = window
+    start, end = reminder_window(organization, now)
 
     already_sent = VisitReminder.objects.filter(
         job=OuterRef("pk"), scheduled_start=OuterRef("scheduled_start")
@@ -82,7 +81,7 @@ def due_reminders(organization: Organization, now: dt.datetime) -> QuerySet[Job]
             # Only a visit still waiting to happen. A terminal one is over or
             # called off; one en route or in progress is already under way.
             status=JobStatus.SCHEDULED,
-            scheduled_start__gte=start,
+            scheduled_start__gt=start,
             scheduled_start__lt=end,
             customer__deleted_at__isnull=True,
             customer__status__in=REMINDABLE_CUSTOMER_STATUSES,

@@ -2,9 +2,10 @@
 "Tomorrow" and "the reminder hour" are the organization's, not UTC's
 (invariant 8).
 
-Two ways to get it wrong, each pinned here: reckoning the day in UTC, which
-picks the wrong day for a tenant far from it; and treating a day as 24
-hours, which drops or doubles visits at the edges of a DST change.
+Two ways to get it wrong, each pinned here: reckoning the day or the hour
+in UTC, which picks the wrong visits for a tenant far from it; and treating
+a day as 24 hours, which drops or doubles visits at the edges of a DST
+change.
 """
 
 import datetime as dt
@@ -27,26 +28,37 @@ def auckland(db):
 
 @pytest.mark.django_db
 class TestFarFromUtc:
-    """Auckland is UTC+13 in November: its tomorrow is UTC's day after tomorrow."""
+    """Auckland is UTC+13 in November."""
 
-    #: 09:00 Wednesday 18 November in Auckland, which is still Tuesday in UTC.
-    NOW = local(AUCKLAND, 2026, 11, 18, 9, 0)
-
-    def test_the_utc_date_is_a_day_behind(self):
-        assert self.NOW.astimezone(dt.UTC).date() == dt.date(2026, 11, 17)
-
-    def test_tomorrow_is_the_local_tomorrow(self, auckland, make_visit):
-        thursday = make_visit(auckland, local(AUCKLAND, 2026, 11, 19, 10, 0))
-        # Wednesday the 18th locally: what a UTC reckoning would call tomorrow.
-        make_visit(auckland, local(AUCKLAND, 2026, 11, 18, 14, 0))
-
-        assert due(auckland, self.NOW) == [thursday]
+    #: 17:00 Wednesday 18 November in Auckland: 04:00 UTC, the same date.
+    NOW = local(AUCKLAND, 2026, 11, 18, 17, 0)
 
     def test_the_hour_is_the_local_hour(self, auckland, make_visit):
+        """At 04:00 UTC a UTC clock would still be waiting for 17:00."""
         make_visit(auckland, local(AUCKLAND, 2026, 11, 19, 10, 0))
 
         assert due(auckland, self.NOW - dt.timedelta(minutes=1)) == []
         assert len(due(auckland, self.NOW)) == 1
+
+    def test_tomorrow_ends_at_the_local_midnight(self, auckland, make_visit):
+        thursday = make_visit(auckland, local(AUCKLAND, 2026, 11, 19, 10, 0))
+        # Friday 10:00 locally is Thursday 21:00 UTC: inside a UTC "tomorrow".
+        make_visit(auckland, local(AUCKLAND, 2026, 11, 20, 10, 0))
+
+        assert due(auckland, self.NOW) == [thursday]
+
+    def test_in_the_morning_only_the_rest_of_the_local_today(self, auckland, make_visit):
+        """
+        10:00 Wednesday locally is 21:00 Tuesday UTC. A UTC reckoning is past
+        its 17:00 and calls Wednesday "tomorrow", running until Thursday
+        13:00 here, so it would remind Thursday's visit a day early.
+        """
+        morning = local(AUCKLAND, 2026, 11, 18, 10, 0)
+        assert morning.astimezone(dt.UTC).date() == dt.date(2026, 11, 17)
+        today = make_visit(auckland, local(AUCKLAND, 2026, 11, 18, 14, 0))
+        make_visit(auckland, local(AUCKLAND, 2026, 11, 19, 10, 0))
+
+        assert due(auckland, morning) == [today]
 
 
 @pytest.fixture
@@ -58,13 +70,13 @@ def denver(db):
 class TestFallBack:
     """Sunday 1 November 2026 in Denver is 25 hours long: 01:00-02:00 happens twice."""
 
-    NOW = local(DENVER, 2026, 10, 31, 9, 0)  # Saturday, MDT
+    NOW = local(DENVER, 2026, 10, 31, 17, 0)  # Saturday, MDT
 
-    def test_the_window_is_twenty_five_hours(self, denver):
-        start, end = reminder_window(denver, self.NOW)
+    def test_the_window_ends_at_local_midnight_on_the_long_day(self, denver):
+        _, end = reminder_window(denver, self.NOW)
 
-        # In UTC: Python subtracts two times in one zone by the wall clock.
-        assert end.astimezone(dt.UTC) - start.astimezone(dt.UTC) == dt.timedelta(hours=25)
+        # Monday 00:00 MST, which a 24-hour day from Sunday 00:00 MDT misses by an hour.
+        assert end.astimezone(dt.UTC) == dt.datetime(2026, 11, 2, 7, 0, tzinfo=dt.UTC)
 
     def test_the_whole_long_day_is_due_and_nothing_after(self, denver, make_visit):
         early = make_visit(denver, local(DENVER, 2026, 11, 1, 0, 30))  # still MDT
@@ -81,27 +93,26 @@ class TestFallBack:
 
     def test_the_hour_moves_with_the_clocks(self, denver, make_visit):
         """
-        09:00 local is 15:00 UTC in October and 16:00 UTC in November. A fixed
+        17:00 local is 23:00 UTC in October and 00:00 UTC in November. A fixed
         UTC hour would remind an hour early for half the year.
         """
         make_visit(denver, local(DENVER, 2026, 11, 3, 10, 0))
-        monday_utc_1530 = dt.datetime(2026, 11, 2, 15, 30, tzinfo=dt.UTC)  # 08:30 MST
+        monday_utc_2330 = dt.datetime(2026, 11, 2, 23, 30, tzinfo=dt.UTC)  # 16:30 MST
 
-        assert due(denver, monday_utc_1530) == []
-        assert len(due(denver, monday_utc_1530 + dt.timedelta(minutes=30))) == 1
+        assert due(denver, monday_utc_2330) == []
+        assert len(due(denver, monday_utc_2330 + dt.timedelta(minutes=30))) == 1
 
 
 @pytest.mark.django_db
 class TestSpringForward:
     """Sunday 14 March 2027 in Denver is 23 hours long: 02:00-03:00 never happens."""
 
-    NOW = local(DENVER, 2027, 3, 13, 9, 0)  # Saturday, MST
+    NOW = local(DENVER, 2027, 3, 13, 17, 0)  # Saturday, MST
 
-    def test_the_window_is_twenty_three_hours(self, denver):
-        start, end = reminder_window(denver, self.NOW)
+    def test_the_window_ends_at_local_midnight_on_the_short_day(self, denver):
+        _, end = reminder_window(denver, self.NOW)
 
-        # In UTC: Python subtracts two times in one zone by the wall clock.
-        assert end.astimezone(dt.UTC) - start.astimezone(dt.UTC) == dt.timedelta(hours=23)
+        assert end.astimezone(dt.UTC) == dt.datetime(2027, 3, 15, 6, 0, tzinfo=dt.UTC)
 
     def test_the_short_day_is_due_and_monday_midnight_is_not(self, denver, make_visit):
         early = make_visit(denver, local(DENVER, 2027, 3, 14, 0, 30))  # MST
