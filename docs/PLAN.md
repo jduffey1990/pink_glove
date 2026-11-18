@@ -3542,7 +3542,7 @@ Nothing was committed to `main`, nothing was pushed or merged, no `fly` command 
 
 ## Referrer policy as built
 
-Branch `chore/referrer-policy-strict-origin`, cut from `main` at `e39bae2`.
+Branch `chore/referrer-policy-strict-origin`, rebased onto `main` at `fe284af`.
 Every response now sends `Referrer-Policy: strict-origin`, so every `Referer` the site causes carries the origin and never a path, query or fragment (ADR-038).
 It closes the access log half of the token-in-path leak: on the first load of an old-form emailed link, the token was repeated in the `Referer` of every asset and API call the page made.
 
@@ -3571,7 +3571,7 @@ Not driven: a real cross-origin navigation to Stripe (no Stripe keys in the rehe
 
 ### Phase gate - as built
 
-1. **Test coverage.** Backend 2351 to 2360 (+9): `app/tests/test_referrer_policy.py` (6: the setting, an API response, and a signed-in POST over `secure=True` with an origin-only `Referer` and no `Origin`, with `Origin` too, a foreign `Referer`, and neither), `app/tests/test_spa.py` (2: the header on the index document, and on a file whitenoise serves with `SecurityMiddleware` above it), `app/tests/test_settings_production.py` (1: production keeps the value). Reverting the setting turns the five header tests red; the four CSRF tests stay green by design, since they prove compatibility, not the header. Frontend untouched, 427. Gaps: no browser test in CI asserts the `Referer` a page sends; that was checked in the rehearsal only.
+1. **Test coverage.** Backend 2483 to 2492 (+9): `app/tests/test_referrer_policy.py` (6: the setting, an API response, and a signed-in POST over `secure=True` with an origin-only `Referer` and no `Origin`, with `Origin` too, a foreign `Referer`, and neither), `app/tests/test_spa.py` (2: the header on the index document, and on a file whitenoise serves with `SecurityMiddleware` above it), `app/tests/test_settings_production.py` (1: production keeps the value). Reverting the setting turns the five header tests red; the four CSRF tests stay green by design, since they prove compatibility, not the header. Frontend untouched, 459. Gaps: no browser test in CI asserts the `Referer` a page sends; that was checked in the rehearsal only.
 2. **DRY.** One setting in one module replaces the production-only line; the tests read it through responses, not by restating it.
 3. **Modularity.** Settings only; Django's `SecurityMiddleware` applies it. No view, serializer or app module changed.
 4. **Orthogonality.** No new coupling between apps. Couplings to note: `SecurityMiddleware` must stay above whitenoise in `MIDDLEWARE` for the assets to carry the header (asserted in `app/tests/test_spa.py`, as the clickjacking header already was); the Vite dev server serves the development page without the header, so the dev page's own `Referer`s follow the browser default. `CLAUDE.md` was not edited.
