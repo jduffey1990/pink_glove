@@ -3462,3 +3462,74 @@ No UI was built, so there is nothing to screenshot.
 4. **Orthogonality.** New couplings: `due_reminders` restates "a customer worth reminding" as `CustomerStatus.LEAD`/`ACTIVE` and "a visit waiting to happen" as `JobStatus.SCHEDULED`, so a new status in either enum needs a decision here; `notifications` listens to `Job` saves through a `post_save` receiver connected in its `ready()`, invisible from scheduling, and `signals.LOOKAHEAD` (48 hours) must stay longer than the longest window (32 hours); the beat entry in `settings/base.py` names `notifications.send_visit_reminders_all`; the reminder email reads the organization's contact fields directly; `CustomerSerializer.unavailable_choices` refuses `ContactMethod.SMS` until SMS ships, and the import template's hint reads the same set so it does not offer it. Nothing imports `notifications`, and a test enforces it.
 5. **Security.** `VisitReminder` is a `TenantModel`; no view serves it, so no `TenantViewSetMixin` is needed. The switch is written only through `CurrentOrganizationView` (admin tier, `IsOrgMember` read-only rule; no `allowed_while_inactive`). No new `AllowAny`. All three tasks take `organization_id`, and the one-visit task finds a visit only through that organization. The receiver queues on commit, so a rolled-back booking emails nobody. The email carries no access notes or codes, and the failure log names the job and not the address. No new secret and no new setting. Owned by the no-mistakes gate for test execution and `/security-review`.
 6. **Branch and production guard.** All work is on `feat/visit-reminders`; nothing was committed to `main`, pushed or merged; no `fly` command and no staging or production resource was touched. Migrations were generated under test settings against the scratch database `pg_wave2_reminders`; `migrate` was never run against the dev database.
+
+---
+
+## Link tokens in the fragment as built
+
+Branch `feat/link-tokens-in-fragment`, cut from `main` at e39bae2.
+ADR-036 is the decision; this is what was built and checked.
+
+**Backend.**
+`base/links.py` (`token_link`) builds the three emailed links in the fragment form: `pay_url` in `billing/connect.py`, the invitation in `users/services.py`, the reset in `two_factor/services.py`.
+`POST /api/billing/pay/invoice/` and `POST /api/billing/pay/checkout/` take the pay token in the body (`PayTokenSerializer`), throttled on the existing `pay_page` and `pay_checkout` scopes, so no settings file changed.
+The path-token views stay, `deprecated` in the schema, and are declared after the new routes in `billing/urls.py`.
+Stripe's `success_url` and `cancel_url` stay in the path form (`stripe_return_url`), because whether Stripe keeps a fragment there is undocumented.
+The three email anchors carry `clicktracking=off`.
+`app/sentry.py` redacts a `#name=value` pair as it does `?name=value`.
+No migration.
+
+**Frontend.**
+`src/lib/linkToken.ts` reads the token (`tokenFromHash`) and builds the redirect for each old route (`fragmentRedirect`).
+The routes are `/pay`, `/accept-invite` and `/reset-password`; `/pay/:token`, `/accept-invite/:token` and `/reset-password/:token` are redirect records beside them.
+An address with no token shows "That link is incomplete" and makes no request.
+`App.vue` keys the routed page by the link token, so a second link over the first starts the page over.
+The pay page's checkout refusal no longer disappears when the page re-reads the invoice (a pre-existing bug, its own commit).
+
+**Driven in a browser.**
+The built SPA under gunicorn with the worktree's code, against a scratch database (`pg_wave2_fragment`, migrated and seeded; the dev database was not touched), in headless Chromium at 1280px and 390px, twice with identical results.
+For each of the three flows, the new form and the old form both end at `pathname` `/pay` (or `/accept-invite`, `/reset-password`), empty `search`, `#token=...`, with `history.length` 2 in a fresh tab, so the old address was replaced rather than pushed.
+`/pay/<token>?paid=1` ends at `/pay?paid=1#token=...` and polls.
+A missing fragment shows the incomplete-link state, a garbled one the server's invalid-link state, and swapping the hash on an open page reloads the right invoice.
+The gunicorn access log holds no token from any new-form load.
+Each old-form load wrote its token once in the request line and 12 to 18 times in the `Referer` of the requests before the rewrite (240 lines for the pay token over 16 loads); none of those lines came from a new-form load or a hash swap.
+Screenshots: `/private/tmp/claude-501/-Users-jordanduffey-code-pink-glove/7fab66a2-6a0d-43b9-ba6b-1fafca562bbc/scratchpad/shot-*.png` (scratch, not kept).
+
+**Built, not verified here.**
+That Stripe keeps a fragment on `success_url` and `cancel_url`: not tested, since nothing here calls Stripe.
+That SendGrid honours `clicktracking=off` and that a real inbox delivers the fragment intact: needs one real send per email on staging.
+The compose stack's own `ui` service was not used, so the Vite dev server path (separate origin) was exercised only by vitest, not in a browser.
+
+### Phase gate
+
+**1. Test coverage.**
+Backend 2351 → 2369 (+18), frontend 427 → 455 (+28).
+The body endpoints have the path form's tests and more: bad, missing, expired, foreign-salt and deleted-invoice tokens, a signed-in owner of another organization naming theirs in the header, the token absent from the request URL, and one throttle bucket shared across both forms for each scope.
+The emails, `dev_link` and `pay_url` are asserted in the fragment form and not the path form; Stripe's returns are asserted in the path form.
+vitest covers `tokenFromHash`, the real route table on jsdom's history (old form replaced in place, token gone from `pathname` and `search`, `?paid=1` kept), and the three pages reading the fragment, sending a body, and refusing an empty one.
+*Gaps:* the `App.vue` key has no spec (App is not mounted in vitest); it is covered by the browser run only.
+The `clicktracking=off` attribute is asserted by nothing; it is in the templates and the ADR.
+
+**2. DRY.**
+One builder (`token_link`) and one reader (`tokenFromHash`), with one shared redirect for the three old routes and one sentence (`INCOMPLETE_LINK`) for an empty address.
+The two pay views share `_invoice_from` and `_token_in_body`.
+
+**3. Modularity.**
+Pages reach the API only through `src/api/endpoints.ts`.
+`base/links.py` depends on settings alone; `billing`, `users` and `two_factor` import it, and it imports none of them.
+
+**4. Orthogonality.**
+Couplings this changes or adds, each noted in code:
+the pay page's path is now `/pay` with the token in the fragment, and the old `/pay/<token>` is still built by `billing/connect.py` for Stripe's returns, so CLAUDE.md's `/pay/<token>` coupling now reads `/pay` plus `/pay/<token>` (redirect) in `ui/src/router/index.ts` and `billing/connect.py` (`pay_url`, `stripe_return_url`);
+the invitation and reset paths move the same way (`/accept-invite`, `/reset-password`, with their `/:token` redirects);
+the fragment key `token` is spelled in `app/base/links.py` and `ui/src/lib/linkToken.ts`;
+the old routes cannot be removed while `stripe_return_url` uses the path form.
+
+**5. Security (owned by the no-mistakes gate).**
+`AllowAny`, deliberate and throttled: `PublicInvoiceView` and `PayCheckoutView`, beside the two deprecated views they replace.
+No tenant data is newly exposed: the body endpoints serialize with the same `PublicInvoiceSerializer`.
+`/security-review` was not run on this branch; the gate's review is the security pass.
+
+**6. Branch and production guard.**
+All of this is on `feat/link-tokens-in-fragment`.
+Nothing was committed to `main`, nothing was pushed or merged, no `fly` command was run, and Stripe was not called.
