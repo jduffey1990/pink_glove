@@ -3537,3 +3537,43 @@ No tenant data is newly exposed: the body endpoints serialize with the same `Pub
 **6. Branch and production guard.**
 All of this is on `feat/link-tokens-in-fragment`.
 Nothing was committed to `main`, nothing was pushed or merged, no `fly` command was run, and Stripe was not called.
+
+---
+
+## Referrer policy as built
+
+Branch `chore/referrer-policy-strict-origin`, rebased onto `main` at `fe284af`.
+Every response now sends `Referrer-Policy: strict-origin`, so every `Referer` the site causes carries the origin and never a path, query or fragment (ADR-038).
+It closes the access log half of the token-in-path leak: on the first load of an old-form emailed link, the token was repeated in the `Referer` of every asset and API call the page made.
+
+- `SECURE_REFERRER_POLICY = "strict-origin"` in `settings/base.py`, beside the CSRF cookie settings; the `same-origin` line in `settings/production.py` is gone, so development, the suite and every deployment send the same value.
+- Nothing else set the header before: no `<meta name="referrer">` in `ui/index.html`, and neither gunicorn, whitenoise nor the catch-all view writes one. `SecurityMiddleware` already sat above whitenoise, so the files whitenoise serves carry it with no middleware change.
+- CSRF: the Referer fallback compares scheme and host only (Django 5.2.17, `django/middleware/csrf.py` lines 297 to 340, reached from lines 436 to 462 when there is no `Origin`), so an origin-only `Referer` passes. Tested in pytest and over TLS.
+- No schema change, no migration, no frontend change.
+
+### Rehearsal, as run (2026-11-18)
+
+Image built from the worktree root, `deploy/docker-compose.rehearsal.yml` up, `seed_demo --force`, then:
+
+- `ps -a`: `web`, `worker`, `beat`, `proxy`, `db`, `redis`, `minio` all `Up`; `migrate` and `minio-bucket` exited 0.
+- `/health/ready/`: both checks `ok`. `/schedule`: 200, `no-cache`, `referrer-policy: strict-origin`, `x-frame-options: DENY`. `/pay/<token>`: 200 and the same header.
+- A hashed JS asset and a hashed CSS asset named from the image, and `/layers.css`: 200, `immutable` on the hashed ones, `referrer-policy: strict-origin` on all three (whitenoise).
+- `/api/users/session/`: 200 and the header. `/api/no-such-thing/`: Django's 404, not the page. `http://localhost/`: 301 to https. `sentry_sdk` not imported.
+- Headless Chromium (Playwright 1.63), first load of `https://localhost/pay/<planted token>`: the browser sent 30 requests and every `Referer` was `https://localhost/` or absent; of the 29 access log lines that followed the document, 0 carried the token in the `Referer`. The token was still in the request line of the document and of `GET /api/billing/pay/<token>/`, which is the fragment branch's to fix.
+- The same load with the browser forced back to `same-origin` (a Playwright route rewriting the header on every response): 27 of 29 lines carried the token in the `Referer`, so the probe goes red without the change.
+- Sign-in through the UI over TLS as `owner@sparkle-clean.test`, code read from the web log: lands on `/schedule`. The login and verify POSTs went out with `Origin: https://localhost` and `Referer: https://localhost/`.
+- A private object: a PNG uploaded from the signed-in page through `POST /api/scheduling/job-photos/` (CSRF checked), 201; the returned URL is signed, 200 with the signature and 403 without.
+- The Referer fallback in production shape, with curl and no `Origin`, signed in, `POST /api/users/logout/`: `Referer: https://evil.example/` 403, no `Referer` 403, `Referer: https://localhost/` 200. Run twice, same result.
+- An issued invoice emailed: 202, and the worker logged the message and `send_invoice_email ... succeeded`.
+- Brought down with `down -v`.
+
+Not driven: a real cross-origin navigation to Stripe (no Stripe keys in the rehearsal), Firefox or Safari, and the dev server (Vite sends no `Referrer-Policy`; see ADR-038, Consequences).
+
+### Phase gate - as built
+
+1. **Test coverage.** Backend 2483 to 2492 (+9): `app/tests/test_referrer_policy.py` (6: the setting, an API response, and a signed-in POST over `secure=True` with an origin-only `Referer` and no `Origin`, with `Origin` too, a foreign `Referer`, and neither), `app/tests/test_spa.py` (2: the header on the index document, and on a file whitenoise serves with `SecurityMiddleware` above it), `app/tests/test_settings_production.py` (1: production keeps the value). Reverting the setting turns the five header tests red; the four CSRF tests stay green by design, since they prove compatibility, not the header. Frontend untouched, 459. Gaps: no browser test in CI asserts the `Referer` a page sends; that was checked in the rehearsal only.
+2. **DRY.** One setting in one module replaces the production-only line; the tests read it through responses, not by restating it.
+3. **Modularity.** Settings only; Django's `SecurityMiddleware` applies it. No view, serializer or app module changed.
+4. **Orthogonality.** No new coupling between apps. Couplings to note: `SecurityMiddleware` must stay above whitenoise in `MIDDLEWARE` for the assets to carry the header (asserted in `app/tests/test_spa.py`, as the clickjacking header already was); the Vite dev server serves the development page without the header, so the dev page's own `Referer`s follow the browser default. `CLAUDE.md` was not edited.
+5. **Security.** No model, endpoint, task or `AllowAny` added; the change only sends less. CSRF verified in pytest and over TLS as above. Deploy audit clean. The rehearsal signed in over TLS and wrote a private object. `/security-review` was not run as a skill; the diff was reviewed by hand, and the no-mistakes gate owns the review.
+6. **Branch and production guard.** All work is on `chore/referrer-policy-strict-origin`. Nothing committed to `main`, pushed or merged; no `fly`, no live service, no `migrate` against the dev database. Docker: only the `pink-glove-rehearsal` project, brought down with its volumes; the `pink-glove` dev stack was not touched.
