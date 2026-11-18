@@ -103,6 +103,10 @@ class CustomerSerializer(TenantModelSerializer):
     display_name = serializers.CharField(read_only=True)
     locations = ServiceLocationSummarySerializer(many=True, read_only=True)
 
+    #: Choices the enum keeps but a write refuses (ADR-035). The import's
+    #: template hint reads this too, so it never offers what a row cannot hold.
+    unavailable_choices = {"preferred_contact_method": frozenset({ContactMethod.SMS})}
+
     class Meta(TenantModelSerializer.Meta):
         model = Customer
         fields = (
@@ -162,7 +166,7 @@ class CustomerSerializer(TenantModelSerializer):
         read, and it comes back when SMS ships. Every write path reaches
         this: create, update, and the import, which validates rows here.
         """
-        if value == ContactMethod.SMS:
+        if value in self.unavailable_choices["preferred_contact_method"]:
             raise serializers.ValidationError(SMS_UNAVAILABLE)
         return value
 

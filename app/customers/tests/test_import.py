@@ -1227,7 +1227,8 @@ class TestTemplate:
             for column in authed_client.get(TEMPLATE_URL).json()["columns"]
         }
 
-        assert hints["preferred_contact_method"] == "One of: email, sms, phone."
+        # `sms` is refused until SMS ships (ADR-035), so the hint does not offer it.
+        assert hints["preferred_contact_method"] == "One of: email, phone."
         assert hints["has_pets"] == "yes or no."
         assert hints["gate_code"] == "Stored encrypted. It is not shown again after the import."
 

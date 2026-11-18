@@ -74,7 +74,11 @@ def _hint(column: Column, serializer_field) -> str:
     if serializer_field.write_only:
         hint = "Stored encrypted. It is not shown again after the import."
     elif isinstance(serializer_field, serializers.ChoiceField):
-        hint = "One of: " + ", ".join(str(choice) for choice in serializer_field.choices) + "."
+        unavailable = getattr(serializer_field.parent, "unavailable_choices", {}).get(
+            serializer_field.field_name, ()
+        )
+        offered = [str(choice) for choice in serializer_field.choices if choice not in unavailable]
+        hint = "One of: " + ", ".join(offered) + "."
     elif isinstance(serializer_field, serializers.BooleanField):
         hint = "yes or no."
     else:
