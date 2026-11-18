@@ -3577,3 +3577,25 @@ Not driven: a real cross-origin navigation to Stripe (no Stripe keys in the rehe
 4. **Orthogonality.** No new coupling between apps. Couplings to note: `SecurityMiddleware` must stay above whitenoise in `MIDDLEWARE` for the assets to carry the header (asserted in `app/tests/test_spa.py`, as the clickjacking header already was); the Vite dev server serves the development page without the header, so the dev page's own `Referer`s follow the browser default. `CLAUDE.md` was not edited.
 5. **Security.** No model, endpoint, task or `AllowAny` added; the change only sends less. CSRF verified in pytest and over TLS as above. Deploy audit clean. The rehearsal signed in over TLS and wrote a private object. `/security-review` was not run as a skill; the diff was reviewed by hand, and the no-mistakes gate owns the review.
 6. **Branch and production guard.** All work is on `chore/referrer-policy-strict-origin`. Nothing committed to `main`, pushed or merged; no `fly`, no live service, no `migrate` against the dev database. Docker: only the `pink-glove-rehearsal` project, brought down with its volumes; the `pink-glove` dev stack was not touched.
+
+---
+
+## Lead promotion on booking as built
+
+Branch `feat/promote-lead-on-booking`, cut from `main` at `e39bae2`.
+Booking work for a Lead promotes them to Active (ADR-037).
+
+- `scheduling.services.promote_lead(customer)` is one conditional UPDATE of `status` and `updated_at`, scoped by pk, organization and `status = 'lead'`.
+- A one-off visit: called last in `JobSerializer.create`, inside its existing transaction.
+- A recurring plan: `RecurringPlanViewSet.perform_create` now wraps the plan row, `materialize_plan` and the promotion in one transaction; a paused plan promotes no one.
+- Behaviour change beyond the status: a plan whose visits cannot be priced was a 400 that left the plan row behind; it is now rolled back.
+- No schema change, no migration, no frontend change: no response carries the customer's status, and the customers page refetches on mount with no store caching customers.
+
+### Phase gate - as built
+
+1. **Test coverage.** Backend 2351 to 2376 (+25), all in `scheduling/tests/test_lead_promotion.py`: both booking paths, every role that may book, the three statuses that do not move, all seven 400 paths, delete and cancel do not demote, nightly materialization does not promote, three cross-tenant tests. Run twice; turning the promotion into a no-op turns 7 red, and dropping the plan transaction turns 1 red. Frontend unchanged at 427, not re-run. Gaps: admin and `seed_demo` paths untested (they do not promote by design); nothing was run in a browser.
+2. **DRY.** One function, called from the two booking paths; no client-side copy of the rule.
+3. **Modularity.** The rule lives in `scheduling/services.py`; the serializer and the view call it.
+4. **Orthogonality.** No new coupling beyond `scheduling.services` importing `customers.enums` and `customers.models`, the direction that already existed. Nothing in `customers` imports scheduling for this.
+5. **Security.** No new endpoint, model, task, `AllowAny` or `allowed_while_inactive`. The update filters on the customer's own organization and the booking's customer is tenant-validated before it. `/security-review` was run on the diff: no findings.
+6. **Branch and production guard.** All work is on `feat/promote-lead-on-booking`; nothing committed to `main`, pushed or merged; no `fly`, no `migrate` against the dev database.

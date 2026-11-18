@@ -1760,6 +1760,68 @@ The fragment key `token` is spelled in `app/base/links.py` and `ui/src/lib/linkT
 
 ---
 
+## ADR-037: Booking work for a Lead makes them Active, once, in the booking's transaction
+
+**Decided (2026-11-18).**
+`Customer.status` (`lead`, `active`, `inactive`, `archived`) is a hand-set label, and new customers start as `lead`.
+Nothing changed it when work was booked, so a customer with visits on the board stayed a Lead until someone edited them.
+Booking work for a Lead now promotes them to `active`.
+
+**What counts as booking.**
+Two paths, both through the API, both dispatcher and above:
+
+- a one-off visit created with `POST /api/scheduling/jobs/`;
+- a recurring plan created with `POST /api/scheduling/plans/`, promoted once at creation, not per job: its jobs are bulk-created by `materialize_plan`, which also runs nightly and would otherwise promote on every top-up.
+
+A plan created active counts even when its first visit falls past the eight-week horizon and nothing reaches the board yet: it is a standing booking all the same.
+A plan created paused (`is_active: false`) books nothing and promotes no one.
+Editing a visit or a plan, including pointing it at another customer, and reactivating a paused plan, are not bookings here: they correct or resume one.
+
+**Only `lead` moves.**
+`inactive` and `archived` are somebody's decision about the customer, and a booking does not overrule it; `active` has nowhere to go.
+Booking for an inactive or archived customer is allowed today (nothing in scheduling reads the customer's status) and this ADR does not change that.
+
+**How.**
+`scheduling.services.promote_lead(customer)` is one conditional `UPDATE ... SET status = 'active', updated_at = now() WHERE pk = %s AND organization_id = %s AND status = 'lead'`.
+Not a `save()` of the instance the booking holds: the WHERE clause re-reads the status, so a status changed since the booking form was loaded is not overwritten, and no other field of a stale copy is written back.
+The organization is in the WHERE clause as well as implied by the primary key.
+The one-off path calls it last in `JobSerializer.create`, which is already atomic, so a crew refused after the job row was written takes the promotion back with the job.
+The plan path wraps `perform_create` (the plan row, `materialize_plan` and the promotion) in one transaction.
+Scheduling already imports `customers.models`; the new import of `customers.enums` runs the same way, and nothing in `customers` imports scheduling for this.
+
+**A refused booking promotes no one.**
+Every 400 on both paths leaves a Lead a Lead, including the two that are raised after a row was written: a refused crew, and a plan whose visits cannot be priced.
+That second one changes behaviour beyond the status: before this, `perform_create` saved the plan and then let `materialize_plan` raise, so the caller got a 400 naming `service` and the plan stayed behind (reproduced through the API before the change).
+It is now rolled back with everything else, because a 400 that promotes nobody but keeps the plan would be a booking and not a booking at once.
+
+**Cancelling or deleting does not demote.**
+A Lead who has had work booked is a customer, whatever happened to that visit; and demoting would mean deciding which of `lead`, `inactive` or "whatever it was before" is right, which is a person's call.
+A test pins that delete and cancel leave `active` alone.
+
+**Rejected -- a signal (`post_save` on `Job` or `RecurringPlan`).**
+It would fire for every save of every job: nightly materialization, admin edits, `seed_demo`, tests and the import of anything later.
+Telling "this save is a booking" from all of those inside a receiver is the rule restated in the wrong place, and ADR-033 already refuses signals in scheduling for being per-instance and invisible.
+
+**Rejected -- promoting in `materialize_plan`.**
+It runs nightly for every active plan, so it would re-promote a customer someone deliberately moved back to `lead`, every night, with no booking in sight.
+
+**Rejected -- deriving the status from whether live work exists.**
+`status` is a label people set, and ADR-031 already treats it as theirs (an import keeps a given status as written).
+Deriving it would take `inactive` and `archived` away from the people who set them, and make every list of customers a join on jobs.
+
+**Rejected -- promoting in the frontend after a 201.**
+A second request that can fail on its own, and an authorization decision (who may change a status) in the UI; every other client would skip it.
+
+**Django admin and `seed_demo` do not promote.**
+The admin edits rows directly and passes through no booking rule, as it passes through none of the state machine (ADR-033); whoever uses it sets the status in the same tool.
+`seed_demo` builds its plans through `materialize_plan`, not the API, and sets statuses as it means them; its customers are left as they are created, so the demo still shows Leads with booked visits until it is changed to say otherwise.
+
+**Consequences.**
+The response of either booking does not carry the customer's status (`CustomerSummarySerializer` has no `status`), so there is no schema change.
+The customers list reads the status from the server on every visit to the page, and no store caches customers, so it shows Active after the booking without any frontend change.
+
+---
+
 ## ADR-038: Every Referer the site causes carries only its origin
 
 **Decided (2026-11-18).**
