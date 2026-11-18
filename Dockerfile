@@ -89,11 +89,14 @@ COPY --chown=app:app app/ /code
 # persisted into the image and are never used to encrypt anything or reach
 # any service; production settings only check they are present, and the
 # Fernet key is parsed on first use, not at import. The real ones come from
-# the environment at runtime.
+# the environment at runtime. The same list as app/bin/deploy-audit.sh: a
+# new required production variable is added in both.
 RUN SECRET_KEY=build-time-only \
     ALLOWED_HOSTS=localhost \
     FRONTEND_BASE_URL=https://localhost \
     FIELD_ENCRYPTION_KEY=build-time-only-not-a-key \
+    DEFAULT_FROM_EMAIL=build-time-only@pink-glove.invalid \
+    EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend \
     MEDIA_BACKEND=s3 \
     MEDIA_BUCKET=build-time-only \
     DJANGO_SETTINGS_MODULE=app.settings.production \

@@ -6,11 +6,16 @@ at the first request. `manage.py check --deploy --settings=app.settings.producti
 should come back clean.
 """
 
+from email.utils import parseaddr
+
 from django.core.exceptions import ImproperlyConfigured
 
 from .base import *  # noqa: F403
 from .base import (
     ALLOWED_HOSTS,
+    DEFAULT_FROM_EMAIL,
+    EMAIL_BACKEND,
+    EMAIL_HOST_PASSWORD,
     FIELD_ENCRYPTION_KEY,
     FRONTEND_BASE_URL,
     MEDIA_BUCKET,
@@ -80,6 +85,35 @@ if STRIPE_PLATFORM_PRICE_ID and not STRIPE_ENABLED:
     )
 
 # --------------------------------------------------------------------------
+# Email
+# --------------------------------------------------------------------------
+# Sign-in codes and invoices leave by email, and mail that is never accepted
+# fails without a sound: the owner waits for a code that is not coming. The
+# two ways that happens by configuration alone are refused here.
+
+_from_local, _from_at, _from_domain = parseaddr(DEFAULT_FROM_EMAIL)[1].rpartition("@")
+_from_domain = _from_domain.lower()
+if (
+    not (_from_local and _from_at and _from_domain)
+    # base.py's default, and reserved (RFC 2606): no receiver accepts it.
+    or _from_domain in {"example.com", "example.net", "example.org"}
+    or _from_domain.endswith((".example.com", ".example.net", ".example.org"))
+):
+    raise ImproperlyConfigured(
+        f"DEFAULT_FROM_EMAIL={DEFAULT_FROM_EMAIL!r} is not an address mail can be sent from. "
+        "Set it to a sender on a domain you have authenticated (docs/DEPLOY.md, 'Email')."
+    )
+
+# Only the backend that needs it: a rehearsal or a first staging deploy
+# prints mail with the console backend and has no key to give.
+if EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend" and not EMAIL_HOST_PASSWORD:
+    raise ImproperlyConfigured(
+        "EMAIL_BACKEND is SMTP but EMAIL_HOST_PASSWORD is empty, so every sign-in code and "
+        "invoice would be refused by the mail server. Set EMAIL_HOST_PASSWORD (the SendGrid "
+        "API key), or set EMAIL_BACKEND to the console backend to print mail instead."
+    )
+
+# --------------------------------------------------------------------------
 # Media
 # --------------------------------------------------------------------------
 # Photographs of the inside of people's homes, so where they land is checked
@@ -138,3 +172,35 @@ SECURE_HSTS_PRELOAD = config("SECURE_HSTS_PRELOAD", default=True, cast=bool)  # 
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"
 X_FRAME_OPTIONS = "DENY"
+
+# --------------------------------------------------------------------------
+# Error tracking (ADR-029)
+# --------------------------------------------------------------------------
+# Optional, like Stripe: with no DSN nothing is initialised and `sentry_sdk`
+# is never imported. Last in this file on purpose: a deployment that fails
+# one of the checks above never gets as far as reporting anywhere. Only this
+# module starts it, so development and the test suite cannot send an event.
+
+SENTRY_DSN = config("SENTRY_DSN", default="")  # noqa: F405
+if SENTRY_DSN:
+    # Staging and production are the same image and the same settings, so
+    # nothing here can tell them apart. An event filed under the wrong one is
+    # a production error nobody looks at; refuse to guess.
+    SENTRY_ENVIRONMENT = config("SENTRY_ENVIRONMENT", default="")  # noqa: F405
+    if not SENTRY_ENVIRONMENT:
+        raise ImproperlyConfigured(
+            "SENTRY_DSN is set but SENTRY_ENVIRONMENT is not. Set it to 'staging' or "
+            "'production' (docs/DEPLOY.md, 'Error tracking'), or unset the DSN."
+        )
+    # Fly puts the image a machine was started from in FLY_IMAGE_REF, which
+    # is unique per deploy and is what `fly releases --image` lists. Never
+    # left to the SDK: unset, it goes looking for a git checkout.
+    SENTRY_RELEASE = (
+        config("SENTRY_RELEASE", default="")  # noqa: F405
+        or config("FLY_IMAGE_REF", default="")  # noqa: F405
+        or "unknown"
+    )
+
+    from app import sentry
+
+    sentry.init(dsn=SENTRY_DSN, environment=SENTRY_ENVIRONMENT, release=SENTRY_RELEASE)

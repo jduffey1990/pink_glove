@@ -3073,3 +3073,333 @@ All of this is on `feat/team-management`.
 Nothing was committed to `main`, nothing was pushed or merged, and no `fly` command or staging or production resource was touched.
 The branch was rebased onto `main` at 6ef6f78, at the orchestrator's instruction, and then onto `main` at cbe39bd, before anything had been pushed.
 One migration, `users/0003`; none in any other app.
+
+---
+
+## Ops readiness as built
+
+Branch `feat/ops-readiness`, written on top of `7843a71` and rebased onto `main` at `6ad5eb8` once Phase 4c had merged.
+Backend 1049 → 1203 as written, and 1234 → 1400 on the rebased tip; frontend untouched, and the schema did not change.
+Everything below was recorded before the rebase; what the rebase changed and what was checked again is in "After Phase 4c" at the end.
+Production does not exist yet and only Jordan stands it up, so this is everything the repository can provide: code, settings guards, runbook steps as exact commands, and a local rehearsal that proves the ones that can be proved here.
+What the brief asked for, and what each turned into:
+
+**Error tracking → Sentry, ADR-029.**
+`app/sentry.py`, started only by `settings/production.py` and only when `SENTRY_DSN` is set; `sentry_sdk` is imported inside `init()` and nowhere else.
+A DSN without `SENTRY_ENVIRONMENT` is refused at import, and the release is `FLY_IMAGE_REF`.
+What may leave is decided twice: the SDK is told not to collect bodies, locals, cookies or the user, and to send error events only; `before_send` removes them again and redacts by name, and redacts tokens carried in URL paths.
+The three states the brief names are tested: no DSN (a child process under production settings reports that neither `sentry_sdk` nor `app.sentry` was imported after the URLconf and every task module were loaded), a DSN with a transport that keeps envelopes (a view that raises, a task that raises and an ERROR log line are each reported, and twelve planted values, in the body, a local, a query string, a cookie, two headers, a task argument, a log `extra`, a SQL parameter, two URL paths and the client address, are in none of them), and production settings importing cleanly through `bin/deploy-audit.sh`, which a test now runs.
+A control proves the planted values are there to be seen when nothing removes them.
+The SDK patches Django for the life of the process, so the suite never starts it; those tests read a child interpreter's report.
+
+**Email that arrives → two refusals and a runbook.**
+`production.py` refuses a `DEFAULT_FROM_EMAIL` that is not an address or is on `example.com`/`.net`/`.org`, and refuses the SMTP backend with an empty `EMAIL_HOST_PASSWORD`.
+The placeholders went into `bin/deploy-audit.sh`, the Dockerfile's collectstatic layer and the rehearsal compose file, which all import production settings.
+`docs/DEPLOY.md`, "Email", has the SendGrid domain authentication (SPF and DKIM by CNAME, DMARC by TXT), the restricted API key, and a verification with `dig` and `sendtestemail` and the three PASS lines to expect.
+
+**Backup and restore → a runbook, a command, and a drill that was run.**
+`docs/DEPLOY.md`, "Backup and restore": what must survive, where `FIELD_ENCRYPTION_KEY` lives and why never beside the dump, how often, the `pg_dump` through `fly proxy`, the media copy with a read-only key, the drill, and the order of a real restore.
+`manage.py check_field_encryption` is the drill's last step: it decrypts every encrypted column of every row and prints counts, never a code, so the check can be run on real data without becoming a way round the audited reveal.
+The drill was run against the rehearsal stack; its output is below.
+
+**Stripe failed-event replay → an admin action.**
+"Re-queue the selected FAILED events" on the Stripe events list hands each row to `process_stripe_event` as `(organization_id, stripe_event_id)`.
+The rule is `billing.webhook.replay`: FAILED rows that an organization owns, and nothing else; a row stays FAILED until a worker has applied it.
+Refusals are counted on the page, a broker that will not take the message is reported on the page, and each replay is written to the admin log.
+Superusers only, on top of the admin's own requirement of a session that cleared the second factor.
+Driven over TLS in the production image as well as in pytest: refused with a redirect before the second factor, offered after it, queued through Redis, and applied by the worker.
+
+**The rehearsal → run in full, and it found a dead worker.**
+A freshly built image passed its health check with `worker` and `beat` exited: `ModuleNotFoundError: No module named 'packaging'` from `kombu/transport/redis.py`.
+`celery>=5.6,<6` now resolves to celery and kombu 5.7.0, where kombu moved `packaging` behind its `redis` extra; the image from five weeks ago (kombu 5.6.2) had it, and nothing declared it.
+CI could not have seen it: the suite runs tasks eagerly, pytest brings `packaging` with it, and the image job only checks the build finishes.
+On Fly the web check would have passed too.
+Fixed by depending on `celery[redis]`, and by importing the broker transport as a build step so the next one fails the image build.
+That fix was taken off this branch and merged to `main` on its own, ahead of the rest (`2c67938`), so it is no longer one of this branch's commits.
+The rehearsal instructions were right as far as they went and blind in one place: nothing in them looked at `worker` or `beat`, and `up -d` reports success when both start and then exit.
+`docs/DEPLOY.md` now starts the checks with `ps`, adds an emailed invoice as the one check that goes through Redis to the worker, and says the same about `fly status` after every deploy.
+
+**Also found: the deploy audit failed on a development machine.**
+`python-decouple` fills anything the environment leaves out from `app/.env`, and a `.env` with a Stripe key and no Connect webhook secret tripped `production.py` before the audit ran.
+CI has no `.env`, so it only passed there.
+The script now sets the optional integrations empty.
+
+### Rehearsal, as run (2026-11-16)
+
+Image built from this branch (Python 3.13.18, celery 5.7.0, kombu 5.7.0, packaging 26.3, sentry-sdk 2.75.0), `up -d`, `seed_demo --force`.
+The blocks in this section and the next are the output of the scripts that drove the stack with `curl`, `docker compose` and the AWS CLI.
+Timestamps, task ids and scratch paths are trimmed, and where a block says condensed, long output was cut down to the fields named.
+
+```
+SERVICE   STATUS
+beat      Up 28 seconds
+db        Up 4 minutes (healthy)
+minio     Up 4 minutes (healthy)
+proxy     Up 4 minutes
+redis     Up 4 minutes (healthy)
+web       Up 28 seconds (healthy)
+worker    Up 28 seconds
+--- health
+{"status": "ok", "checks": {"database": "ok", "redis": "ok"}}
+--- /schedule
+HTTP/2 200
+cache-control: no-cache
+--- asset
+HTTP/2 200
+cache-control: max-age=315360000, public, immutable
+--- unknown api path
+404 text/html; charset=utf-8
+--- http -> https
+HTTP/1.1 301 Moved Permanently
+Location: https://localhost/
+--- sign in over TLS as owner@sparkle-clean.test
+session (anonymous) 200
+login 202
+login body keys: ['detail', 'two_factor_required']
+dev_code present: False
+code read from the web log: <6 digits, found>
+verify 200
+session (signed in) 200
+{'email': 'owner@sparkle-clean.test', 'current_role': 'owner'}
+cookie flags:
+  sessionid: secure=TRUE httponly=yes
+  csrftoken: secure=TRUE httponly=no
+local file sha256: 3bca58e912e0494706c7307462badf49d832b7121e915f1f4782084148e25d82
+job: 5e55e54a-48df-44db-ab7e-03adbee4ad4b
+upload 201
+object url : http://s3.localhost:9000/pink-glove-media/job_photos/2026/11/photo.png
+signed with: ['X-Amz-Algorithm', 'X-Amz-Credential', 'X-Amz-Date', 'X-Amz-Expires', 'X-Amz-Signature', 'X-Amz-SignedHeaders']
+expires in : ['300']
+GET with signature    200
+fetched sha256:    3bca58e912e0494706c7307462badf49d832b7121e915f1f4782084148e25d82
+GET without signature 403
+--- bucket listing, anonymous
+anonymous list 403
+--- email an issued invoice (Celery -> worker log)
+send 202
+worker-1  | Subject: Invoice SPK-0003 from Sparkle Clean
+worker-1  | From: pink glove rehearsal <noreply@pink-glove.invalid>
+worker-1  | To: dana.whitfield@sparkle-clean.test
+worker-1  | Task billing.send_invoice_email[task id] succeeded in 0.21s: True
+```
+
+Error tracking in the same image (condensed: each event was printed as JSON, and the lines below are its fields):
+
+```
+== no DSN (the stack as it runs)
+SENTRY_DSN set: False | sentry_sdk imported: False | app.sentry imported: False
+== a DSN without an environment
+ImproperlyConfigured: SENTRY_DSN is set but SENTRY_ENVIRONMENT is not. Set it to 'staging' or 'production' (docs/DEPLOY.md, 'Error tracking'), or unset the DSN.
+== a DSN pointing at a listener on the container's own loopback, standing in for Sentry
+   (the real HTTP transport; the login view made to raise, with a password and a gate code in the body)
+SINK received POST /api/1/envelope/ (11511 bytes after gunzip)
+SINK envelope item types: ['event']
+  environment: rehearsal   release: registry.fly.io/pink-glove-rehearsal:deployment-LOCAL
+  exception: RuntimeError "rehearsal: the login view failed"   transaction: /api/auth/login/
+  request.headers: Cookie [Filtered], Fly-Client-Ip [Filtered], Content-Type, Content-Length, Host
+  request.query_string: token=[Filtered]      request.data: absent      user: absent
+SINK contains 'PLANTED': False
+SINK contains '203.0.113.77': False
+== the check docs/DEPLOY.md hands to Jordan, in a container with no network at all
+ERROR ... ops error tracking check
+SINK received POST /api/1/envelope/   item types: ['event']   message: "error tracking check"   environment: staging
+== a worker started with a broker transport it cannot load (the shape of the kombu failure)
+SINK received POST /api/1/envelope/   item types: ['event']   KeyError: 'No such transport: nosuchtransport'
+```
+
+The image was rebuilt from the branch's final application code after the last change to `app/sentry.py` and rechecked in containers with no network: the broker transport imports, `sentry_sdk` is not imported without a DSN, the documented check delivers one event, and the two email refusals fire:
+
+```
+== the example.com sender
+ImproperlyConfigured: DEFAULT_FROM_EMAIL='support@example.com' is not an address mail can be sent from. Set it to a sender on a domain you have authenticated (docs/DEPLOY.md, 'Email').
+== SMTP with no password
+ImproperlyConfigured: EMAIL_BACKEND is SMTP but EMAIL_HOST_PASSWORD is empty, so every sign-in code and invoice would be refused by the mail server. Set EMAIL_HOST_PASSWORD (the SendGrid API key), or set EMAIL_BACKEND to the console backend to print mail instead.
+== as configured
+System check identified no issues (0 silenced).
+```
+
+The admin replay, over TLS:
+
+```
+rows: [('evt_rehearsal_done', 'processed'), ('evt_rehearsal_failed', 'failed')]
+login 202
+--- before the second factor, the admin refuses the action
+POST action 302 -> https://localhost/admin/login/?next=/admin/billing/stripeevent/
+verify 200
+--- after it: the list offers the action, and it runs
+GET changelist 200
+<option value="replay_failed">Re-queue the selected FAILED events
+POST action 302
+[success] Re-queued 1 event(s). Each stays FAILED until a worker has applied it: reload in a few seconds.
+[warning] 1 event(s) not re-queued: only FAILED events that an organization owns can be replayed (selected: processed).
+--- the worker
+worker-1  | Task billing.process_stripe_event[task id] received
+worker-1  | Task billing.process_stripe_event[task id] succeeded in 0.086s: 'processed'
+web-1  | INFO billing.admin Stripe event evt_rehearsal_failed (account.updated) re-queued from the admin by user 365aefd1-...
+```
+
+### Restore drill, as run (2026-11-16)
+
+Against the rehearsal stack, with MinIO as the bucket and the AWS CLI given a config and credentials file of its own.
+
+```
+### 1. what is in the live rehearsal database
+customers.ServiceLocation.gate_code: 2 readable, 0 unreadable
+customers.ServiceLocation.alarm_code: 2 readable, 0 unreadable
+customers.ServiceLocation.key_location: 0 readable, 0 unreadable
+OK: all 4 encrypted values are readable with this FIELD_ENCRYPTION_KEY.
+locations|6
+invoices|8
+payments|4
+job photos|1
+migrations applied|71
+### 2. pg_dump (custom format, no owner, no ACLs)
+pg_dump (PostgreSQL) 17.10
+200739 bytes  pink-glove.dump
+tables in the dump: 40
+### 3. the dump holds ciphertext, not codes
+rows carrying a Fernet token (gAAAAA...): 2
+occurrences of the seeded gate code 4821#: 0
+occurrences of the seeded alarm code 9930: 0
+### 4. the media bucket
+download: s3://pink-glove-media/job_photos/2026/11/photo.png to media/job_photos/2026/11/photo.png
+3bca58e912e0494706c7307462badf49d832b7121e915f1f4782084148e25d82  media/job_photos/2026/11/photo.png
+```
+
+Part A, the sequence `docs/DEPLOY.md` gives Jordan, verbatim:
+
+```
+### A1. a fresh database, and the dump restored into it
+pg_restore exit: 0
+### A2. the right key reads it
+customers.ServiceLocation.gate_code: 2 readable, 0 unreadable
+customers.ServiceLocation.alarm_code: 2 readable, 0 unreadable
+customers.ServiceLocation.key_location: 0 readable, 0 unreadable
+OK: all 4 encrypted values are readable with this FIELD_ENCRYPTION_KEY.
+exit: 0
+### A3. the schema is the one this image expects   (migrate --check)
+exit: 0
+### A4. a different key does not
+customers.ServiceLocation.gate_code: 0 readable, 2 unreadable
+customers.ServiceLocation.alarm_code: 0 readable, 2 unreadable
+customers.ServiceLocation.key_location: 0 readable, 0 unreadable
+CommandError: 4 of 4 encrypted values cannot be read with this FIELD_ENCRYPTION_KEY. It is not the key this database was written with.
+exit: 1
+```
+
+Part B goes further than the drill asks: a second, empty Postgres server under a different owner, a second bucket, and the whole app booted against both.
+Condensed in two places: the `ps` table is cut to the services that changed, and the sign-in is one line.
+
+```
+### B1. a second, empty Postgres server owned by a different role
+restore_owner|0
+### B2. restore into it
+pg_restore exit: 0
+locations|6
+invoices|8
+payments|4
+job photos|1
+migrations applied|71
+tables owned by restore_owner|40
+### B3. a second bucket, and the media copied back
+make_bucket: pink-glove-media-restored
+upload: media/job_photos/2026/11/photo.png to s3://pink-glove-media-restored/job_photos/2026/11/photo.png
+### B4. boot the whole app against the restored copy
+beat           Up 10 seconds
+db-restored    Up 31 seconds (healthy)
+migrate        Exited (0) 11 seconds ago
+web            Up 10 seconds (healthy)
+worker         Up 10 seconds
+--- migrate (the release command) said:
+migrate-1  |   No migrations to apply.
+--- the running web process is on:
+postgres://<credentials>@db-restored:5432/restored
+pink-glove-media-restored
+--- sign in over TLS: login 202, code from the web log, verify 200, session 200 as owner
+### B5. an encrypted field, read through the app's own audited reveal
+reveal 200
+{'gate_code': '4821#', 'alarm_code': '9930', 'key_location': ''}
+matches the seed (4821# / 9930): True
+### B6. the media object, from the restored bucket
+object: http://s3.localhost:9000/pink-glove-media-restored/job_photos/2026/11/photo.png
+GET with signature    200
+sha256 uploaded : 3bca58e912e0494706c7307462badf49d832b7121e915f1f4782084148e25d82
+sha256 restored : 3bca58e912e0494706c7307462badf49d832b7121e915f1f4782084148e25d82
+GET without signature 403
+### B7. the same reads with a different FIELD_ENCRYPTION_KEY
+CommandError: 4 of 4 encrypted values cannot be read with this FIELD_ENCRYPTION_KEY. It is not the key this database was written with.
+exit: 1
+ValueError: Could not decrypt customers.ServiceLocation.gate_code. FIELD_ENCRYPTION_KEY has probably changed since this row was written.
+```
+
+The codes shown are the seed's, which are in `seed_demo.py`; the drill on real data ends on `check_field_encryption`, which shows none.
+The stack was brought down with `down -v` afterwards.
+
+### Built, not verified here
+
+Each needs a live service, so each is Jordan's, with the command in `docs/DEPLOY.md`:
+
+- Staging's secrets satisfy the new refusals. `DEFAULT_FROM_EMAIL` must be set to a non-example address, and either `EMAIL_BACKEND` is the console backend or `EMAIL_HOST_PASSWORD` is set. If not, the next deploy's release command fails and the old release keeps serving.
+- `FLY_IMAGE_REF` is present on a Fly machine, so the release tag is the image and not `unknown`.
+- Sentry receives an event from Fly ("Error tracking", step 3), and its alert rule emails an address that is read.
+- SendGrid's domain authentication screens, record shapes and error texts ("Email", steps 1 to 5).
+- `fly proxy`, `fly ssh console -C 'printenv DATABASE_URL'`, `fly volumes snapshots list`, the Tigris read-only key and endpoint, and the whole of "Restoring production". The `pg_dump`, `pg_restore`, `aws s3 sync` and drill lines were run locally; the `fly` lines around them were not.
+- `pg_dump` 17 on the development Mac: the one on PATH is 14 and would refuse a Postgres 17 server.
+
+### Phase gate
+
+**1. Test coverage.** Backend 1049 → 1203: 107 in `app/tests/test_sentry.py`, 20 more in `app/tests/test_settings_production.py` (email refusals, error tracking wiring, the audit script), 18 in `billing/tests/test_admin.py`, 9 in `base/tests/test_check_field_encryption.py`.
+The admin action has a test on each side of each line: FAILED and each other status, owned and unowned, superuser, view-only staff, a session without the second factor, anonymous, a broker that refuses, and two runs before a worker gets to one.
+No new tenant-scoped endpoint, so no new cross-tenant endpoint test; the action is tested to hand each row its own organization.
+Gaps: the SDK's real HTTP transport is exercised in the rehearsal and not in pytest; nothing in pytest or CI starts a real worker, so the `celery[redis]` regression is guarded by the image build's import step and by the rehearsal, not by a test; the redaction of `Fly-Client-IP` is tested on a planted header and never seen on a real Fly request; backups are run by hand and nothing checks that one was taken.
+
+**2. DRY.** The `enqueue` and `no_fee` fixtures moved to `billing/tests/conftest.py` when the admin tests needed them too. The settings probe takes its production environment from the settings tests' baseline. Left: the placeholders production settings need to import appear in `bin/deploy-audit.sh`, the Dockerfile and the rehearsal compose file, three formats that cannot import one another; listed under 4.
+
+**3. Modularity.** The replay rule is `billing.webhook.replay`, beside `sweep` and the redelivery path; the admin only reports. `check_field_encryption` lives in `base` with the field it checks and finds its columns by field type, so it names no other app. `app/sentry.py` is the only importer of `sentry_sdk`. Nothing in `ui/` changed.
+
+**4. Orthogonality.** New couplings, each noted where it lives:
+- a new required production variable is now added in three places, not one: `app/bin/deploy-audit.sh`, the `collectstatic` layer of the root `Dockerfile`, and `deploy/docker-compose.rehearsal.yml` (and the baseline in `app/tests/test_settings_production.py`). A test runs the audit script, and the image build and the rehearsal fail on the other two;
+- `app/sentry.py` redacts by name. A new secret under a new name (a new encrypted column, a new credential header) is added to its word list, and `app/tests/test_sentry.py` names the ones that exist;
+- the same module treats a URL path segment longer than a UUID as a credential, which is what the pay link's and the magic link's tokens are. A new long, non-secret path segment would be redacted in error reports; a new short bearer token would not be;
+- `celery[redis]` in `pyproject.toml` and the `import kombu.transport.redis` build step in the `Dockerfile` belong together: change the broker and change both.
+`CLAUDE.md` was not edited; the exact lines are in the stream's report.
+
+**5. Security.** No new model, endpoint or Celery task, so invariants 1 to 3 are untouched; the action passes `organization_id` from the row. No new `AllowAny` view in the application: one exists in `app/tests/sentry_probe_app.py`, a URLconf used only by a child test process and included by nothing. The admin still admits only a session that cleared the second factor (tested for the action, in pytest and over TLS); the action adds a superuser requirement and the ledger stays read-only. Access codes stay write-only and encrypted: `check_field_encryption` decrypts in memory, prints counts, records no reveal because no person sees a value, and is tested never to print a code or ciphertext. Nothing sensitive is logged by the new code; the admin logs an event id and a user id. No secret in source: the DSNs in tests are placeholders on `.invalid`, and gitleaks passed on every commit. The deploy audit comes back clean, and the rehearsal signed in over TLS and wrote a private object. What may leave to Sentry is ADR-029. Gap: `/security-review` was not run on the diff; the review above was done by hand.
+
+**6. Branch and production guard.** Everything is on `feat/ops-readiness`; nothing was committed to `main`, pushed or merged. No `fly` command was run, no live service or credential was touched, and nothing was sent to a third party: every DSN was `.invalid` or the container's own loopback, mail went to the console backend, and the AWS CLI was pointed at MinIO on loopback with its own empty configuration. Docker: only the `pink-glove-rehearsal` project, brought down with its volumes; the `pink-glove` project was not touched.
+
+### After Phase 4c (rebased 2026-11-17)
+
+`main` gained the platform subscription (Phase 4c, ADR-028) and the worker fix while this branch was open.
+The branch was rebased onto it; the worker fix dropped out as already applied, and `pyproject.toml` and the `Dockerfile` carry one copy of it with the `sentry-sdk` line beside it.
+Four files conflicted, all of them two appends at the same place, and each kept both sides: `app/.env.example` (the platform block, then error tracking), `billing/tests/conftest.py` (`platform_billing_on`, then the shared `enqueue` and `no_fee`), `docs/DECISIONS.md` (ADR-028, then ADR-029) and this file.
+`docs/DEPLOY.md`, `settings/production.py` and the settings tests merged without one, and the runbook still reads top to bottom: steps 1 to 10, then Production, Email, Error tracking, Backup and restore, the rehearsal and the recovery table.
+
+What 4c changed for this work, and what was done about each:
+
+**The admin replay covers platform events as written.**
+A platform event is ledgered with no account, but it is only ever RECEIVED, and so only ever FAILED, with the organization its Stripe customer resolved to.
+The action hands that organization's id to the same task (invariant 3) and `process` picks the platform handlers from the row's empty account.
+Tested with `checkout.session.completed`, the one type both handler tables share, so a replay sent down the Connect path would record a payment and fail: it re-reads the subscription and writes none.
+A platform event nobody holds has no organization and is refused with a sentence on the page, whatever its status.
+
+**The scrubber needed no change, and the tests now say why.**
+`STRIPE_PLATFORM_WEBHOOK_SECRET` is redacted by name.
+The billing portal's URL and a Checkout URL lose the session they name by the rule for a long path segment; neither is logged today.
+Stripe's ids for a tenant (`cus_`, `sub_`, `acct_`, `price_`) are left readable on purpose: they are names, nothing can be done with one without the platform's key, and they are what an error about a subscription is looked up by.
+
+**Both sets of production guards hold together.**
+The email refusals, the error-tracking refusal and 4c's two (a price without the platform webhook secret, a price without the key) are tested in the one module and pass together.
+4c's settings are all optional, so the Dockerfile, the rehearsal compose file and the settings tests' baseline needed nothing for them.
+The audit script did: with the Stripe key emptied there, a developer's `.env` holding a platform price tripped 4c's "price without the key" refusal, the same leak through `python-decouple` as before, and the script and the settings probe now set the price empty too.
+On a machine with such a `.env`, the commits of this branch before that one fail up to three tests for that reason; with no `.env`, as in CI and the gate, every commit was run on its own and passes.
+
+**`check_field_encryption` and the restore drill hold with `organizations` migration 0006.**
+In the rebased image the release command applied `0006_platform_subscription`, the check read all four seeded values, and part A of the drill was run again: dump (40 tables), restore into a fresh database, right key `OK` and exit 0, `migrate --check` exit 0, a different key `4 of 4 ... cannot be read` and exit 1.
+"Restoring production" gained a step: the subscription fields mirror Stripe, so an older dump restores them stale and the daily task, or a run by hand, corrects them.
+
+The rehearsal was run once more from an image built from the rebased worktree: `web`, `worker` and `beat` up, the health, asset, 404 and redirect checks as before, sign-in over TLS (202, code from the web log, 200), a private object written and read back by signature (200, same SHA-256) and refused without (403), and one invoice emailed through the worker.
+Stack brought down with its volumes.
+
+Backend 1234 → 1400: the 154 above, 4 more in `billing/tests/test_admin.py` and 8 more in `app/tests/test_sentry.py`.
+Still open: `/security-review` was not run; part B of the drill and the mutation check were not repeated after the rebase.

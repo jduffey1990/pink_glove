@@ -12,6 +12,7 @@ several visits on different days, which a fixture cannot give them.
 
 import datetime as dt
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from django.utils import timezone
@@ -53,6 +54,24 @@ def platform_billing_on(settings, stripe_on):
     settings.PLATFORM_BILLING_ENABLED = True
     settings.PLATFORM_TRIAL_DAYS = 30
     settings.PLATFORM_GRACE_DAYS = 14
+
+
+@pytest.fixture
+def enqueue():
+    """
+    The broker, replaced: what would have been queued, without running it.
+    Without this the suite runs tasks inline, which is what a test of the
+    whole path wants and a test of "was it queued, with which ids" does not.
+    """
+    with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
+        yield delay
+
+
+@pytest.fixture
+def no_fee():
+    """Stripe has not attached the fee yet; nothing reaches out to ask."""
+    with mock.patch("billing.connect.fee_cents_for", return_value=None) as fee:
+        yield fee
 
 
 @pytest.fixture

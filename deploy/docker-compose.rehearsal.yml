@@ -60,6 +60,9 @@ x-app: &app
     # sign-in code goes out from the request, so it is in `logs web`; the
     # invoice email goes through Celery, so that one is in `logs worker`.
     EMAIL_BACKEND: django.core.mail.backends.console.EmailBackend
+    # Production settings refuse the example.com default. `.invalid` never
+    # resolves, so nothing could deliver to it even with a real backend.
+    DEFAULT_FROM_EMAIL: pink glove rehearsal <noreply@pink-glove.invalid>
     GUNICORN_WORKERS: "2"
   depends_on:
     db:

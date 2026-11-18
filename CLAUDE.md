@@ -110,7 +110,8 @@ REDIS_URL=redis://localhost:6379/0 \
 
 # Deploy audit -- must come back clean. The script carries the placeholder
 # values production settings need to import at all (ADR-027); a new required
-# production variable is added there, once, and CI runs the same script.
+# production variable is added there, in the Dockerfile's collectstatic layer
+# and in deploy/docker-compose.rehearsal.yml, and CI runs the same script.
 bin/deploy-audit.sh
 
 # The production image, from the REPOSITORY ROOT (the Dockerfile builds ui/

@@ -38,6 +38,10 @@ _BASELINE = {
     "AWS_ACCESS_KEY_ID": "tid_test",
     "AWS_SECRET_ACCESS_KEY": "tsec_test",
     "NUM_PROXIES": "1",
+    "DEFAULT_FROM_EMAIL": "pink glove <billing@pink-glove.test>",
+    "EMAIL_HOST_PASSWORD": "SG.not-a-real-key",
+    # Empty, not absent: no test here may start error reporting by accident.
+    "SENTRY_DSN": "",
 }
 
 
@@ -228,6 +232,147 @@ class TestEmail:
         production = load(unset=("EMAIL_BACKEND",))
 
         assert production.EMAIL_BACKEND == "django.core.mail.backends.smtp.EmailBackend"
+
+    @pytest.mark.parametrize(
+        "sender",
+        [
+            "support@example.com",
+            "pink glove <support@example.com>",
+            "Support@EXAMPLE.COM",
+            "billing@mail.example.org",
+            "noreply@example.net",
+            # Not an address at all.
+            "",
+            "pink glove",
+            "@pink-glove.test",
+        ],
+    )
+    def test_a_sender_nobody_accepts_mail_from_fails_the_start(self, load, sender):
+        """Sign-in codes and invoices would be dropped without a sound."""
+        with pytest.raises(ImproperlyConfigured, match="DEFAULT_FROM_EMAIL"):
+            load(DEFAULT_FROM_EMAIL=sender)
+
+    def test_the_example_sender_is_the_default_and_so_refused_when_unset(self, load):
+        with pytest.raises(ImproperlyConfigured, match="DEFAULT_FROM_EMAIL"):
+            load(unset=("DEFAULT_FROM_EMAIL",))
+
+    def test_a_real_sender_loads_with_or_without_a_display_name(self, load):
+        assert load(DEFAULT_FROM_EMAIL="billing@pink-glove.test").DEFAULT_FROM_EMAIL
+        assert load(DEFAULT_FROM_EMAIL="pink glove <billing@pink-glove.test>").DEFAULT_FROM_EMAIL
+
+    def test_a_domain_that_merely_ends_like_the_example_is_not_refused(self, load):
+        load(DEFAULT_FROM_EMAIL="billing@notexample.com")
+
+    def test_smtp_without_a_password_fails_the_start(self, load):
+        with pytest.raises(ImproperlyConfigured, match="EMAIL_HOST_PASSWORD"):
+            load(unset=("EMAIL_BACKEND",), EMAIL_HOST_PASSWORD="")
+
+    def test_a_backend_that_sends_nothing_needs_no_password(self, load):
+        """A rehearsal, or staging before there is a mail account."""
+        load(
+            EMAIL_BACKEND="django.core.mail.backends.console.EmailBackend",
+            EMAIL_HOST_PASSWORD="",
+        )
+
+
+class TestErrorTracking:
+    """
+    Optional as a whole (ADR-029). `app.sentry.init` is replaced with a
+    recorder: the real one patches Django for the life of the process, and
+    `test_sentry.py` runs it in a child for that reason.
+    """
+
+    @pytest.fixture
+    def started(self, monkeypatch):
+        from app import sentry
+
+        calls = []
+        monkeypatch.setattr(sentry, "init", lambda **kwargs: calls.append(kwargs))
+        return calls
+
+    def test_is_off_when_no_dsn_is_set(self, load, started):
+        production = load(unset=("SENTRY_DSN",))
+
+        assert production.SENTRY_DSN == ""
+        assert started == []
+
+    def test_a_dsn_without_an_environment_fails_the_start(self, load, started):
+        """Staging and production are one image; nothing else tells them apart."""
+        with pytest.raises(ImproperlyConfigured, match="SENTRY_ENVIRONMENT"):
+            load(SENTRY_DSN="https://public@sentry.invalid/1", unset=("SENTRY_ENVIRONMENT",))
+
+        assert started == []
+
+    def test_a_dsn_and_an_environment_start_it_tagged_with_the_fly_image(self, load, started):
+        load(
+            SENTRY_DSN="https://public@sentry.invalid/1",
+            SENTRY_ENVIRONMENT="staging",
+            FLY_IMAGE_REF="registry.fly.io/pink-glove-staging:deployment-01JTEST",
+            unset=("SENTRY_RELEASE",),
+        )
+
+        assert started == [
+            {
+                "dsn": "https://public@sentry.invalid/1",
+                "environment": "staging",
+                "release": "registry.fly.io/pink-glove-staging:deployment-01JTEST",
+            }
+        ]
+
+    def test_an_explicit_release_wins_over_the_image(self, load, started):
+        load(
+            SENTRY_DSN="https://public@sentry.invalid/1",
+            SENTRY_ENVIRONMENT="production",
+            SENTRY_RELEASE="2026.11.16",
+            FLY_IMAGE_REF="registry.fly.io/pink-glove:deployment-01JTEST",
+        )
+
+        assert started[0]["release"] == "2026.11.16"
+
+    def test_off_fly_the_release_is_named_unknown_rather_than_guessed(self, load, started):
+        """Left unset, the SDK shells out to git to find one."""
+        load(
+            SENTRY_DSN="https://public@sentry.invalid/1",
+            SENTRY_ENVIRONMENT="production",
+            unset=("SENTRY_RELEASE", "FLY_IMAGE_REF"),
+        )
+
+        assert started[0]["release"] == "unknown"
+
+    def test_a_refused_configuration_never_gets_as_far_as_reporting(self, load, started):
+        """It is the last thing production.py does."""
+        with pytest.raises(ImproperlyConfigured):
+            load(
+                SENTRY_DSN="https://public@sentry.invalid/1",
+                SENTRY_ENVIRONMENT="production",
+                MEDIA_BACKEND="filesystem",
+            )
+
+        assert started == []
+
+
+class TestDeployAudit:
+    def test_the_audit_script_comes_back_clean(self):
+        """
+        `bin/deploy-audit.sh` carries the placeholders production settings
+        need to import at all. A check added to production.py without its
+        placeholder there fails here, and not first in CI.
+        """
+        import subprocess
+
+        from django.conf import settings
+
+        completed = subprocess.run(  # noqa: S603
+            [str(settings.BASE_DIR / "bin" / "deploy-audit.sh")],
+            env={**os.environ, "PYTHON": sys.executable},
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert "System check identified no issues" in completed.stdout
 
 
 class TestHsts:

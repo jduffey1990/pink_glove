@@ -51,12 +51,6 @@ def ts(when: dt.datetime) -> int:
 
 
 @pytest.fixture
-def enqueue():
-    with mock.patch("billing.tasks.process_stripe_event.delay") as delay:
-        yield delay
-
-
-@pytest.fixture
 def subscriber(db):
     """An organization whose trial is over, holding the fixture customer and subscription."""
     return OrganizationFactory(
