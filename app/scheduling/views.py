@@ -13,6 +13,7 @@ resolved tenant and never from request data.
 import datetime as dt
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -48,6 +49,7 @@ from scheduling.serializers import (
     TimesheetSerializer,
 )
 from scheduling.services import (
+    activate_booked_customer,
     assign_user,
     claim_on,
     clock_in,
@@ -96,13 +98,22 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
         """
         Materialize straight away rather than waiting for tonight's beat run.
         A dispatcher who creates a plan expects to see the visits appear.
+
+        One transaction for the plan, its visits and the customer's move to
+        Active (ADR-037): a plan whose visits cannot be priced is a 400, and
+        a 400 leaves nothing behind -- not the plan, and not an Active customer
+        with nothing booked.
         """
-        super().perform_create(serializer)
         try:
-            materialize_plan(serializer.instance)
+            with transaction.atomic():
+                super().perform_create(serializer)
+                materialize_plan(serializer.instance)
+                if serializer.instance.is_active:
+                    activate_booked_customer(serializer.instance.customer)
         except ValueError as exc:
             raise DjangoValidationError({"service": str(exc)}) from exc
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         """
         Edit the plan, then reconcile the jobs it already created.
@@ -110,10 +121,16 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
         The response carries `regenerated` and `kept` so the dispatcher can see
         what happened to the eight weeks of visits already on the board --
         which is the whole point of ADR-020's rule.
+
+        A paused plan made active, or an active plan handed to another
+        customer, is a booking for whoever it now belongs to (ADR-037). One
+        transaction for the edit, the regeneration and the promotion, so a
+        regeneration refused as a 400 leaves neither the edit nor the status.
         """
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         before = {field: getattr(instance, field) for field in REGENERATING_FIELDS}
+        customer_before = instance.customer_id
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
@@ -128,6 +145,12 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
                 body = {**body, **regenerate_plan(instance)}
             except ValueError as exc:
                 raise DjangoValidationError({"service": str(exc)}) from exc
+
+        booked = instance.is_active and (
+            not before["is_active"] or instance.customer_id != customer_before
+        )
+        if booked:
+            activate_booked_customer(instance.customer)
 
         return Response(body)
 

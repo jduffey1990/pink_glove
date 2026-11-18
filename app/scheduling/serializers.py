@@ -34,7 +34,14 @@ from scheduling.models import (
     TimeEntry,
 )
 from scheduling.models import validate_rrule as _validate_rrule
-from scheduling.services import job_actions, job_claims, next_statuses
+from scheduling.services import (
+    ARCHIVED_CUSTOMER_REFUSAL,
+    activate_booked_customer,
+    job_actions,
+    job_claims,
+    next_statuses,
+    refuses_booking,
+)
 from users.enums import DISPATCHER_ROLES, Role
 
 
@@ -326,6 +333,11 @@ class JobSerializer(TenantModelSerializer):
         end = attrs.get("scheduled_end", getattr(self.instance, "scheduled_end", None))
 
         errors = {}
+        # Booking is a new visit or one handed to another customer; editing
+        # an archived customer's existing visit is not (ADR-037).
+        booked = self.instance is None or customer.id != self.instance.customer_id
+        if booked and refuses_booking(customer):
+            errors["customer"] = ARCHIVED_CUSTOMER_REFUSAL
         if customer and location and location.customer_id != customer.id:
             errors["location"] = "That location belongs to a different customer."
         if start and end and end <= start:
@@ -350,6 +362,21 @@ class JobSerializer(TenantModelSerializer):
 
         job = super().create(validated_data)
         self._assign(job, assignee_ids)
+        # Last, so a refused crew rolls the booking back before it promotes.
+        activate_booked_customer(job.customer)
+        return job
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        """
+        A visit handed to another customer is booked for them (ADR-037): the
+        new customer is promoted, in the edit's transaction. The old one is
+        left as they are.
+        """
+        customer_before = instance.customer_id
+        job = super().update(instance, validated_data)
+        if job.customer_id != customer_before:
+            activate_booked_customer(job.customer)
         return job
 
     def _assign(self, job, user_ids) -> None:
@@ -465,6 +492,14 @@ class RecurringPlanSerializer(TenantModelSerializer):
         ends_on = attrs.get("ends_on", getattr(self.instance, "ends_on", None))
 
         errors = {}
+        # An active plan books an archived customer's work every night, so it
+        # is not saved active; pausing one is how it is stopped and stays
+        # allowed. A paused plan is not handed to an archived customer either
+        # (ADR-037).
+        is_active = attrs.get("is_active", getattr(self.instance, "is_active", True))
+        handed_over = self.instance is not None and customer.id != self.instance.customer_id
+        if refuses_booking(customer) and (is_active or handed_over):
+            errors["customer"] = ARCHIVED_CUSTOMER_REFUSAL
         if customer and location and location.customer_id != customer.id:
             errors["location"] = "That location belongs to a different customer."
         if starts_on and ends_on and ends_on < starts_on:

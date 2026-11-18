@@ -3500,6 +3500,11 @@ paths:
         The response carries `regenerated` and `kept` so the dispatcher can see
         what happened to the eight weeks of visits already on the board --
         which is the whole point of ADR-020's rule.
+
+        A paused plan made active, or an active plan handed to another
+        customer, is a booking for whoever it now belongs to (ADR-037). One
+        transaction for the edit, the regeneration and the promotion, so a
+        regeneration refused as a 400 leaves neither the edit nor the status.
       parameters:
       - in: path
         name: id

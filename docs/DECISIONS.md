@@ -1598,7 +1598,7 @@ They make a task run again; only something stored makes the second run a no-op.
 - the visit's start differs from the start in its latest reminder.
 
 A lead is reminded because a lead with a booked visit is in practice a customer.
-Promoting a lead to active when a visit is booked is approved as a separate, later branch and is not built here; when it lands, this rule needs no change.
+Promoting a lead to active when a visit is booked landed later as ADR-037, and this rule needed no change.
 
 **The customer's contact preference is not consulted, and "Text message" cannot be chosen.**
 Email is the only channel there is, so every customer with an address gets the reminder whatever their preference says.
@@ -1757,6 +1757,101 @@ That attribute is SendGrid's; another provider would need its own equivalent, an
 The SPA paths are `/pay`, `/accept-invite` and `/reset-password`, with the old `/:token` forms as redirect records beside them in `ui/src/router/index.ts`; `billing/connect.py` builds `pay_url` and `stripe_return_url`, both in the fragment form through `token_link`; and the old `/pay/:token` route must outlive the longest Checkout session opened before the deploy, which the 120 days already do.
 The fragment key `token` is spelled in `app/base/links.py` and `ui/src/lib/linkToken.ts`.
 `App.vue` keys the routed page by the link token, so any future page that reads a token from the hash starts over when the token changes.
+
+---
+
+## ADR-037: Booking work makes a Lead or an Inactive customer Active, and an Archived one cannot be booked
+
+**Decided (2026-11-18).**
+`Customer.status` (`lead`, `active`, `inactive`, `archived`) is a hand-set label, and new customers start as `lead`.
+Nothing changed it when work was booked, so a customer with visits on the board stayed a Lead until someone edited them, and an Inactive customer stayed Inactive with work on the board.
+Booking work now moves a Lead or an Inactive customer to `active`, and booking work for an Archived customer is refused.
+
+**What counts as booking.**
+Five writes, all through the API, all dispatcher and above:
+
+- a one-off visit created with `POST /api/scheduling/jobs/`;
+- a recurring plan created active with `POST /api/scheduling/plans/`, moved once at creation, not per job: its jobs are bulk-created by `materialize_plan`, which also runs nightly and would otherwise move the status on every top-up;
+- a paused plan made active by an edit;
+- an active plan handed to another customer by an edit;
+- a visit handed to another customer by an edit.
+
+The edit APIs allow changing a visit's or a plan's `customer` today (the plans page offers it, the visit dialog does not); this ADR does not open or close that.
+For a hand-over the new customer is the one booked; the old customer is never demoted.
+A plan created active counts even when its first visit falls past the eight-week horizon and nothing reaches the board yet: it is a standing booking all the same.
+A plan created paused, a paused plan handed to someone else, and any other edit of a visit or plan for the same customer book nothing and move no one.
+
+**Which statuses move.**
+`lead` and `inactive` become `active`: someone booking work for a customer who had lapsed is the clearest sign they are a customer again, and leaving them Inactive would hide them from whoever reads that label.
+`active` has nowhere to go and is not written at all.
+`archived` is refused, below.
+
+**An Archived customer cannot be booked.**
+Each of the five writes answers 400 on `customer`: "This customer is archived. Unarchive them before booking work."
+Archived means "we are done with them", and a booking is the opposite claim; quietly unarchiving would undo a person's decision, and booking while leaving them archived would put work on the board for someone every list hides.
+The rule is `scheduling.services.refuses_booking`, checked in the serializers' `validate`, so it is refused before anything is written and the message rides the ordinary field-error shape.
+Beyond the five writes, an active plan whose customer is archived is not saved at all except to pause it: any other edit can regenerate the plan's visits (ADR-020), which is booking new ones.
+Pausing stays allowed because it is how such a plan is stopped.
+An archived customer's existing visit may still be edited (rescheduled, noted, cancelled): that is not new work, and refusing it would strand visits already on the board.
+A paused plan may still be created for an archived customer; it books nothing, and making it active is refused.
+A soft-deleted customer was already unbookable, because the default manager hides them from the `customer` field, and that rule is unchanged and pinned by a test.
+Before this change nothing in scheduling read the customer's status, so archived and inactive customers could be booked like anyone else.
+
+**The nightly run, for an active plan whose customer was archived later.**
+Archiving a customer does not touch their plans, so the plan stays active.
+`materialize_plan` makes no new visits for it, from the nightly task, the materialize action or anywhere else, and leaves the visits already on the board exactly as they are.
+Rejected: leaving it alone.
+The plan would keep booking a customer the business has finished with, eight weeks ahead, every night, which is the thing the 400 exists to stop.
+Rejected: cancelling or deleting the existing visits.
+Some of them are probably still wanted (the last clean before a move-out), and which ones is a person's call; a cancellation also needs a reason that nobody gave.
+They stay visible on the board, where someone can cancel them.
+Unarchiving the customer lets the next run resume, because the check reads the status every time and stores nothing.
+
+**How.**
+`scheduling.services.activate_booked_customer(customer)`, renamed from `promote_lead` when Inactive joined Lead, is one conditional `UPDATE ... SET status = 'active', updated_at = now() WHERE pk = %s AND organization_id = %s AND status IN ('lead', 'inactive')`.
+Not a `save()` of the instance the booking holds: the WHERE clause re-reads the status, so a status changed since the booking form was loaded is not overwritten (a customer archived in that moment stays archived), and no other field of a stale copy is written back.
+The organization is in the WHERE clause as well as implied by the primary key.
+A new visit calls it last in `JobSerializer.create`, which is already atomic, so a crew refused after the job row was written takes the change back with the job.
+A visit edit calls it in `JobSerializer.update`, made atomic for this.
+A plan's create (the plan row, `materialize_plan`, the status) and its update (the edit, `regenerate_plan`, the status) are each one transaction.
+Scheduling already imports `customers.models`; the new import of `customers.enums` runs the same way, and nothing in `customers` imports scheduling for this.
+
+**A refused booking changes no status.**
+Every 400 on every trigger leaves the status where it was, including the ones raised after a row was written: a refused crew, a plan whose visits cannot be priced at creation, and a reactivation whose visits cannot be priced.
+The last two change behaviour beyond the status.
+Before this, plan create saved the plan and then let `materialize_plan` raise, so the caller got a 400 naming `service` and the plan stayed behind (reproduced through the API before the change); plan update did the same with the edit.
+Both are now rolled back with everything else, because a 400 that keeps the write would be a booking and not a booking at once.
+
+**Cancelling or deleting does not demote.**
+A customer who has had work booked is a customer, whatever happened to that visit; and demoting would mean deciding which of `lead`, `inactive` or "whatever it was before" is right, which is a person's call.
+Handing work to someone else does not demote the old customer, for the same reason.
+
+**Rejected -- a signal (`post_save` on `Job` or `RecurringPlan`).**
+It would fire for every save of every job: nightly materialization, admin edits, `seed_demo`, tests and the import of anything later.
+Telling "this save is a booking" from all of those inside a receiver is the rule restated in the wrong place, and ADR-033 already refuses signals in scheduling for being per-instance and invisible.
+
+**Rejected -- moving the status in `materialize_plan`.**
+It runs nightly for every active plan, so it would re-activate a customer someone deliberately set back, every night, with no booking in sight.
+
+**Rejected -- deriving the status from whether live work exists.**
+`status` is a label people set, and ADR-031 already treats it as theirs (an import keeps a given status as written).
+Deriving it would take `inactive` and `archived` away from the people who set them, and make every list of customers a join on jobs.
+
+**Rejected -- moving the status in the frontend after a 201.**
+A second request that can fail on its own, and an authorization decision (who may change a status) in the UI; every other client would skip it.
+
+**Rejected -- unarchiving an Archived customer on booking, like an Inactive one.**
+Archived is the one status that says "stop", and the booking is the moment to ask whether that still holds; a 400 with a sentence asks it, a silent unarchive does not.
+
+**Django admin and `seed_demo` do not move statuses.**
+The admin edits rows directly and passes through no booking rule, as it passes through none of the state machine (ADR-033); whoever uses it sets the status in the same tool.
+`seed_demo` builds its plans through `materialize_plan`, not the API, so its customers stay Leads with booked visits; a later demo-seed branch will set its booked customers Active.
+
+**Consequences.**
+No booking response carries the customer's status (`CustomerSummarySerializer` has no `status`), so the schema changed only in the plan update's description.
+The customers page reads the status from the server every time it is opened, and no store caches customers, so it shows Active after a booking without any frontend change.
+The new visit dialog and the plans page list archived customers in their pickers, and the 400 is the only guard.
+Hiding them is not a one-line filter: the customer list filters `status` by equality only, so excluding one status needs a backend filter, and the plans page also uses the same list to name the customer of every existing plan, archived or not.
 
 ---
 

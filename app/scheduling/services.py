@@ -15,6 +15,8 @@ from django.db import models, transaction
 from django.utils import timezone
 
 from app.exceptions import ConflictError
+from customers.enums import CustomerStatus
+from customers.models import Customer
 from scheduling.enums import ALLOWED_TRANSITIONS, REASON_REQUIRED_STATUSES, JobStatus
 from scheduling.models import Job, JobAssignment, RecurringPlan, TimeEntry
 
@@ -125,6 +127,13 @@ def materialize_plan(plan: RecurringPlan, *, today: dt.date | None = None) -> in
     so tests can pin it.
     """
     if not plan.is_active:
+        return 0
+
+    # An archived customer gets no new visits, from the nightly run or any
+    # other (ADR-037). The ones already on the board are left for a person to
+    # cancel or keep; the API refuses to make such a plan active, so this is
+    # reached only by a plan whose customer was archived after it was booked.
+    if refuses_booking(plan.customer):
         return 0
 
     organization = plan.organization
@@ -345,6 +354,52 @@ def _rekey_kept_jobs(plan: RecurringPlan, *, today: dt.date) -> None:
         taken.add(free[0])
         job.plan_occurrence = free[0]
         job.save(update_fields=["plan_occurrence", "updated_at"])
+
+
+# ---------------------------------------------------------------------------
+# Booking side effects
+# ---------------------------------------------------------------------------
+
+
+#: What a booking for an archived customer is refused with, on `customer`.
+ARCHIVED_CUSTOMER_REFUSAL = "This customer is archived. Unarchive them before booking work."
+
+#: The statuses a booking moves to Active. Archived is not here: a booking
+#: for an archived customer is refused before it is written (ADR-037).
+ACTIVATED_BY_BOOKING = (CustomerStatus.LEAD, CustomerStatus.INACTIVE)
+
+
+def refuses_booking(customer: Customer | None) -> bool:
+    """Whether new work may not be booked for `customer` (ADR-037): they are archived."""
+    return customer is not None and customer.status == CustomerStatus.ARCHIVED
+
+
+def activate_booked_customer(customer: Customer) -> bool:
+    """
+    A Lead or an Inactive customer who has work booked is Active (ADR-037).
+    Returns whether the status moved.
+
+    Called by every booking path -- a new visit, a new active plan, a plan
+    made active again, and a visit or active plan handed to another customer
+    -- inside that write's transaction, so a refused booking changes no
+    status. Active has nowhere to go, and Archived never gets here: the
+    serializers refuse the booking first (`refuses_booking`).
+
+    One conditional UPDATE of the status column and `updated_at`, not a
+    `save()` of the instance: the row is re-read by the WHERE clause, so a
+    status somebody changed since the booking's form was loaded is not
+    overwritten (one archived in the meantime stays archived), and no other
+    field the in-memory copy carries is written back. The organization is in
+    the WHERE clause as well as implied by the pk.
+    """
+    moved = Customer.objects.filter(
+        pk=customer.pk,
+        organization_id=customer.organization_id,
+        status__in=ACTIVATED_BY_BOOKING,
+    ).update(status=CustomerStatus.ACTIVE, updated_at=timezone.now())
+    if moved:
+        customer.status = CustomerStatus.ACTIVE
+    return bool(moved)
 
 
 # ---------------------------------------------------------------------------
