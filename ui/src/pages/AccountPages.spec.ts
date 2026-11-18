@@ -3,7 +3,8 @@
  * reset, choose a new password.
  *
  * No browser has looked at these, so this is the nearest thing (see
- * TeamPage.spec.ts). What it pins: the token travels in the request body,
+ * TeamPage.spec.ts). What it pins: the token is read from the address's
+ * fragment (ADR-036) and travels in the request body,
  * the server's sentences are shown as sent, the validators' answers are all
  * shown, and nothing here signs anyone in or sends more than the server
  * asked for.
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { createVuetify } from 'vuetify'
 import { api } from '@/api/client'
+import { INCOMPLETE_LINK } from '@/lib/linkToken'
 import { stubResizeObserver } from '@/lib/team.fixtures'
 import AcceptInvitePage from './AcceptInvitePage.vue'
 import ForgotPasswordPage from './ForgotPasswordPage.vue'
@@ -38,8 +40,8 @@ async function mountAt (component: Component, path: string) {
       { path: '/login', name: 'login', component: Blank },
       { path: '/', name: 'home', component: Blank },
       { path: '/forgot-password', name: 'forgot-password', component: ForgotPasswordPage },
-      { path: '/reset-password/:token', name: 'reset-password', component: ResetPasswordPage },
-      { path: '/accept-invite/:token', name: 'accept-invite', component: AcceptInvitePage },
+      { path: '/reset-password', name: 'reset-password', component: ResetPasswordPage },
+      { path: '/accept-invite', name: 'accept-invite', component: AcceptInvitePage },
     ],
   })
   router.push(path)
@@ -80,7 +82,7 @@ describe('AcceptInvitePage', () => {
   it('asks the server what the link opens, with the token in the body', async () => {
     mock.onPost(INSPECT).reply(200, invitation())
 
-    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite/tok-123')
+    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite#token=tok-123')
 
     expect(sent(INSPECT)).toEqual({ token: 'tok-123' })
     expect(mock.history.post.every(call => !call.url?.includes('tok-123'))).toBe(true)
@@ -92,7 +94,7 @@ describe('AcceptInvitePage', () => {
   it('asks a new account for a name and a password, and sends them', async () => {
     mock.onPost(INSPECT).reply(200, invitation())
     mock.onPost(ACCEPT).reply(200, { detail: 'You have joined Sparkle Clean. Sign in to get started.' })
-    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite/tok-123')
+    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite#token=tok-123')
 
     const inputs = wrapper.findAll('input')
     expect(inputs).toHaveLength(3)
@@ -117,7 +119,7 @@ describe('AcceptInvitePage', () => {
   it('asks an existing account for nothing, and sends only the token', async () => {
     mock.onPost(INSPECT).reply(200, invitation({ must_set_password: false }))
     mock.onPost(ACCEPT).reply(200, { detail: 'You have joined Sparkle Clean. Sign in to get started.' })
-    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite/tok-123')
+    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite#token=tok-123')
 
     expect(wrapper.findAll('input')).toHaveLength(0)
     expect(wrapper.text()).toContain('your password stays as it is')
@@ -132,7 +134,7 @@ describe('AcceptInvitePage', () => {
     mock.onPost(ACCEPT).reply(400, {
       password: ['This password is too short.', 'This password is too common.'],
     })
-    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite/tok-123')
+    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite#token=tok-123')
 
     const inputs = wrapper.findAll('input')
     await inputs[0].setValue('Maria')
@@ -150,7 +152,7 @@ describe('AcceptInvitePage', () => {
       detail: 'That invitation link is invalid or has expired. Ask for a new one.',
     })
 
-    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite/dead')
+    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite#token=dead')
 
     expect(wrapper.text()).toContain('That invitation link is invalid or has expired. Ask for a new one.')
     expect(wrapper.find('form').exists()).toBe(false)
@@ -162,13 +164,26 @@ describe('AcceptInvitePage', () => {
     mock.onPost(ACCEPT).reply(400, {
       detail: 'That invitation link is invalid or has expired. Ask for a new one.',
     })
-    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite/tok-123')
+    const { wrapper } = await mountAt(AcceptInvitePage, '/accept-invite#token=tok-123')
 
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
     expect(wrapper.text()).toContain('That invitation link is invalid or has expired. Ask for a new one.')
   })
+})
+
+describe('AcceptInvitePage without a token', () => {
+  it.each(['/accept-invite', '/accept-invite#token=', '/accept-invite#other=tok-123'])(
+    'says the link is incomplete and asks the server nothing: %s',
+    async path => {
+      const { wrapper } = await mountAt(AcceptInvitePage, path)
+
+      expect(wrapper.text()).toContain(INCOMPLETE_LINK)
+      expect(wrapper.findAll('input')).toHaveLength(0)
+      expect(mock.history.post).toHaveLength(0)
+    },
+  )
 })
 
 describe('ForgotPasswordPage', () => {
@@ -191,7 +206,7 @@ describe('ForgotPasswordPage', () => {
   it('shows the link only when the API handed one back', async () => {
     mock.onPost(RESET).reply(202, {
       detail: 'If that address belongs to a staff account, a reset link is on its way.',
-      dev_link: 'http://localhost:3000/reset-password/tok-9',
+      dev_link: 'http://localhost:3000/reset-password#token=tok-9',
     })
     const { wrapper } = await mountAt(ForgotPasswordPage, '/forgot-password')
 
@@ -199,7 +214,7 @@ describe('ForgotPasswordPage', () => {
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
-    expect(wrapper.find('a').attributes('href')).toBe('http://localhost:3000/reset-password/tok-9')
+    expect(wrapper.find('a').attributes('href')).toBe('http://localhost:3000/reset-password#token=tok-9')
   })
 
   it('shows the server\'s complaint about the address under the field', async () => {
@@ -232,7 +247,7 @@ describe('ForgotPasswordPage', () => {
 describe('ResetPasswordPage', () => {
   it('sends the token in the body with the new password', async () => {
     mock.onPost(CONFIRM).reply(200, { detail: 'Your password has been changed. Sign in with it now.' })
-    const { wrapper } = await mountAt(ResetPasswordPage, '/reset-password/tok-456')
+    const { wrapper } = await mountAt(ResetPasswordPage, '/reset-password#token=tok-456')
 
     await wrapper.find('input').setValue('a new phrase for tests only')
     await wrapper.find('form').trigger('submit')
@@ -250,7 +265,7 @@ describe('ResetPasswordPage', () => {
     mock.onPost(CONFIRM).reply(400, {
       password: ['This password is too short.', 'This password is entirely numeric.'],
     })
-    const { wrapper } = await mountAt(ResetPasswordPage, '/reset-password/tok-456')
+    const { wrapper } = await mountAt(ResetPasswordPage, '/reset-password#token=tok-456')
 
     await wrapper.find('input').setValue('123')
     await wrapper.find('form').trigger('submit')
@@ -265,7 +280,7 @@ describe('ResetPasswordPage', () => {
     mock.onPost(CONFIRM).reply(400, {
       detail: 'That reset link is invalid or has expired. Ask for a new one.',
     })
-    const { wrapper } = await mountAt(ResetPasswordPage, '/reset-password/dead')
+    const { wrapper } = await mountAt(ResetPasswordPage, '/reset-password#token=dead')
 
     await wrapper.find('input').setValue('a new phrase for tests only')
     await wrapper.find('form').trigger('submit')
@@ -274,4 +289,18 @@ describe('ResetPasswordPage', () => {
     expect(wrapper.text()).toContain('That reset link is invalid or has expired. Ask for a new one.')
     expect(wrapper.text()).toContain('Ask for a new link')
   })
+})
+
+describe('ResetPasswordPage without a token', () => {
+  it.each(['/reset-password', '/reset-password#token='])(
+    'says the link is incomplete and offers no form: %s',
+    async path => {
+      const { wrapper } = await mountAt(ResetPasswordPage, path)
+
+      expect(wrapper.text()).toContain(INCOMPLETE_LINK)
+      expect(wrapper.find('form').exists()).toBe(false)
+      expect(wrapper.text()).toContain('Ask for a new link')
+      expect(mock.history.post).toHaveLength(0)
+    },
+  )
 })

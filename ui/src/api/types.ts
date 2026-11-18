@@ -91,6 +91,8 @@ export type NoticeLevel = Schemas['NoticeLevelEnum']
 /** What every "send the browser to Stripe" endpoint answers. */
 export type Url = Schemas['Url']
 export type PublicInvoice = Schemas['PublicInvoice']
+/** The pay link's token, sent in a body and never in a URL (ADR-036). */
+export type PayTokenRequest = Schemas['PayTokenRequest']
 export type PublicInvoiceLine = Schemas['PublicInvoiceLine']
 
 /**
