@@ -1500,9 +1500,10 @@ The `TeamAction` values are mirrored as a type and a label table in `ui/` (`src/
 
 ---
 
-## ADR-035: Visit reminders are a ledger row claimed before the email, the day before at nine local
+## ADR-035: Visit reminders: from 17:00 the evening before until the visit starts, claimed in a ledger before the email
 
 **Decided (2026-11-18), the first piece of Phase 5.**
+Revised the same day, before merge, with Jordan's answers on the hour, the contact preference, leads, late bookings and moves.
 A customer gets an email ahead of a scheduled visit, from the organization that booked it.
 It is off until an owner or admin turns it on.
 
@@ -1520,50 +1521,66 @@ When there are per-channel switches (SMS) or a configurable hour, the organizati
 *Rejected -- a dedicated `@action` to toggle it.*
 It would restate the admin-tier rule and the read-only rule that the existing endpoint already enforces, and a second path to the same column is a second place to get them wrong.
 
-**2. A reminder goes on the organization's local day before the visit, from 09:00 local.**
-"Tomorrow" is `Organization.today() + 1`, turned into a UTC interval by `local_day_bounds`, so it is 23 or 25 hours long across a DST change and is the organization's tomorrow even when UTC's date is a day behind (Pacific/Auckland) (invariant 8).
-The hour is `notifications.services.REMINDER_LOCAL_HOUR`, a constant: inside the default business hours, so a customer who replies or rings reaches somebody the same day, and early enough to leave a key or shut a dog in.
-The beat entry runs hourly, at a quarter past, and each organization's own clock decides whether anything is due: the shape of the reveal evaluator, one entry for every timezone.
-The test is "from 09:00 on", not "in the 09:00 hour", so a missed tick, a worker that was down, or a visit booked at 15:00 for tomorrow is still reminded that day.
-What stops the later ticks repeating a reminder is the ledger (3), not the clock.
+**2. A visit is due its reminder once it is 17:00 local on the day before it, until it starts.**
+That one sentence is the whole timing rule, and `notifications.services.reminder_window` is its only statement.
+The window opens at now, because a visit that has started is past reminding.
+It closes at the end of today before 17:00 local, and at the end of tomorrow from 17:00 on, with the boundary from `local_day_bounds`, so it is the organization's day even far from UTC (Pacific/Auckland) and the right length across a DST change (invariant 8).
+The hour is `REMINDER_LOCAL_HOUR = 17`, a constant: the evening before is when people plan the next day, put a key out or arrange for the dog.
 
-*Rejected -- a fixed lead time ("24 hours before").*
-It sends at whatever hour the visit is, so a 07:00 visit is reminded at 07:00 the day before, and the customer cannot learn when to expect it.
-It also needs a sweep at a finer grain than hourly to be honest about "24".
+Two things ask the question:
+
+- an hourly beat entry, at a quarter past, fans out one task per organization that sends, and each organization's own clock decides what is due: the shape of the reveal evaluator, one entry for every timezone;
+- a visit booked or moved into its window is asked as soon as its save commits (5).
+
+Because the window runs until the visit starts and not until midnight, a missed tick, a worker that was down, or a visit booked at 23:30 for 08:00 is still reminded before it begins.
+What stops the hourly runs repeating a reminder is the ledger (3), not the clock.
+
+*Rejected -- 09:00 local the day before.*
+Built first, inside the default business hours so a reply reaches somebody.
+Jordan chose the evening: a morning reminder about tomorrow is read and forgotten by the time it matters.
+
+*Rejected -- a lead time ("24 hours before"), and with it a special rule for visits booked under 24 hours ahead.*
+A lead time sends at whatever hour the visit is, so a 07:00 visit is reminded at 07:00 the day before and the customer cannot learn when to expect it.
+A late booking then needs its own rule.
+"From 17:00 the day before, until it starts" already covers a late booking with the same sentence, so there is no second rule to keep in step.
 
 *Rejected -- a fixed UTC hour in the beat entry.*
-09:00 Denver is 16:00 UTC in winter and 15:00 in summer, and a tenant in another zone wants a different UTC hour altogether.
-A per-tenant cron entry would fix that and is what the reveal evaluator already declined to do.
+17:00 Denver is 00:00 UTC in winter and 23:00 in summer, and a tenant in another zone wants a different UTC hour altogether.
 
-*Rejected, for now -- a per-organization hour or lead time.*
+*Rejected, for now -- a per-organization hour.*
 It belongs on the settings page that does not exist yet, and a constant is one line to replace with a field when it does.
 
 **3. Idempotency is a ledger row, `notifications.VisitReminder`, inserted before the email is sent.**
-The row holds the visit, the start it reminded about, the address it went to and when it went.
-A unique constraint on (visit, start) among live rows is the lock: two runs that select the same visit both try to insert, Postgres lets one through, and the other gets an `IntegrityError` and sends nothing.
-So beat firing twice, two workers, the next hour's run and a re-delivered task are all the same no-op.
+The row holds the visit, a per-visit `sequence` (1, 2, 3...), the start it reminded about, the address it went to and when it went.
+A visit is due whenever its current start differs from the start in its latest row (highest `sequence`), or it has none.
+A unique constraint on (visit, sequence) among live rows is the lock: a run claims by inserting the latest sequence plus one, so two runs that saw the same latest row race for one insert, Postgres lets one through, and the other gets an `IntegrityError` and sends nothing.
+Beat firing twice, two workers, the next hour's run, the save hook and a re-delivered task are all the same no-op.
 The row is the claim and the record at once:
 
 - sent: `sent_at` is stamped after the backend accepts the message;
-- the send raised: the row is hard-deleted, so the next hourly run tries again while the visit is still tomorrow;
-- the worker died between the insert and the send: the row stays with `sent_at` NULL and is never retried.
+- the send raised: the row is hard-deleted, so the next run tries again while the visit is still due;
+- the worker died between the insert and the send: the row stays with `sent_at` NULL, it is still the latest, and it is never retried.
 
 The last is at-most-once on purpose.
 The customer may already have the email, and a lost reminder costs less than a duplicate that teaches people to ignore them.
 
-**A visit moved after its reminder is reminded again.**
-The key is (visit, start), not the visit alone, because a customer told "2:00 PM" about a visit now at 4:00 PM has been told something false.
-The new start has no row, so the next run sends the new time.
-*Accepted gap:* a visit moved and then moved back to a time already reminded is not reminded a third time; the customer heard both times and is not told which stands.
-Keying on "the latest row for this visit" would close it, but the unique constraint could then no longer be the lock.
+**A visit is reminded whenever it moves off its latest reminded start.**
+A customer told "2:00 PM" about a visit now at 4:00 PM has been told something false, so the new start is reminded.
+Moved back to 2:00 PM, the latest email said 4:00 PM, so 2:00 PM is reminded again: comparing against the latest row, not against every row, is what makes that work, and it is why the constraint is on `sequence` rather than on (visit, start).
+*Accepted cost:* a visit moved twice in a minute sends two emails.
+The latest is the one that counts, and a dispatcher who moves a visit twice has changed it twice.
+0002 numbers any rows written under the first version of this ledger per visit by age, so a database that ran the branch before the change migrates.
+
+*Rejected -- unique on (visit, start), as first built.*
+It cannot remind a time a second time, so a visit moved away and back left the customer holding the wrong time.
 
 *Rejected -- a stamp on `Job` (`reminder_sent_at`, or the start reminded about).*
 Simplest on paper, but it puts a notification concern into scheduling's model, its migration and every serializer that must now leave it out, and SMS would need a second column beside it.
-It also has no natural lock: a conditional update can claim, but the history of what was sent where is gone with the next overwrite.
+It also loses the history of what was sent where with the next overwrite.
 With the ledger, scheduling does not know reminders exist: the foreign key has `related_name="+"`, and a test fails if `scheduling`, `customers`, `organizations`, `catalog` or `billing` imports `notifications`.
 
 *Rejected -- send first, then record.*
-A crash after the send and before the insert sends again on the next tick, every tick, for the rest of the day.
+A crash after the send and before the insert sends again on the next tick, every tick, until the visit starts.
 
 *Rejected -- Celery's own retry and `acks_late` as the guarantee.*
 They make a task run again; only something stored makes the second run a no-op.
@@ -1571,21 +1588,53 @@ They make a task run again; only something stored makes the second run a no-op.
 **4. Which visits qualify.**
 `notifications.services.due_reminders` states every condition once:
 
-- the organization is active (ADR-028: a read-only organization tells its customers nothing until it is back) and has the switch on, checked by the fan-out, again by the per-organization task (it may have changed since the fan-out), and again by the selection;
+- the organization is active (ADR-028: a read-only organization tells its customers nothing until it is back) and has the switch on, checked by the fan-out, by each task (it may have changed since it was queued), and by the selection;
 - the visit is `scheduled`: a terminal visit is over or called off, and one en route or in progress is already under way;
+- the visit has not started, and its day-before 17:00 has passed (2);
 - the visit, its customer and its location are not soft-deleted, each join naming `deleted_at` itself, because the default manager covers only the job;
 - the customer is a lead or active, not inactive or archived: a visit somebody forgot to cancel for a lapsed customer should not be how they find out about it;
 - the customer has an email address;
-- no live ledger row exists for this visit at this start.
+- the visit's start differs from the start in its latest reminder.
 
-The customer's `preferred_contact_method` is not consulted: the email is the only channel there is, and the switch is the organization's.
+A lead is reminded because a lead with a booked visit is in practice a customer.
+Promoting a lead to active when a visit is booked is approved as a separate, later branch and is not built here; when it lands, this rule needs no change.
 
-**5. Tenancy.**
-The beat entry runs `notifications.send_visit_reminders_all`, which queues `notifications.send_visit_reminders(organization_id)` per organization that is active with the switch on (invariant 3).
-The per-organization task looks its organization up by that id and selects only that organization's visits; the ledger row is stamped with the visit's organization and `TenantModel.save()` refuses a visit from another.
+**The customer's contact preference is not consulted, and "Text message" cannot be chosen.**
+Email is the only channel there is, so every customer with an address gets the reminder whatever their preference says.
+Until SMS exists nobody may be promised a text: `CustomerSerializer` refuses `sms` with "Text messages aren't available yet." on create and update, and the customer import reports it on the row's column because it validates through the same serializer.
+The enum keeps the value, with no data migration, so rows that already hold it still read and edit, and it returns when SMS ships.
+"Phone call" stays selectable.
+The UI's customer form never offered the preference, so nothing there changed.
+
+*Rejected -- skipping customers who prefer SMS or phone.*
+They would get nothing at all, for a preference the product cannot honour.
+
+*Rejected -- removing `sms` from the enum.*
+It would break every row that holds it and change the schema, to be put back when SMS ships.
+
+**5. A visit booked or moved into its window is reminded when the save commits.**
+`notifications.signals.queue_reminder_if_due` is a `post_save` receiver on `Job`, connected in `NotificationsConfig.ready()`.
+A cheap prefilter (scheduled, not deleted, starting within 48 hours, an organization that sends) keeps every other save to at most one query and no task.
+It then queues `notifications.send_visit_reminder(organization_id, job_id)` with `transaction.on_commit`, so a rolled-back booking emails nobody and the worker can read the row it is handed.
+That task takes the organization explicitly (invariant 3), looks the visit up through `due_reminders` scoped to that organization, and sends through the same claim, so it and the hourly run cannot disagree and a foreign or stale id finds nothing.
+`bulk_create` sends no signal, so the visits a plan materializes are left to the hourly task, which is soon enough for visits that were always going to happen.
+
+*Rejected -- the ADR-033 registration pattern (scheduling calls whoever registered).*
+ADR-033 needed scheduling to ask a question before a write and publish the answer, which a signal cannot do.
+This only reacts after a write.
+A registry would need a call at every place scheduling saves a visit (booking, PATCH, reschedule, plan regeneration), and the Django admin saves a visit through none of them; a forgotten call site fails quietly until the next tick.
+`post_save` covers every single-visit save, including the admin, with no change to scheduling.
+*Accepted cost:* the receiver is invisible from scheduling, which is why `scheduling/models.py` is not where to look for it and this ADR names it.
+
+*Rejected -- queueing the task inside the save, without `on_commit`.*
+A booking that rolls back would still email the customer, and the worker could run before the row it is handed is visible.
+
+**6. Tenancy.**
+The fan-out queues `notifications.send_visit_reminders(organization_id)` per organization that sends; the save hook queues `notifications.send_visit_reminder(organization_id, job_id)`.
+Each task looks its organization up by that id and selects only that organization's visits; the ledger row is stamped with the visit's organization and `TenantModel.save()` refuses a visit from another.
 No API serves the ledger, so there is no view to scope; the admin shows it read-only and refuses deletes, since deleting a row would let the task send that reminder again.
 
-**6. Sending goes through the mail path every other email uses, and no new guard was added.**
+**7. Sending goes through the mail path every other email uses, and no new guard was added.**
 `EmailMessage` with `DEFAULT_FROM_EMAIL`, an HTML template in `notifications/templates/`, `content_subtype = "html"`, as the invoice email does.
 `Reply-To` is the organization's own address when it has one, so a customer who answers reaches the cleaning company and not the platform.
 The email carries the day and times in the organization's zone (formatted in Python, because the template's `date` filter would convert to the server's UTC), the service, the address, and the organization's phone and email; never access notes or codes, which only the audited reveal shows (ADR-014).
@@ -1602,13 +1651,14 @@ The invitation skips sending locally because the link comes back as `dev_link` i
 A reminder has nothing to return to anybody, and printing it to the worker console is exactly how it should be seen in development.
 
 **Accepted costs.**
-A visit booked late in the evening for the next morning is reminded only if a tick falls between the booking and midnight; one booked after the last tick is not reminded at all.
-A visit rescheduled between its selection and its claim (milliseconds) is reminded at the time that was selected; the next run then sees the new start and reminds that too.
-Reminders depend on the Celery worker and beat; with either down, no reminder is lost until the visit's day arrives, and then that day's are.
-Turning the switch off does not recall anything already queued; the per-organization task re-reads the switch, so at most the task already running finishes.
+A visit moved twice in a minute sends two emails (3).
+A visit rescheduled between its selection and its claim (milliseconds) is reminded at the time that was selected; the save hook or the next run then sees the new start and reminds that too.
+Reminders depend on the Celery worker and, for anything the save hook did not catch, on beat; with the worker down nothing is lost until the visit starts.
+Turning the switch off does not recall anything already queued; each task re-reads the switch, so at most a task already past that check finishes.
+Every save of a scheduled visit starting within 48 hours costs one query for the organization's switch.
 
 **Consequences.**
-`notifications` is a new app: `VisitReminder` (a `TenantModel`), `services.py`, `tasks.py`, one template.
+`notifications` is a new app: `VisitReminder` (a `TenantModel`), `services.py`, `tasks.py`, `signals.py`, one template.
 It imports `scheduling.models`, `scheduling.enums`, `customers.enums` and `organizations.models`; nothing imports it.
-One beat entry, `send-visit-reminders`, and one organization column with its migration (`organizations/0007`).
-The OpenAPI schema gained `visit_reminders_enabled` on the organization; no new enum, so no `ENUM_NAME_OVERRIDES` entry.
+One beat entry, `send-visit-reminders`; one organization column with its migration (`organizations/0007`); two notifications migrations.
+The OpenAPI schema gained `visit_reminders_enabled` on the organization; refusing `sms` changed no schema, so no `ENUM_NAME_OVERRIDES` entry.
