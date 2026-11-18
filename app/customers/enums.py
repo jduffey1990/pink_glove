@@ -9,6 +9,11 @@ class CustomerStatus(TextChoices):
 
 
 class ContactMethod(TextChoices):
+    """
+    SMS stays in the enum so existing rows read, but no API write may set it
+    until text messages exist (`CustomerSerializer`, ADR-035).
+    """
+
     EMAIL = "email", "Email"
     SMS = "sms", "Text message"
     PHONE = "phone", "Phone call"
