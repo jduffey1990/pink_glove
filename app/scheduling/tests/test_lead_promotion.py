@@ -20,6 +20,7 @@ from scheduling.models import Job, RecurringPlan
 from scheduling.services import materialize_plan
 from scheduling.tests.factories import (
     CustomerFactory,
+    JobFactory,
     RecurringPlanFactory,
     ServiceFactory,
     ServiceLocationFactory,
@@ -234,6 +235,182 @@ class TestARefusedBookingLeavesALead:
         assert status_of(customer) == CustomerStatus.LEAD
 
 
+def plan_detail(plan) -> str:
+    return reverse("scheduling:plan-detail", args=[plan.id])
+
+
+def job_detail(job) -> str:
+    return reverse("scheduling:job-detail", args=[job.id])
+
+
+@pytest.fixture
+def lead_elsewhere(organization):
+    """A second Lead in the same organization, with a location to point work at."""
+    lead = CustomerFactory(organization=organization)
+    return lead, ServiceLocationFactory(organization=organization, customer=lead)
+
+
+def repoint(lead_elsewhere) -> dict:
+    lead, location = lead_elsewhere
+    return {"customer": str(lead.id), "location": str(location.id)}
+
+
+@pytest.mark.django_db
+class TestAnEditThatBooks:
+    def test_reactivating_a_paused_plan_promotes(self, authed_client, organization, customer):
+        plan = RecurringPlanFactory(organization=organization, customer=customer, is_active=False)
+
+        response = authed_client.patch(plan_detail(plan), {"is_active": True}, format="json")
+
+        assert response.status_code == 200
+        assert status_of(customer) == CustomerStatus.ACTIVE
+
+    def test_editing_a_paused_plan_without_reactivating_does_not(
+        self, authed_client, organization, customer
+    ):
+        plan = RecurringPlanFactory(organization=organization, customer=customer, is_active=False)
+
+        response = authed_client.patch(plan_detail(plan), {"notes": "Side gate."}, format="json")
+
+        assert response.status_code == 200
+        assert status_of(customer) == CustomerStatus.LEAD
+
+    def test_editing_an_active_plan_for_the_same_customer_does_not(
+        self, authed_client, organization, customer
+    ):
+        """Somebody set them back to Lead by hand; an unrelated edit does not overrule that."""
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+
+        response = authed_client.patch(
+            plan_detail(plan), {"preferred_start_time": "14:00:00"}, format="json"
+        )
+
+        assert response.status_code == 200
+        assert status_of(customer) == CustomerStatus.LEAD
+
+    def test_pausing_a_plan_does_not(self, authed_client, organization, customer):
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+
+        authed_client.patch(plan_detail(plan), {"is_active": False}, format="json")
+
+        assert status_of(customer) == CustomerStatus.LEAD
+
+    def test_handing_an_active_plan_to_another_customer_promotes_them(
+        self, authed_client, organization, customer, lead_elsewhere
+    ):
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+
+        response = authed_client.patch(plan_detail(plan), repoint(lead_elsewhere), format="json")
+
+        assert response.status_code == 200
+        assert status_of(lead_elsewhere[0]) == CustomerStatus.ACTIVE
+        assert status_of(customer) == CustomerStatus.LEAD
+
+    def test_the_old_customer_of_a_plan_is_never_demoted(
+        self, authed_client, organization, customer, lead_elsewhere
+    ):
+        customer.status = CustomerStatus.ACTIVE
+        customer.save(update_fields=["status"])
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+
+        authed_client.patch(plan_detail(plan), repoint(lead_elsewhere), format="json")
+
+        assert status_of(customer) == CustomerStatus.ACTIVE
+
+    def test_handing_a_paused_plan_to_another_customer_does_not(
+        self, authed_client, organization, customer, lead_elsewhere
+    ):
+        plan = RecurringPlanFactory(organization=organization, customer=customer, is_active=False)
+
+        response = authed_client.patch(plan_detail(plan), repoint(lead_elsewhere), format="json")
+
+        assert response.status_code == 200
+        assert status_of(lead_elsewhere[0]) == CustomerStatus.LEAD
+
+    def test_handing_a_visit_to_another_customer_promotes_them(
+        self, authed_client, organization, customer, location, service, lead_elsewhere
+    ):
+        customer.status = CustomerStatus.ACTIVE
+        customer.save(update_fields=["status"])
+        job = JobFactory(
+            organization=organization, customer=customer, location=location, service=service
+        )
+
+        response = authed_client.patch(job_detail(job), repoint(lead_elsewhere), format="json")
+
+        assert response.status_code == 200
+        assert status_of(lead_elsewhere[0]) == CustomerStatus.ACTIVE
+        assert status_of(customer) == CustomerStatus.ACTIVE
+
+    def test_editing_a_visit_for_the_same_customer_does_not(
+        self, authed_client, organization, customer, location, service
+    ):
+        job = JobFactory(
+            organization=organization, customer=customer, location=location, service=service
+        )
+
+        response = authed_client.patch(job_detail(job), {"notes": "Bring a ladder."}, format="json")
+
+        assert response.status_code == 200
+        assert status_of(customer) == CustomerStatus.LEAD
+
+
+@pytest.mark.django_db
+class TestARefusedEditLeavesALead:
+    def test_a_reactivation_whose_visits_cannot_be_priced(
+        self, authed_client, organization, customer
+    ):
+        """Refused after the plan row was saved, while rebuilding its visits."""
+        plan = RecurringPlanFactory(
+            organization=organization,
+            customer=customer,
+            is_active=False,
+            location=ServiceLocationFactory(
+                organization=organization, customer=customer, square_feet=None
+            ),
+            service=ServiceFactory(
+                organization=organization,
+                pricing_model=PricingModel.PER_SQFT,
+                per_sqft_rate_cents=Decimal("10.000"),
+            ),
+        )
+
+        response = authed_client.patch(plan_detail(plan), {"is_active": True}, format="json")
+
+        assert response.status_code == 400
+        plan.refresh_from_db()
+        assert plan.is_active is False
+        assert status_of(customer) == CustomerStatus.LEAD
+
+    def test_a_plan_handed_over_with_a_location_that_is_not_theirs(
+        self, authed_client, organization, customer, location, lead_elsewhere
+    ):
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+        lead, _ = lead_elsewhere
+
+        response = authed_client.patch(
+            plan_detail(plan),
+            {"customer": str(lead.id), "location": str(location.id)},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert status_of(lead) == CustomerStatus.LEAD
+
+    def test_a_visit_handed_over_with_a_location_that_is_not_theirs(
+        self, authed_client, organization, customer, location, service, lead_elsewhere
+    ):
+        job = JobFactory(
+            organization=organization, customer=customer, location=location, service=service
+        )
+        lead, _ = lead_elsewhere
+
+        response = authed_client.patch(job_detail(job), {"customer": str(lead.id)}, format="json")
+
+        assert response.status_code == 400
+        assert status_of(lead) == CustomerStatus.LEAD
+
+
 @pytest.mark.django_db
 class TestNothingElsePromotesOrDemotes:
     def test_deleting_the_visit_does_not_demote(self, authed_client, customer, visit):
@@ -306,3 +483,18 @@ class TestTenancy:
         assert promote_lead(rival) is False
         rival.refresh_from_db()
         assert rival.status == CustomerStatus.LEAD
+
+    def test_handing_work_to_another_organizations_lead_is_refused_and_leaves_it(
+        self, authed_client, organization, customer, location, service, other_organization
+    ):
+        rival = CustomerFactory(organization=other_organization)
+        rival_location = ServiceLocationFactory(organization=other_organization, customer=rival)
+        body = {"customer": str(rival.id), "location": str(rival_location.id)}
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+        job = JobFactory(
+            organization=organization, customer=customer, location=location, service=service
+        )
+
+        assert authed_client.patch(plan_detail(plan), body, format="json").status_code == 400
+        assert authed_client.patch(job_detail(job), body, format="json").status_code == 400
+        assert status_of(rival) == CustomerStatus.LEAD

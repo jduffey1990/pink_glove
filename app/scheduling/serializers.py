@@ -354,6 +354,19 @@ class JobSerializer(TenantModelSerializer):
         promote_lead(job.customer)
         return job
 
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        """
+        A visit handed to another customer is booked for them (ADR-037): the
+        new customer is promoted, in the edit's transaction. The old one is
+        left as they are.
+        """
+        customer_before = instance.customer_id
+        job = super().update(instance, validated_data)
+        if job.customer_id != customer_before:
+            promote_lead(job.customer)
+        return job
+
     def _assign(self, job, user_ids) -> None:
         """
         Put the chosen crew on a job that was just created.

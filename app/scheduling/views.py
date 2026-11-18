@@ -113,6 +113,7 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
         except ValueError as exc:
             raise DjangoValidationError({"service": str(exc)}) from exc
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
         """
         Edit the plan, then reconcile the jobs it already created.
@@ -120,10 +121,16 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
         The response carries `regenerated` and `kept` so the dispatcher can see
         what happened to the eight weeks of visits already on the board --
         which is the whole point of ADR-020's rule.
+
+        A paused plan made active, or an active plan handed to another
+        customer, is a booking for whoever it now belongs to (ADR-037). One
+        transaction for the edit, the regeneration and the promotion, so a
+        regeneration refused as a 400 leaves neither the edit nor the status.
         """
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         before = {field: getattr(instance, field) for field in REGENERATING_FIELDS}
+        customer_before = instance.customer_id
 
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
@@ -138,6 +145,12 @@ class RecurringPlanViewSet(TenantViewSetMixin, ModelViewSet):
                 body = {**body, **regenerate_plan(instance)}
             except ValueError as exc:
                 raise DjangoValidationError({"service": str(exc)}) from exc
+
+        booked = instance.is_active and (
+            not before["is_active"] or instance.customer_id != customer_before
+        )
+        if booked:
+            promote_lead(instance.customer)
 
         return Response(body)
 
