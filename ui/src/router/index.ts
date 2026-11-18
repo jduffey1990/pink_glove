@@ -158,8 +158,9 @@ export const routes: RouteRecordRaw[] = [
   {
     // The customer's pay page (Phase 4b). No session: the signed token in the
     // invoice email is the credential, and the API decides what it opens.
-    // The token is in the fragment (ADR-036). The `/:token` form is every
-    // invoice email sent before that, and still Stripe's return address.
+    // The token is in the fragment (ADR-036), and Stripe returns to
+    // `/pay?paid=1#token=...`. The `/:token` form is every invoice email sent
+    // before that, and the return of any Checkout session opened before it.
     path: '/pay',
     name: 'pay',
     component: () => import('@/pages/PayInvoicePage.vue'),

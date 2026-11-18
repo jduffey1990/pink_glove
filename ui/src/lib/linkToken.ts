@@ -40,8 +40,8 @@ export function tokenHash (token: string): string {
 
 /**
  * A route record's `redirect` for the old form, `/<path>/:token`: the same
- * page by name, the token moved to the fragment, the query kept (Stripe's
- * `?paid=1` arrives this way). A redirect is resolved before the URL is
+ * page by name, the token moved to the fragment, the query kept (a Checkout
+ * session opened before ADR-036 returns as `/pay/<token>?paid=1`). A redirect is resolved before the URL is
  * written, so the old address replaces the entry it arrived in.
  */
 export function fragmentRedirect (name: string): RouteRecordRedirectOption {

@@ -60,4 +60,20 @@ describe('the pay page back from Stripe', () => {
     expect(window.location.search).toBe('?paid=1')
     expect(window.location.hash).toBe(`#token=${token}`)
   })
+
+  it.each([['paid'], ['cancelled']])(
+    'opens the fragment form Stripe now returns to as it is: ?%s=1',
+    async outcome => {
+      const token = 'ImFiYyI:1xTixv:818Sbpq'
+
+      const { router, before } = await open(`/pay?${outcome}=1#token=${token}`)
+
+      expect(router.currentRoute.value.name).toBe('pay')
+      expect(router.currentRoute.value.query).toEqual({ [outcome]: '1' })
+      expect(router.currentRoute.value.hash).toBe(`#token=${token}`)
+      expect(window.location.pathname + window.location.search).toBe(`/pay?${outcome}=1`)
+      expect(window.location.hash).toBe(`#token=${token}`)
+      expect(window.history.length).toBe(before)
+    },
+  )
 })

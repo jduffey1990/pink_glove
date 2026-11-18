@@ -107,3 +107,23 @@ describe('PayInvoicePage', () => {
     expect(wrapper.text()).toContain('That link is not valid, or has expired. Ask for a new one.')
   })
 })
+
+describe('PayInvoicePage back from Stripe in the fragment form', () => {
+  it('reads ?paid=1 from the query and the token from the fragment', async () => {
+    mock.onPost(INVOICE).reply(200, { ...publicInvoice(), payment_state: 'paid', balance_cents: 0 })
+
+    const wrapper = await mountAt('/pay?paid=1#token=tok-1')
+
+    expect(JSON.parse(mock.history.post[0].data)).toEqual({ token: 'tok-1' })
+    expect(wrapper.text()).toContain('Payment received. Thank you!')
+  })
+
+  it('reads ?cancelled=1 the same way', async () => {
+    mock.onPost(INVOICE).reply(200, publicInvoice())
+
+    const wrapper = await mountAt('/pay?cancelled=1#token=tok-1')
+
+    expect(JSON.parse(mock.history.post[0].data)).toEqual({ token: 'tok-1' })
+    expect(wrapper.text()).toContain('No payment was made.')
+  })
+})

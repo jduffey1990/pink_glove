@@ -19,6 +19,13 @@ from django.conf import settings
 TOKEN_KEY = "token"
 
 
-def token_link(path: str, token: str) -> str:
-    """`FRONTEND_BASE_URL` + `path` + `#token=<token>`."""
-    return f"{settings.FRONTEND_BASE_URL}{path}#{urlencode({TOKEN_KEY: token}, safe=':')}"
+def token_link(path: str, token: str, query: dict[str, str] | None = None) -> str:
+    """
+    `FRONTEND_BASE_URL` + `path` + `?query` + `#token=<token>`.
+
+    The query, if any, comes before the fragment: the shape Stripe Checkout
+    was seen to hand back unchanged (ADR-036).
+    """
+    search = f"?{urlencode(query)}" if query else ""
+    fragment = urlencode({TOKEN_KEY: token}, safe=":")
+    return f"{settings.FRONTEND_BASE_URL}{path}{search}#{fragment}"

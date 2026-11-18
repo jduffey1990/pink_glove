@@ -257,15 +257,13 @@ def stripe_return_url(invoice: Invoice, outcome: str) -> str:
     Where Stripe Checkout sends the customer back to: `?paid=1` or
     `?cancelled=1`.
 
-    Still the old path form (`/pay/<token>`), which the SPA rewrites to the
-    fragment form on arrival (ADR-036). Stripe's documentation does not say
-    whether it keeps a fragment on `success_url`/`cancel_url`, and a return
-    that lost it would land a customer who has just paid on an invalid link.
-    So this one hit per checkout still writes the token to the access log;
-    move it to `pay_url` once a test-mode checkout shows the fragment
-    surviving the round trip.
+    `/pay?paid=1#token=...`: the query before the fragment, the shape a
+    test-mode Checkout was seen to hand back unchanged (ADR-036), so the
+    return writes no token to the access log. A session opened before this
+    shipped still returns to the old `/pay/<token>?paid=1`, which the SPA
+    rewrites, for up to `CHECKOUT_SESSION_TTL`.
     """
-    return f"{settings.FRONTEND_BASE_URL}/pay/{pay_token(invoice)}?{outcome}=1"
+    return token_link("/pay", pay_token(invoice), {outcome: "1"})
 
 
 def pay_url_if_payable(invoice: Invoice) -> str | None:

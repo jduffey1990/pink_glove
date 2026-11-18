@@ -312,11 +312,16 @@ class TestCheckoutSession:
         connect.create_checkout_session(invoice)
 
         params = api.v1.checkout.sessions.create.call_args.args[0]
-        # Still the path form: whether Stripe keeps a fragment on these is
-        # unverified, and the SPA rewrites this form on arrival (ADR-036).
+        # Exactly the shape a test-mode Checkout was seen to return unchanged:
+        # the query, then the token in the fragment, nothing in the path
+        # (ADR-036). The token's colons are left as they are.
         token = connect.pay_token(invoice)
-        assert params["success_url"] == f"https://app.example.test/pay/{token}?paid=1"
-        assert params["cancel_url"] == f"https://app.example.test/pay/{token}?cancelled=1"
+        assert ":" in token
+        assert params["success_url"] == f"https://app.example.test/pay?paid=1#token={token}"
+        assert params["cancel_url"] == f"https://app.example.test/pay?cancelled=1#token={token}"
+        for url in (params["success_url"], params["cancel_url"]):
+            before_fragment = url.split("#", 1)[0]
+            assert token not in before_fragment
 
     def test_expires_in_thirty_minutes(self, api, connected):
         before = dt.datetime.now(dt.UTC)
