@@ -352,3 +352,18 @@ class TestSeededReports:
             names = [person["name"] for person in self._reports(organization)["timesheet"]["staff"]]
 
             assert names == [f"Cleaner {organization.name.split()[0]}"]
+
+
+@pytest.mark.django_db
+class TestSeededReminders:
+    def test_exactly_one_organization_sends_visit_reminders(self, seeded):
+        """ADR-035: one on and one off, so a reminder for the wrong tenant is visible."""
+        assert Organization.objects.get(name="Sparkle Clean").visit_reminders_enabled is True
+        assert Organization.objects.get(name="Rival Cleaners").visit_reminders_enabled is False
+
+    def test_every_seeded_customer_is_on_a_domain_mail_never_reaches(self, seeded):
+        """A seeded reminder cannot reach a real inbox whatever backend is configured."""
+        emails = Customer.objects.values_list("email", flat=True)
+
+        assert emails
+        assert all(email.endswith(".test") for email in emails)
