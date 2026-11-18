@@ -3403,3 +3403,55 @@ Stack brought down with its volumes.
 
 Backend 1234 → 1400: the 154 above, 4 more in `billing/tests/test_admin.py` and 8 more in `app/tests/test_sentry.py`.
 Still open: `/security-review` was not run; part B of the drill and the mutation check were not repeated after the rebase.
+
+---
+
+## Visit reminders as built
+
+Branch `feat/visit-reminders`, cut from `main` at e39bae2.
+Backend 2351 → 2429 (+78), frontend 427 (unchanged).
+Decision record: ADR-035.
+The first piece of Phase 5: a customer is emailed the day before a scheduled visit, if the organization has turned reminders on.
+
+**The switch.**
+`Organization.visit_reminders_enabled`, default false (`organizations/0007`), on `OrganizationSerializer`.
+It rides `PATCH /api/organizations/current/`, which was already admin-tier for writes, member-readable, and refused in a read-only organization.
+No new view and no new action; no settings page and no UI control (the organization settings page is a later branch).
+Until then it is turned on through that endpoint or the Django admin's new "Notifications" fieldset.
+
+**The schedule.**
+Beat runs `notifications.send_visit_reminders_all` hourly at :15.
+It queues `notifications.send_visit_reminders(organization_id)` for each active organization with the switch on.
+From 09:00 in the organization's own zone, that task reminds every qualifying visit that starts on the organization's local tomorrow and has not been reminded at its current start.
+
+**The ledger.**
+`notifications.VisitReminder` (visit, start reminded about, recipient, `sent_at`), unique on (visit, start) among live rows.
+The row is inserted before the email is sent and is the lock: a second tick, a second worker or a re-delivered task inserts nothing and sends nothing.
+A send that raises hard-deletes its row so the next hour retries; a worker that dies mid-send leaves the row unsent and it is not retried (at most once).
+A visit moved after its reminder has a new start and is reminded again.
+Admin: read-only, no delete.
+
+**What qualifies.**
+`notifications.services.due_reminders`: organization active with the switch on; visit `scheduled`; visit, customer and location not soft-deleted; customer a lead or active; customer has an email; no live ledger row at this start.
+
+**The email.**
+`notifications/visit_reminder_email.html`, through `EmailMessage` and `DEFAULT_FROM_EMAIL` like the invoice email, with `Reply-To` set to the organization's address when it has one.
+Day and times in the organization's zone, the service, the address, and the organization's phone and email; no access notes or codes.
+Locally it prints to the worker's console; under test it goes to locmem.
+
+**Seed.**
+`seed_demo` turns reminders on for Sparkle Clean and leaves Rival Cleaners off; every seeded customer address is on `.test`.
+
+**Not verified.**
+The email has been asserted in tests and never opened in a mail client.
+The beat entry has not been watched firing in the compose stack; the task has run only eagerly in tests, never through a broker.
+No UI was built, so there is nothing to screenshot.
+
+### Phase gate - as built
+
+1. **Test coverage.** Backend +78: `notifications/tests/` (59: the selection with one test per skip case, the DST and far-from-UTC days, idempotency including a lost race and a failed send, the email's content, the fan-out and per-organization task, cross-tenant, the beat entry, and the one-way import rule), `organizations/tests/test_visit_reminder_setting.py` (17: default, every role on each side of the line, cross-tenant, read-only organization), and 2 in `test_seed_demo.py`. Mutation-checked: reckoning in UTC, dropping each soft-delete join, dropping the ledger exclusion, and not freeing a failed claim each turn a test red. *Gaps:* two genuinely concurrent claims are argued from the unique constraint and played in sequence, not run in parallel transactions; the admin class has no test; the email is asserted by substring, not looked at.
+2. **DRY.** The day bounds come from `Organization.local_day_bounds` and the local date from the organization's zone, not a second implementation. The send block repeats the invoice email's four lines (`EmailMessage`, html subtype, send, log) rather than sharing a helper, as the team-management gate already accepted for its two.
+3. **Modularity.** All logic is in `notifications/services.py`; the tasks only look up the organization and call it. `notifications` reads `scheduling`, `customers` and `organizations` through their models and enums; it reaches into no other app's views or serializers.
+4. **Orthogonality.** New couplings: `due_reminders` restates "a customer worth reminding" as `CustomerStatus.LEAD`/`ACTIVE` and "a visit waiting to happen" as `JobStatus.SCHEDULED`, so a new status in either enum needs a decision here; the beat entry in `settings/base.py` names `notifications.send_visit_reminders_all`; the reminder email's `{{ organization.phone }}`/`email` read the organization's contact fields directly. Nothing imports `notifications`, and a test enforces it.
+5. **Security.** `VisitReminder` is a `TenantModel`; no view serves it, so no `TenantViewSetMixin` is needed. The switch is written only through `CurrentOrganizationView` (admin tier, `IsOrgMember` read-only rule; no `allowed_while_inactive`). No new `AllowAny`. Both tasks take `organization_id`. The email carries no access notes or codes, and the failure log names the job and not the address. No new secret and no new setting. Owned by the no-mistakes gate for test execution and `/security-review`.
+6. **Branch and production guard.** All work is on `feat/visit-reminders`; nothing was committed to `main`, pushed or merged; no `fly` command and no staging or production resource was touched. Migrations were generated under test settings against the scratch database `pg_wave2_reminders`; `migrate` was never run against the dev database.
