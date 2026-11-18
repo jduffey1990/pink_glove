@@ -4,11 +4,11 @@ from datetime import timedelta
 
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.models import PermissionsMixin
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from base.models import Base, SoftDeleteQuerySet, TenantModel
-from users.enums import Role
+from users.enums import AccountTokenPurpose, MembershipState, Role
 
 
 class CustomUserManager(BaseUserManager.from_queryset(SoftDeleteQuerySet)):
@@ -103,9 +103,20 @@ class Membership(TenantModel):
 
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField(max_length=32, choices=Role.choices, db_index=True)
+    #: What every access check reads (the tenant middleware, the 2FA policy,
+    #: the magic-link rule, the assignee checks). An invitation is created
+    #: with this False and only acceptance sets it, so an invitation nobody
+    #: has accepted changes nothing about how its recipient signs in or what
+    #: they can reach, in this organization or any other (ADR-034).
     is_active = models.BooleanField(default=True)
+    #: Both are NULL on a membership made by the seed or in the admin, which
+    #: is an ordinary active membership. Nothing gates sign-in on either.
     invited_at = models.DateTimeField(null=True, blank=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
+    #: Set when someone on the team switches this membership off, cleared when
+    #: it is switched back on. It is what tells a withdrawn invitation from a
+    #: pending one, since `is_active` is False for both.
+    deactivated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta(TenantModel.Meta):
         verbose_name = "Membership"
@@ -122,6 +133,21 @@ class Membership(TenantModel):
     @property
     def is_staff_role(self) -> bool:
         return self.role != Role.CUSTOMER
+
+    @property
+    def awaiting_acceptance(self) -> bool:
+        """Invited, and the invitation has never been accepted."""
+        return self.invited_at is not None and self.accepted_at is None
+
+    @property
+    def state(self) -> MembershipState:
+        if self.is_active:
+            return MembershipState.ACTIVE
+        if self.awaiting_acceptance and self.deactivated_at is None:
+            return MembershipState.INVITED
+        # Includes a membership switched off in the admin, which has no
+        # `deactivated_at`: inactive and not a pending invitation.
+        return MembershipState.DEACTIVATED
 
 
 def _hash_token(raw_token: str) -> str:
@@ -186,6 +212,146 @@ class MagicLinkToken(Base):
         ):
             return None
         return token.user
+
+    @property
+    def is_valid(self) -> bool:
+        return self.consumed_at is None and timezone.now() <= self.expires_at
+
+
+class AccountToken(Base):
+    """
+    A single-use emailed link that sets a staff password: an invitation to an
+    organization, or a password reset (ADR-034).
+
+    A sibling of `MagicLinkToken` rather than a generalisation of it, built
+    the same way: 256 random bits, only the SHA-256 stored, an expiry, and a
+    conditional update so two requests racing on one link cannot both win.
+    Kept apart for two reasons. A magic link signs its holder in and these
+    never do, so sharing a table would leave "which kind is this" to a filter
+    somebody can forget, and the failure is a staff session from a link meant
+    for something else. And the customer's sign-in path is not rewritten to
+    make room for a feature it has nothing to do with.
+
+    `purpose` is a required argument of every lookup, so a token is only ever
+    found by the endpoint it was issued for: an invitation presented as a
+    reset is simply not there. An invitation also names the one membership it
+    opens; a reset names none.
+
+    `Base`, not `TenantModel`, like the other sign-in rows: a reset happens
+    before any tenant is resolved, and no API serves these.
+    """
+
+    TTL = {
+        AccountTokenPurpose.INVITE: timedelta(days=7),
+        AccountTokenPurpose.PASSWORD_RESET: timedelta(hours=1),
+    }
+
+    purpose = models.CharField(max_length=32, choices=AccountTokenPurpose.choices)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name="account_tokens")
+    membership = models.ForeignKey(
+        Membership,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="invite_tokens",
+    )
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    expires_at = models.DateTimeField(db_index=True)
+    #: Stamped when the link is used, and also when it is withdrawn: by a
+    #: resend, by a newer reset request, or by the membership being switched
+    #: off. Either way the link is spent.
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(Base.Meta):
+        verbose_name = "Account token"
+        verbose_name_plural = "Account tokens"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(purpose=AccountTokenPurpose.INVITE, membership__isnull=False)
+                    | (
+                        ~models.Q(purpose=AccountTokenPurpose.INVITE)
+                        & models.Q(membership__isnull=True)
+                    )
+                ),
+                name="account_token_only_an_invite_names_a_membership",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_purpose_display()} for {self.user.email}"
+
+    @classmethod
+    def issue(
+        cls,
+        purpose: AccountTokenPurpose,
+        user: "CustomUser",
+        membership: "Membership | None" = None,
+    ) -> tuple["AccountToken", str]:
+        """
+        Create a token and return it alongside the raw value to email.
+
+        Withdraws whatever was live for the same thing first, so there is
+        only ever one working link per invitation and one per reset: a resend
+        kills the earlier email, and so does asking for a reset twice.
+        """
+        raw_token = secrets.token_urlsafe(32)
+        with transaction.atomic():
+            cls.withdraw(purpose, user=user, membership=membership)
+            token = cls.objects.create(
+                purpose=purpose,
+                user=user,
+                membership=membership,
+                token_hash=_hash_token(raw_token),
+                expires_at=timezone.now() + cls.TTL[purpose],
+            )
+        return token, raw_token
+
+    @classmethod
+    def withdraw(
+        cls,
+        purpose: AccountTokenPurpose,
+        *,
+        user: "CustomUser",
+        membership: "Membership | None" = None,
+    ) -> int:
+        """Spend every live token for this invitation, or this user's resets."""
+        live = cls.objects.filter(purpose=purpose, user=user, consumed_at__isnull=True)
+        if membership is not None:
+            live = live.filter(membership=membership)
+        now = timezone.now()
+        return live.update(consumed_at=now, updated_at=now)
+
+    @classmethod
+    def find(cls, purpose: AccountTokenPurpose, raw_token: str) -> "AccountToken | None":
+        """
+        The live token for this purpose, or None. Spends nothing.
+
+        Separate from `consume` because both flows validate a password between
+        the two: a password the validators refuse must not cost the person
+        their link.
+        """
+        token = (
+            cls.objects.filter(purpose=purpose, token_hash=_hash_token(raw_token))
+            .select_related("user", "membership__organization")
+            .first()
+        )
+        if token is None or not token.is_valid:
+            return None
+        return token
+
+    def consume(self) -> bool:
+        """Spend this token. False if another request got there first."""
+        # Conditional for the same reason as `MagicLinkToken.consume`.
+        now = timezone.now()
+        spent = (
+            type(self)
+            .objects.filter(pk=self.pk, consumed_at__isnull=True, expires_at__gte=now)
+            .update(consumed_at=now, updated_at=now)
+        )
+        if spent:
+            self.consumed_at = now
+        return bool(spent)
 
     @property
     def is_valid(self) -> bool:

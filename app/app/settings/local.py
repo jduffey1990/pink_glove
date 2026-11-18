@@ -46,6 +46,11 @@ REST_FRAMEWORK = {
         "login_account": "1000/hour",
         "pay_page": "1000/hour",
         "pay_checkout": "1000/hour",
+        "team_invite": "1000/hour",
+        "invite_accept": "1000/hour",
+        "password_reset": "1000/hour",
+        "password_reset_account": "1000/hour",
+        "password_reset_confirm": "1000/hour",
     },
 }
 

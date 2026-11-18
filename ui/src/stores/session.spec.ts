@@ -305,6 +305,70 @@ describe('a 403 while signed in', () => {
 
     expect(store.isAuthenticated).toBe(false)
   })
+
+  it('notices a deactivation: still signed in, but in no organization', async () => {
+    const store = useSessionStore()
+    connectSessionToClient(store)
+    mock.onGet('/api/users/session/').replyOnce(200, session())
+    await store.boot()
+    expect(store.hasNoOrganization).toBe(false)
+
+    // Someone switched this membership off. The server stops listing it, and
+    // the next refused request is what prompts the store to ask again.
+    mock.onGet('/api/users/session/').reply(200, session({
+      memberships: [],
+      current_organization: null,
+      current_role: null,
+    }))
+    mock.onGet('/api/scheduling/jobs/').reply(403, {})
+    await expect(api.get('/api/scheduling/jobs/')).rejects.toThrow()
+    await settle()
+
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.hasNoOrganization).toBe(true)
+    expect(store.role).toBeNull()
+    expect(store.isStaff).toBe(false)
+  })
+})
+
+describe('signed in with no organization', () => {
+  it('is false for nobody, and for anyone with a membership', async () => {
+    const store = useSessionStore()
+    expect(store.hasNoOrganization).toBe(false)
+
+    mock.onGet('/api/users/session/').reply(200, session())
+    await store.boot()
+
+    expect(store.hasNoOrganization).toBe(false)
+  })
+
+  it('is true for an account that is active nowhere', async () => {
+    mock.onGet('/api/users/session/').reply(200, session({
+      memberships: [],
+      current_organization: null,
+      current_role: null,
+    }))
+    const store = useSessionStore()
+
+    await store.boot()
+
+    expect(store.hasNoOrganization).toBe(true)
+    expect(store.needsOrganizationChoice).toBe(false)
+  })
+
+  it('leaves a superuser alone: they never had a membership to lose', async () => {
+    mock.onGet('/api/users/session/').reply(200, session({
+      is_superuser: true,
+      memberships: [],
+      current_organization: null,
+      current_role: null,
+    }))
+    const store = useSessionStore()
+
+    await store.boot()
+
+    expect(store.hasNoOrganization).toBe(false)
+  })
 })
 
 describe('the billing banner (Phase 4c)', () => {

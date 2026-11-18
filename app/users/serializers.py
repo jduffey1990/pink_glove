@@ -3,7 +3,8 @@ from rest_framework import serializers
 
 from organizations.models import Organization
 from organizations.serializers import BillingNoticeSerializer
-from users.enums import Role
+from users import services
+from users.enums import STAFF_ROLE_CHOICES, MembershipState, Role
 from users.models import CustomUser, Membership
 
 
@@ -59,15 +60,160 @@ class MembershipSerializer(serializers.ModelSerializer):
         return OrganizationSummarySerializer(membership.organization, context=context).data
 
 
+class TeamMemberSerializer(MembershipSerializer):
+    """
+    A membership as the team page sees it: where it stands, and what the
+    caller may do to it.
+
+    `available_actions` and `assignable_roles` are worked out for whoever is
+    asking, from the same rules the writes enforce (`users.services`), so the
+    page draws its buttons from them and keeps no table of who outranks whom
+    (ADR-023, ADR-034). The session payload keeps the plain
+    `MembershipSerializer`: a person's own memberships have no caller to
+    judge them by.
+    """
+
+    user_name = serializers.SerializerMethodField()
+    state = serializers.ChoiceField(choices=MembershipState.choices, read_only=True)
+    available_actions = serializers.SerializerMethodField()
+    assignable_roles = serializers.SerializerMethodField()
+
+    class Meta(MembershipSerializer.Meta):
+        fields = (
+            *MembershipSerializer.Meta.fields,
+            "state",
+            "invited_at",
+            "accepted_at",
+            "deactivated_at",
+            "available_actions",
+            "assignable_roles",
+        )
+        read_only_fields = fields
+
+    def _rules(self):
+        """The caller and the organization's sole owner, once per response."""
+        if "team_rules" not in self.context:
+            request = self.context["request"]
+            self.context["team_rules"] = (
+                services.Actor.of(request),
+                services.sole_active_owner_id(request.organization),
+            )
+        return self.context["team_rules"]
+
+    @extend_schema_field(serializers.CharField())
+    def get_user_name(self, obj):
+        """
+        The address, until the invitation is accepted.
+
+        An invited address may already have an account somewhere else, and
+        its name is that person's, not this organization's to be shown. Until
+        they join, the row says only what the inviter typed.
+        """
+        if obj.awaiting_acceptance:
+            return obj.user.email
+        return obj.user.full_name
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_available_actions(self, obj):
+        actor, sole_owner_id = self._rules()
+        return services.available_actions(actor, obj, sole_owner_id)
+
+    @extend_schema_field(
+        serializers.ListField(child=serializers.ChoiceField(choices=STAFF_ROLE_CHOICES))
+    )
+    def get_assignable_roles(self, obj):
+        actor, sole_owner_id = self._rules()
+        return services.assignable_roles(actor, obj, sole_owner_id)
+
+
+class InvitedTeamMemberSerializer(TeamMemberSerializer):
+    """A team row, with the invitation link when the API is running locally."""
+
+    dev_link = serializers.CharField(
+        required=False,
+        help_text="Local development only. Never present in a deployed environment.",
+    )
+
+    class Meta(TeamMemberSerializer.Meta):
+        fields = (*TeamMemberSerializer.Meta.fields, "dev_link")
+        read_only_fields = fields
+
+
+class InviteSerializer(serializers.Serializer):
+    """
+    An invitation: an address and a role, and nothing else.
+
+    No name: an invited address may already belong to someone, and this
+    organization does not get to name them. They name themselves when they
+    accept. `customer` is not a choice; the portal is not handed out here.
+    """
+
+    email = serializers.EmailField()
+    role = serializers.ChoiceField(choices=STAFF_ROLE_CHOICES)
+
+
+class MembershipRoleSerializer(serializers.Serializer):
+    """
+    The one thing a PATCH may change. `user`, `organization` and `is_active`
+    are not fields here, so sending them does nothing: activation has its own
+    actions, with their own rules. Nobody is made a customer here, so that is
+    not a choice either.
+    """
+
+    role = serializers.ChoiceField(choices=STAFF_ROLE_CHOICES)
+
+
+class InviteOptionsSerializer(serializers.Serializer):
+    roles = serializers.ListField(child=serializers.ChoiceField(choices=STAFF_ROLE_CHOICES))
+
+
+class InvitationInspectSerializer(serializers.Serializer):
+    token = serializers.CharField()
+
+
+class InvitationSerializer(serializers.Serializer):
+    """What an invitation link opens, shown to whoever holds it."""
+
+    organization_name = serializers.CharField()
+    email = serializers.EmailField()
+    role = serializers.ChoiceField(choices=Role.choices)
+    must_set_password = serializers.BooleanField(
+        help_text=(
+            "True when this address has never had a password. The accept call "
+            "then needs a first name and a password; otherwise it needs neither."
+        )
+    )
+    first_name = serializers.CharField(allow_blank=True)
+    last_name = serializers.CharField(allow_blank=True)
+
+
+class InvitationAcceptSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    password = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        write_only=True,
+        trim_whitespace=False,
+        style={"input_type": "password"},
+    )
+    first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+
+
 class SessionSerializer(serializers.ModelSerializer):
     """
     What the frontend needs to render a signed-in shell.
 
     Includes every membership so a multi-organization user can be offered a
     switcher; the active one is echoed back as `current_organization`.
+
+    "Every membership" means every one the middleware would resolve: a
+    deactivated membership is not an organization this person can act in, so
+    it is not offered. Listing one made the app count it, show it in the
+    switcher and send its id in a header the middleware then refused.
     """
 
-    memberships = MembershipSerializer(many=True, read_only=True)
+    memberships = serializers.SerializerMethodField()
     current_organization = serializers.SerializerMethodField()
     current_role = serializers.SerializerMethodField()
 
@@ -86,6 +232,17 @@ class SessionSerializer(serializers.ModelSerializer):
             "current_role",
         )
         read_only_fields = fields
+
+    @extend_schema_field(MembershipSerializer(many=True))
+    def get_memberships(self, obj):
+        # The same filter as TenantMiddleware, so the two cannot disagree
+        # about which organizations this person holds.
+        memberships = (
+            obj.memberships.filter(is_active=True)
+            .select_related("user", "organization")
+            .order_by("created_at")
+        )
+        return MembershipSerializer(memberships, many=True, context=self.context).data
 
     @extend_schema_field(OrganizationSummarySerializer(allow_null=True))
     def get_current_organization(self, obj):

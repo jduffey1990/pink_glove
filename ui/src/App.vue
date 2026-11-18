@@ -23,7 +23,11 @@
     drawer.value = mdAndUp.value
   })
 
-  const bare = computed(() => route.meta.access === 'public' || !session.isAuthenticated)
+  // Also bare for someone active in no organization: there is nothing to
+  // navigate to, and the page they are sent to has its own sign out.
+  const bare = computed(
+    () => route.meta.access === 'public' || !session.isAuthenticated || session.hasNoOrganization,
+  )
 
   // The subscription banner (Phase 4c). The sentence is the server's; this
   // only decides whether to draw it and where to send an admin.
@@ -41,6 +45,11 @@
         { title: 'Billing', icon: 'mdi-receipt-text-outline', to: '/billing' },
         { title: 'Services', icon: 'mdi-tag-outline', to: '/services' },
       )
+      // A courtesy, as everywhere in this list: the API refuses a dispatcher
+      // the team's writes on its own, and decides per row who may do what.
+      if (session.isAdminOrHigher) {
+        items.push({ title: 'Team', icon: 'mdi-account-multiple-outline', to: '/team' })
+      }
     } else if (session.isCleaner) {
       items.push(
         { title: 'My day', icon: 'mdi-clipboard-check-outline', to: '/my-day' },

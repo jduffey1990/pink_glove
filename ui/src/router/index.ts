@@ -35,10 +35,37 @@ const routes: RouteRecordRaw[] = [
     meta: { access: 'public', title: 'Enter your code' },
   },
   {
+    // The three account pages (ADR-034). No session: the token in the email
+    // is the credential, and none of them signs anyone in.
+    path: '/forgot-password',
+    name: 'forgot-password',
+    component: () => import('@/pages/ForgotPasswordPage.vue'),
+    meta: { access: 'public', title: 'Reset your password' },
+  },
+  {
+    path: '/reset-password/:token',
+    name: 'reset-password',
+    component: () => import('@/pages/ResetPasswordPage.vue'),
+    meta: { access: 'public', title: 'Choose a new password' },
+  },
+  {
+    path: '/accept-invite/:token',
+    name: 'accept-invite',
+    component: () => import('@/pages/AcceptInvitePage.vue'),
+    meta: { access: 'public', title: 'Accept your invitation' },
+  },
+  {
     path: '/choose-organization',
     name: 'choose-organization',
     component: () => import('@/pages/ChooseOrganizationPage.vue'),
     meta: { title: 'Choose an organization' },
+  },
+  {
+    // Signed in, and active in no organization. See the guard below.
+    path: '/no-access',
+    name: 'no-access',
+    component: () => import('@/pages/NoAccessPage.vue'),
+    meta: { title: 'No access' },
   },
   {
     path: '/',
@@ -118,6 +145,12 @@ const routes: RouteRecordRaw[] = [
     meta: { access: 'admin', title: 'Reports' },
   },
   {
+    path: '/team',
+    name: 'team',
+    component: () => import('@/pages/TeamPage.vue'),
+    meta: { access: 'admin', title: 'Team' },
+  },
+  {
     // The customer's pay page (Phase 4b). No session: the signed token in the
     // invoice email is the credential, and the API decides what it opens.
     path: '/pay/:token',
@@ -154,6 +187,16 @@ router.beforeEach(async to => {
 
   if (!session.isAuthenticated) {
     return { name: 'login', query: { next: to.fullPath } }
+  }
+
+  // Deactivated everywhere: there is no role, and every screen needs one.
+  // One page that says so, instead of `home` and `schedule` redirecting to
+  // each other until the router gives up.
+  if (session.hasNoOrganization) {
+    return to.name === 'no-access' ? true : { name: 'no-access' }
+  }
+  if (to.name === 'no-access') {
+    return { name: 'home' }
   }
 
   if (session.needsOrganizationChoice && to.name !== 'choose-organization') {

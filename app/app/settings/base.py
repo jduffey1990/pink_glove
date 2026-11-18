@@ -195,6 +195,22 @@ REST_FRAMEWORK = {
         # opening Checkout sessions does not.
         "pay_page": "120/hour",
         "pay_checkout": "10/hour",
+        # Team management (ADR-034). Inviting, resending and re-inviting each
+        # put an email in a mailbox the caller names; keyed on the signed-in
+        # user. An owner setting up a crew sends a dozen, not hundreds.
+        "team_invite": "60/hour",
+        # The public invitation page, keyed on client IP: one look at the
+        # invitation and one acceptance per person, with room for a password
+        # the validators send back a few times.
+        "invite_accept": "30/hour",
+        # Staff password reset (ADR-034). Asking is limited per client IP and,
+        # separately, per address asked about (`PasswordResetAccountThrottle`),
+        # which is what stops a rotating guesser flooding one mailbox. The
+        # per-address rate is the lower one: nobody needs four reset emails.
+        "password_reset": "5/hour",
+        "password_reset_account": "3/hour",
+        # Per client IP. Room for a new password the validators send back.
+        "password_reset_confirm": "10/hour",
     },
     # How many proxies sit in front of the app, which is how DRF decides which
     # entry of X-Forwarded-For to believe. Left unset, DRF keys throttles on the
@@ -243,6 +259,12 @@ SPECTACULAR_SETTINGS = {
         "StripeStateEnum": "organizations.enums.StripeState.choices",
         "BillingStateEnum": "organizations.enums.BillingState.choices",
         "NoticeLevelEnum": "organizations.enums.NoticeLevel.choices",
+        # A third field called "state": where a membership stands. Unnamed
+        # it would collide with the two above.
+        "MembershipStateEnum": "users.enums.MembershipState.choices",
+        # Every role but customer: what the team page may invite or grant.
+        # Three fields share it; unnamed, each would get its own enum.
+        "StaffRoleEnum": "users.enums.STAFF_ROLE_CHOICES",
         # A row's outcome in a customer import is a field called "action",
         # which would generate as "ActionEnum".
         "CustomerImportActionEnum": "customers.enums.ImportAction.choices",

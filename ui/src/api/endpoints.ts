@@ -14,6 +14,11 @@ import type {
   CustomerImportResult,
   CustomerImportTemplate,
   CustomerRequest,
+  Invitation,
+  InvitationAcceptRequest,
+  InvitedTeamMember,
+  InviteOptions,
+  InviteRequest,
   Invoice,
   InvoiceLine,
   InvoiceLineRequest,
@@ -30,6 +35,7 @@ import type {
   Organization,
   OrganizationRequest,
   Paginated,
+  PasswordResetSent,
   PatchedInvoiceLineRequest,
   Payment,
   PaymentState,
@@ -46,7 +52,9 @@ import type {
   ServiceLocation,
   ServiceLocationRequest,
   ServiceRequest,
+  StaffRole,
   StripeStatus,
+  TeamMember,
   TimeEntry,
   Timesheet,
   Url,
@@ -652,4 +660,88 @@ export async function downloadReportCsv (
     responseType: 'blob',
   })
   return data
+}
+
+// --- team management (ADR-034) --------------------------------------------
+
+/**
+ * Everyone who works here, with what the caller may do to each.
+ *
+ * `staff=true` leaves the customers out on the server, so a long customer
+ * list cannot push a colleague off the end of the page.
+ */
+export async function listTeam (): Promise<Paginated<TeamMember>> {
+  const { data } = await api.get<Paginated<TeamMember>>('/api/users/memberships/', {
+    params: { staff: true, limit: 200 },
+  })
+  return data
+}
+
+/** The roles the caller may invite someone as. The server decides (ADR-023). */
+export async function getInviteOptions (): Promise<InviteOptions> {
+  const { data } = await api.get<InviteOptions>('/api/users/memberships/invite-options/')
+  return data
+}
+
+/** `dev_link` is on the response only when the API runs with LOCAL = True. */
+export async function inviteMember (payload: InviteRequest): Promise<InvitedTeamMember> {
+  const { data } = await api.post<InvitedTeamMember>('/api/users/memberships/', payload)
+  return data
+}
+
+export async function changeMemberRole (id: string, role: StaffRole): Promise<TeamMember> {
+  const { data } = await api.patch<TeamMember>(`/api/users/memberships/${id}/`, { role })
+  return data
+}
+
+export async function deactivateMember (id: string): Promise<TeamMember> {
+  const { data } = await api.post<TeamMember>(`/api/users/memberships/${id}/deactivate/`)
+  return data
+}
+
+/** A withdrawn invitation comes back as an invitation, with a fresh link. */
+export async function reactivateMember (id: string): Promise<InvitedTeamMember> {
+  const { data } = await api.post<InvitedTeamMember>(`/api/users/memberships/${id}/reactivate/`)
+  return data
+}
+
+/** The link in the earlier email stops working. */
+export async function resendInvite (id: string): Promise<InvitedTeamMember> {
+  const { data } = await api.post<InvitedTeamMember>(
+    `/api/users/memberships/${id}/resend-invite/`,
+  )
+  return data
+}
+
+// --- invitations and password reset: public, no session --------------------
+
+/**
+ * What an invitation link opens. The token goes in the body, never in the
+ * URL of an API call. (The page's own address carries it, as the emailed
+ * link has to; ADR-034 says what that costs.)
+ */
+export async function inspectInvitation (token: string): Promise<Invitation> {
+  const { data } = await api.post<Invitation>('/api/users/invitations/inspect/', { token })
+  return data
+}
+
+/** Returns the server's sentence. Nobody is signed in by this. */
+export async function acceptInvitation (payload: InvitationAcceptRequest): Promise<string> {
+  const { data } = await api.post<{ detail: string }>('/api/users/invitations/accept/', payload)
+  return data.detail
+}
+
+/** The same answer for every address, by design. */
+export async function requestPasswordReset (email: string): Promise<PasswordResetSent> {
+  const { data } = await api.post<PasswordResetSent>('/api/auth/password-reset/', { email })
+  return data
+}
+
+/** Returns the server's sentence. Nobody is signed in by this either. */
+export async function confirmPasswordReset (token: string, password: string): Promise<string> {
+  const { data } = await api.post<{ detail: string }>(
+    '/api/auth/password-reset/confirm/',
+    { token, password },
+  )
+  return data.detail
 }

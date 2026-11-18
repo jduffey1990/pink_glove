@@ -24,11 +24,15 @@ from rest_framework.views import APIView
 
 from app.admin import TWO_FACTOR_VERIFIED_SESSION_KEY
 from base.serializers import DetailSerializer
-from base.throttles import LoginAccountThrottle
+from base.throttles import LoginAccountThrottle, PasswordResetAccountThrottle
+from two_factor import services, tasks
 from two_factor.models import TrustedDevice, TwoFactorCode
 from two_factor.serializers import (
     ChallengeIssuedSerializer,
     LoginSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetSentSerializer,
     VerifySerializer,
 )
 from two_factor.services import TRUSTED_DEVICE_COOKIE, send_challenge, two_factor_required
@@ -173,6 +177,20 @@ class ResendView(APIView):
 
     def post(self, request):
         challenge = VerifyView._pending_challenge(request)
+
+        # A pending sign-in records that a password was accepted, not which
+        # one. A password reset withdraws every outstanding code
+        # (`services.forget_devices`), and that has to end the sign-in they
+        # belonged to as well: otherwise whoever started it with the old
+        # password asks here for a fresh code and finishes without ever being
+        # asked for the new one (ADR-034). A spent code with a sign-in still
+        # pending behind it only ever means that, because a code spent by
+        # verifying takes the pending sign-in with it. An expired code is not
+        # spent, so the ordinary "send me another" is untouched.
+        if challenge is not None and challenge.consumed_at is not None:
+            del request.session[PENDING_CHALLENGE_SESSION_KEY]
+            challenge = None
+
         if challenge is None:
             return Response(
                 {"detail": "No sign-in is in progress. Please start again."},
@@ -187,3 +205,77 @@ class ResendView(APIView):
             body["dev_code"] = raw_code
 
         return Response(body, status=status.HTTP_202_ACCEPTED)
+
+
+#: Said to everyone who asks, whoever they are.
+RESET_REQUESTED = "If that address belongs to a staff account, a reset link is on its way."
+
+
+class PasswordResetRequestView(APIView):
+    """
+    Ask for a password reset link. Staff only; customers use magic links.
+
+    Always 202 with the same body, whether the address is staff, a customer
+    or nobody at all, and it takes the same time too: the view does not look
+    the account up. It hands the address to a worker, which decides and sends
+    (`two_factor.tasks.send_password_reset`).
+
+    Throttled twice: per client address, and per address asked about, so
+    neither one machine nor many can bury a person in reset emails.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle, PasswordResetAccountThrottle]
+    throttle_scope = "password_reset"
+
+    @extend_schema(
+        request=PasswordResetRequestSerializer,
+        responses={202: PasswordResetSentSerializer},
+        summary="Request a password reset link",
+    )
+    def post(self, request):
+        serializer = PasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"].lower()
+
+        body = {"detail": RESET_REQUESTED}
+
+        if settings.LOCAL:
+            # Local only, as with `dev_code`: decided in the request so the
+            # link can come back in the response, and nothing is sent. The
+            # body therefore differs by account here, and only here.
+            issued = services.issue_password_reset(email)
+            if issued is not None:
+                body["dev_link"] = issued[1]
+        else:
+            tasks.send_password_reset.delay(email)
+
+        return Response(body, status=status.HTTP_202_ACCEPTED)
+
+
+class PasswordResetConfirmView(APIView):
+    """
+    Set a new password with a reset link. Public, and it signs nobody in.
+
+    On success every open session, trusted device and pending sign-in code
+    for the account is gone (`services.reset_password`), and the next
+    sign-in is password and code like any other.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset_confirm"
+
+    @extend_schema(
+        request=PasswordResetConfirmSerializer,
+        responses={200: DetailSerializer, 400: DetailSerializer},
+        summary="Set a new password with a reset link",
+    )
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        services.reset_password(
+            serializer.validated_data["token"], serializer.validated_data["password"]
+        )
+        return Response({"detail": "Your password has been changed. Sign in with it now."})
