@@ -7,7 +7,8 @@
      Your role will be <strong>{{ role }}</strong>.</p>
 
   <p style="margin: 24px 0;">
-    <a href="{{ link }}"
+    {# The token is in the fragment (ADR-036): SendGrid must not wrap this link in its redirect. #}
+    <a clicktracking=off href="{{ link }}"
        style="background: #333; color: #fff; padding: 12px 20px; border-radius: 6px;
               text-decoration: none; font-weight: 600; display: inline-block;">
       Accept the invitation

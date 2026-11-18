@@ -10,6 +10,7 @@ import datetime as dt
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from django.core import signing
@@ -242,7 +243,13 @@ class TestPayToken:
     def test_the_url_is_under_the_frontend(self):
         invoice = IssuedInvoiceFactory()
 
-        assert connect.pay_url(invoice).startswith("https://app.example.test/pay/")
+        url = connect.pay_url(invoice)
+
+        # The token rides in the fragment, never the path (ADR-036).
+        assert url.startswith("https://app.example.test/pay#token=")
+        assert (
+            connect.invoice_from_pay_token(parse_qs(urlsplit(url).fragment)["token"][0]) == invoice
+        )
 
 
 class TestPayable:
@@ -305,8 +312,11 @@ class TestCheckoutSession:
         connect.create_checkout_session(invoice)
 
         params = api.v1.checkout.sessions.create.call_args.args[0]
-        assert params["success_url"] == connect.pay_url(invoice) + "?paid=1"
-        assert params["cancel_url"] == connect.pay_url(invoice) + "?cancelled=1"
+        # Still the path form: whether Stripe keeps a fragment on these is
+        # unverified, and the SPA rewrites this form on arrival (ADR-036).
+        token = connect.pay_token(invoice)
+        assert params["success_url"] == f"https://app.example.test/pay/{token}?paid=1"
+        assert params["cancel_url"] == f"https://app.example.test/pay/{token}?cancelled=1"
 
     def test_expires_in_thirty_minutes(self, api, connected):
         before = dt.datetime.now(dt.UTC)

@@ -51,7 +51,7 @@ def _confirm(client, token, password=NEW_PASSWORD):
 
 
 def _emailed_token() -> str:
-    return re.search(r"reset-password/([\w-]+)", mail.outbox[-1].body).group(1)
+    return re.search(r"/reset-password#token=([\w-]+)", mail.outbox[-1].body).group(1)
 
 
 def _token_for(user) -> str:
@@ -83,7 +83,9 @@ class TestAsking:
         message = mail.outbox[0]
         assert message.to == [owner.email]
         assert "Reset your" in message.subject
-        assert "https://app.example.test/reset-password/" in message.body
+        # The token rides in the fragment, never the path (ADR-036).
+        assert "https://app.example.test/reset-password#token=" in message.body
+        assert "/reset-password/" not in message.body
         assert "60 minutes" in message.body
 
     @pytest.mark.parametrize("role", STAFF)
@@ -264,7 +266,7 @@ class TestTheLinkIsOnlyReturnedLocally:
         response = _ask(api_client, owner.email)
 
         assert response.json()["dev_link"].startswith(
-            f"{settings.FRONTEND_BASE_URL}/reset-password/"
+            f"{settings.FRONTEND_BASE_URL}/reset-password#token="
         )
         # Mirrors `dev_code`: locally the link is in the response, not a mailbox.
         assert mail.outbox == []

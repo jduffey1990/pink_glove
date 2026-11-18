@@ -439,7 +439,7 @@ class TestInvoiceFields:
         body = client.get(f"/api/billing/invoices/{invoice.pk}/").data
 
         assert body["pay_url"] == connect.pay_url(invoice)
-        assert body["pay_url"].startswith("https://app.example.test/pay/")
+        assert body["pay_url"].startswith("https://app.example.test/pay#token=")
         assert body["overpaid_cents"] == 0
 
     def test_no_pay_url_when_it_would_not(self, api_client, make_member, organization):

@@ -25,6 +25,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from app.exceptions import ConflictError, ServiceUnavailableError
+from base.links import token_link
 from billing.enums import InvoiceStatus
 from billing.models import Invoice
 from billing.services import balance_cents
@@ -247,7 +248,24 @@ def invoice_from_pay_token(token: str) -> Invoice | None:
 
 
 def pay_url(invoice: Invoice) -> str:
-    return f"{settings.FRONTEND_BASE_URL}/pay/{pay_token(invoice)}"
+    """The link the email and the dispatcher's copy button hand out (ADR-036)."""
+    return token_link("/pay", pay_token(invoice))
+
+
+def stripe_return_url(invoice: Invoice, outcome: str) -> str:
+    """
+    Where Stripe Checkout sends the customer back to: `?paid=1` or
+    `?cancelled=1`.
+
+    Still the old path form (`/pay/<token>`), which the SPA rewrites to the
+    fragment form on arrival (ADR-036). Stripe's documentation does not say
+    whether it keeps a fragment on `success_url`/`cancel_url`, and a return
+    that lost it would land a customer who has just paid on an invalid link.
+    So this one hit per checkout still writes the token to the access log;
+    move it to `pay_url` once a test-mode checkout shows the fragment
+    surviving the round trip.
+    """
+    return f"{settings.FRONTEND_BASE_URL}/pay/{pay_token(invoice)}?{outcome}=1"
 
 
 def pay_url_if_payable(invoice: Invoice) -> str | None:
@@ -338,8 +356,8 @@ def create_checkout_session(invoice: Invoice) -> str:
         "metadata": metadata,
         "payment_intent_data": intent_data,
         "expires_at": int((timezone.now() + CHECKOUT_SESSION_TTL).timestamp()),
-        "success_url": f"{pay_url(invoice)}?paid=1",
-        "cancel_url": f"{pay_url(invoice)}?cancelled=1",
+        "success_url": stripe_return_url(invoice, "paid"),
+        "cancel_url": stripe_return_url(invoice, "cancelled"),
     }
     if invoice.bill_to_email:
         params["customer_email"] = invoice.bill_to_email

@@ -276,7 +276,7 @@ class TestNobodyIsLockedOutOfAReadOnlyOrganization:
         settings.LOCAL = False
         owner = team[Role.OWNER].user
         api_client.post(RESET, {"email": owner.email}, format="json")
-        token = re.search(r"reset-password/([\w-]+)", mail.outbox[-1].body).group(1)
+        token = re.search(r"/reset-password#token=([\w-]+)", mail.outbox[-1].body).group(1)
 
         confirm = api_client.post(
             RESET_CONFIRM, {"token": token, "password": GOOD_PASSWORD}, format="json"

@@ -17,6 +17,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from app.exceptions import BadRequestJSON, ConflictError
+from base.links import token_link
 from base.permissions import ORGANIZATION_INACTIVE
 from users.enums import (
     MANAGEABLE_ROLES,
@@ -446,7 +447,7 @@ def _deliver_invitation(membership: Membership, raw_token: str, invited_by: Cust
     mailbox for a row that was rolled back. A mail failure is logged without
     the link and not raised: the membership exists and Resend is one click.
     """
-    link = f"{settings.FRONTEND_BASE_URL}/accept-invite/{raw_token}"
+    link = token_link("/accept-invite", raw_token)
     site_name = getattr(settings, "SITE_NAME", "Pink Glove")
     organization = membership.organization
 

@@ -16,6 +16,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 
 from app.exceptions import BadRequestJSON
+from base.links import token_link
 from two_factor.models import TrustedDevice, TwoFactorCode
 from users.enums import ALWAYS_TWO_FACTOR_ROLES, AccountTokenPurpose, Role
 from users.models import AccountToken, CustomUser, Membership
@@ -108,7 +109,7 @@ def issue_password_reset(email: str) -> tuple[CustomUser, str] | None:
         return None
 
     _, raw_token = AccountToken.issue(AccountTokenPurpose.PASSWORD_RESET, user)
-    return user, f"{settings.FRONTEND_BASE_URL}/reset-password/{raw_token}"
+    return user, token_link("/reset-password", raw_token)
 
 
 def send_password_reset(user: CustomUser, link: str) -> None:
