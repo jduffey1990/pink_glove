@@ -1843,9 +1843,9 @@ A second request that can fail on its own, and an authorization decision (who ma
 **Rejected -- unarchiving an Archived customer on booking, like an Inactive one.**
 Archived is the one status that says "stop", and the booking is the moment to ask whether that still holds; a 400 with a sentence asks it, a silent unarchive does not.
 
-**Django admin and `seed_demo` do not move statuses.**
+**Django admin does not move statuses; `seed_demo` does it itself.**
 The admin edits rows directly and passes through no booking rule, as it passes through none of the state machine (ADR-033); whoever uses it sets the status in the same tool.
-`seed_demo` builds its plans through `materialize_plan`, not the API, so its customers stay Leads with booked visits; a later demo-seed branch will set its booked customers Active.
+`seed_demo` builds its plans through `materialize_plan`, not the API, so it calls `activate_booked_customer` itself for each plan and its one-off visit, as the API's booking paths do; its booked customers are Active and its unbooked one stays a Lead.
 
 **Consequences.**
 No booking response carries the customer's status (`CustomerSummarySerializer` has no `status`), so the schema changed only in the plan update's description.

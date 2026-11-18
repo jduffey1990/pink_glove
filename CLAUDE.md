@@ -128,9 +128,10 @@ docker compose run --rm web python manage.py migrate
 
 # Two demo organizations, each with users in every role, three customers,
 # three services, two recurring plans, a materialized board of jobs with its
-# past already worked, and four invoices (paid / part-paid with a tip /
-# overdue / draft). The two bill differently on purpose -- one charges tax and
-# a flat no-access fee, the other neither -- so a rule read from the wrong
+# past already worked, and invoices (paid / part-paid with a tip / overdue /
+# draft, plus an issued no-access fee for one). The two bill differently on
+# purpose -- one charges tax and a flat no-access fee, the other no tax and a
+# percentage fee -- so a rule read from the wrong
 # tenant shows up as a wrong number; and one is comped while the other is
 # five days from the end of its trial, so the wrong banner shows up the same
 # way. Password printed at the end. Two, not one: tenant isolation bugs are
