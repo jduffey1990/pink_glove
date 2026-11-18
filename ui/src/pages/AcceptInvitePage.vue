@@ -2,7 +2,8 @@
   /**
    * Following an invitation link.
    *
-   * Public: the token in the address is the credential. The page first asks
+   * Public: the token in the address's fragment is the credential (ADR-036),
+   * and an address without one is refused before asking. The page first asks
    * the server what the link opens, which also says whether this address has
    * ever had a password. If not, accepting sets the account up (a name and a
    * password); if so, accepting only joins, and the password is not touched.
@@ -16,6 +17,7 @@
   import { useRoute, useRouter } from 'vue-router'
   import { acceptInvitation, inspectInvitation } from '@/api/endpoints'
   import { fieldErrors } from '@/api/errors'
+  import { INCOMPLETE_LINK, tokenFromHash } from '@/lib/linkToken'
   import { failureMessage, roleLabel } from '@/lib/team'
   import { useSessionStore } from '@/stores/session'
 
@@ -23,7 +25,7 @@
   const router = useRouter()
   const session = useSessionStore()
 
-  const token = String(route.params.token ?? '')
+  const token = tokenFromHash(route.hash)
 
   const invitation = ref<Invitation | null>(null)
   const loading = ref(true)
@@ -43,6 +45,11 @@
   const done = ref('')
 
   async function open () {
+    if (!token) {
+      problem.value = INCOMPLETE_LINK
+      loading.value = false
+      return
+    }
     try {
       invitation.value = await inspectInvitation(token)
       firstName.value = invitation.value.first_name

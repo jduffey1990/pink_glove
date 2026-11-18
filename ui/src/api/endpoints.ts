@@ -39,6 +39,7 @@ import type {
   PatchedInvoiceLineRequest,
   Payment,
   PaymentState,
+  PayTokenRequest,
   PlanPreview,
   PlatformBilling,
   PublicInvoice,
@@ -555,8 +556,8 @@ export async function updateOrganization (payload: OrganizationRequest): Promise
 // --- Stripe Connect (Phase 4b) ---------------------------------------------
 
 /** The endpoints that hand back a Stripe page to send the browser to. */
-async function postForUrl (path: string): Promise<string> {
-  const { data } = await api.post<Url>(path)
+async function postForUrl (path: string, body?: object): Promise<string> {
+  const { data } = await api.post<Url>(path, body)
   return data.url
 }
 
@@ -592,16 +593,19 @@ export async function refreshSubscription (): Promise<PlatformBilling> {
 
 /**
  * The public pay page. No session: the signed token in the invoice email is
- * the credential, and the server answers 404 for a bad or expired one.
+ * the credential, and the server answers 404 for a bad or expired one. The
+ * token goes in the body, never in the URL of an API call (ADR-036).
  */
 export async function getPublicInvoice (token: string): Promise<PublicInvoice> {
-  const { data } = await api.get<PublicInvoice>(`/api/billing/pay/${token}/`)
+  const payload: PayTokenRequest = { token }
+  const { data } = await api.post<PublicInvoice>('/api/billing/pay/invoice/', payload)
   return data
 }
 
 /** Open a Checkout session for the balance. Returns Stripe's URL. */
 export function openCheckout (token: string): Promise<string> {
-  return postForUrl(`/api/billing/pay/${token}/checkout/`)
+  const payload: PayTokenRequest = { token }
+  return postForUrl('/api/billing/pay/checkout/', payload)
 }
 
 // --- reports ---------------------------------------------------------------
@@ -717,8 +721,8 @@ export async function resendInvite (id: string): Promise<InvitedTeamMember> {
 
 /**
  * What an invitation link opens. The token goes in the body, never in the
- * URL of an API call. (The page's own address carries it, as the emailed
- * link has to; ADR-034 says what that costs.)
+ * URL of an API call; the page's own address carries it in the fragment,
+ * which no request includes (ADR-036).
  */
 export async function inspectInvitation (token: string): Promise<Invitation> {
   const { data } = await api.post<Invitation>('/api/users/invitations/inspect/', { token })

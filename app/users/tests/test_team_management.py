@@ -216,7 +216,9 @@ class TestInvitationEmail:
         message = mail.outbox[0]
         assert message.to == ["new.person@example.com"]
         assert "Sparkle Clean" in message.subject
-        assert "https://app.example.test/accept-invite/" in message.body
+        # The token rides in the fragment, never the path (ADR-036).
+        assert "https://app.example.test/accept-invite#token=" in message.body
+        assert "/accept-invite/" not in message.body
         assert "Cleaner" in message.body
 
     def test_the_link_comes_back_only_when_running_locally(self, team, settings):
@@ -225,7 +227,7 @@ class TestInvitationEmail:
         response = invite(client_for(team[Role.OWNER]))
 
         assert response.json()["dev_link"].startswith(
-            f"{settings.FRONTEND_BASE_URL}/accept-invite/"
+            f"{settings.FRONTEND_BASE_URL}/accept-invite#token="
         )
         # Mirrors `dev_code`: locally the link is in the response, not a mailbox.
         assert mail.outbox == []
@@ -267,7 +269,7 @@ class TestInvitationEmail:
         with caplog.at_level("DEBUG"):
             invite(client_for(team[Role.OWNER]))
 
-        raw = re.search(r"accept-invite/([\w-]+)", mail.outbox[0].body).group(1)
+        raw = re.search(r"/accept-invite#token=([\w-]+)", mail.outbox[0].body).group(1)
         assert raw not in caplog.text
         assert "accept-invite" not in caplog.text
 

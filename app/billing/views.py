@@ -41,6 +41,7 @@ from billing.serializers import (
     InvoiceLineSerializer,
     InvoiceSerializer,
     PaymentSerializer,
+    PayTokenSerializer,
     PublicInvoiceSerializer,
     ReasonSerializer,
     ReceivablesQuerySerializer,
@@ -444,7 +445,13 @@ class SubscriptionRefreshView(APIView):
 # The pay page (public, by signed token)
 # ---------------------------------------------------------------------------
 # Deliberately AllowAny: the customer has no account (that is Phase 5). The
-# token in the invoice email is the credential, and both views are throttled.
+# token in the invoice email is the credential, and every view is throttled.
+#
+# The page sends the token in the request body (ADR-036), so it is never in
+# a URL the access log writes down. The two path-token views are the form
+# the SPA used before; they stay, deprecated, for a page loaded from the old
+# bundle, and share the new views' throttle scopes so alternating between
+# the two forms buys no extra attempts.
 
 
 def _invoice_from(token: str) -> Invoice:
@@ -454,24 +461,77 @@ def _invoice_from(token: str) -> Invoice:
     return invoice
 
 
+def _token_in_body(request) -> str:
+    serializer = PayTokenSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    return serializer.validated_data["token"]
+
+
+class PublicInvoiceView(APIView):
+    # A POST because the token must not be in the URL; it reads, and writes
+    # nothing. An anonymous POST needs no CSRF token; see PayCheckoutView.
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "pay_page"
+
+    @extend_schema(
+        request=PayTokenSerializer,
+        responses={200: PublicInvoiceSerializer, 400: DetailSerializer, 404: DetailSerializer},
+        summary="The invoice, as its customer sees it",
+        # A read, though a POST: the generated `..._create` would say otherwise.
+        operation_id="billing_pay_invoice_retrieve",
+    )
+    def post(self, request):
+        invoice = _invoice_from(_token_in_body(request))
+        return Response(PublicInvoiceSerializer.from_invoice(invoice).data)
+
+
+class PayCheckoutView(APIView):
+    # An anonymous POST needs no CSRF token (there is no session to ride).
+    # A signed-in staff member opening the page still has one, and DRF's
+    # SessionAuthentication then requires the token the SPA already sends --
+    # a missing cookie reads as a 403 here, not as a broken pay page.
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "pay_checkout"
+
+    @extend_schema(
+        request=PayTokenSerializer,
+        responses={
+            200: UrlSerializer,
+            400: DetailSerializer,
+            404: DetailSerializer,
+            409: DetailSerializer,
+            503: DetailSerializer,
+        },
+        summary="Open a Stripe Checkout session for the balance",
+        # The deprecated path-token view would generate the same id.
+        operation_id="billing_pay_checkout_open",
+    )
+    def post(self, request):
+        url = connect.create_checkout_session(_invoice_from(_token_in_body(request)))
+        return Response({"url": url})
+
+
 class PayInvoiceView(APIView):
+    """Deprecated: the token in the path. `PublicInvoiceView` replaces it."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "pay_page"
 
     @extend_schema(
         responses={200: PublicInvoiceSerializer, 404: DetailSerializer},
-        summary="The invoice, as its customer sees it",
+        summary="The invoice, as its customer sees it (token in the path)",
+        deprecated=True,
     )
     def get(self, request, token: str):
         return Response(PublicInvoiceSerializer.from_invoice(_invoice_from(token)).data)
 
 
 class PayInvoiceCheckoutView(APIView):
-    # An anonymous POST needs no CSRF token (there is no session to ride).
-    # A signed-in staff member opening the page still has one, and DRF's
-    # SessionAuthentication then requires the token the SPA already sends --
-    # a missing cookie reads as a 403 here, not as a broken pay page.
+    """Deprecated: the token in the path. `PayCheckoutView` replaces it."""
+
     permission_classes = [AllowAny]
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "pay_checkout"
@@ -484,7 +544,8 @@ class PayInvoiceCheckoutView(APIView):
             409: DetailSerializer,
             503: DetailSerializer,
         },
-        summary="Open a Stripe Checkout session for the balance",
+        summary="Open a Stripe Checkout session for the balance (token in the path)",
+        deprecated=True,
     )
     def post(self, request, token: str):
         url = connect.create_checkout_session(_invoice_from(token))

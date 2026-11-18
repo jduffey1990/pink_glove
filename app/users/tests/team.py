@@ -1,5 +1,7 @@
 """Shared helpers for the team-management tests. Not a test module."""
 
+from urllib.parse import parse_qs, urlsplit
+
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -48,7 +50,9 @@ def client_for(membership_or_user) -> APIClient:
 
 
 def token_of(link: str) -> str:
-    return link.rstrip("/").rsplit("/", 1)[-1]
+    """The token in an emailed link's fragment (`...#token=<raw>`, ADR-036)."""
+    fragment = urlsplit(link).fragment
+    return parse_qs(fragment)["token"][0]
 
 
 def invite(client, email="new.person@example.com", role=Role.CLEANER, headers=None, **extra):

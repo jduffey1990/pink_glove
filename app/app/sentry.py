@@ -61,7 +61,10 @@ _NOT_A_WORD = re.compile(r"[^a-z0-9]+")
 # URLs turn up in the Referer header and in "Not Found: /api/..." log lines,
 # so the rule is applied to the string wherever it sits, not to one field.
 _LONG_PATH_SEGMENT = re.compile(r"(?<=/)[A-Za-z0-9_\-:.~%=+]{41,}(?=$|[/?#\s\"'<>)\],;])")
-_QUERY_PAIR = re.compile(r"(?<=[?&;])([^=&#;\s]+)=([^&#;\s]*)")
+# A `name=value` pair after `?`, `&` or `;`, and after `#`: the emailed links
+# carry their token in the fragment (`/pay#token=...`, ADR-036), which no
+# request brings here but a built link in a log line or an exception can.
+_QUERY_PAIR = re.compile(r"(?<=[?&;#])([^=&#;\s]+)=([^&#;\s]*)")
 
 # Where a URL can appear as part of a string. Stack frames are left out: a
 # file path with a long migration name in it is not a credential, and it is

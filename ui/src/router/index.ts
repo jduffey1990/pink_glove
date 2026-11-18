@@ -9,6 +9,7 @@
 
 import type { RouteRecordRaw } from 'vue-router'
 import { createRouter, createWebHistory } from 'vue-router'
+import { fragmentRedirect } from '@/lib/linkToken'
 import { useSessionStore } from '@/stores/session'
 
 /** Which tier a route needs. Absent means "any signed-in user". */
@@ -21,7 +22,7 @@ declare module 'vue-router' {
   }
 }
 
-const routes: RouteRecordRaw[] = [
+export const routes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'login',
@@ -36,24 +37,28 @@ const routes: RouteRecordRaw[] = [
   },
   {
     // The three account pages (ADR-034). No session: the token in the email
-    // is the credential, and none of them signs anyone in.
+    // is the credential, and none of them signs anyone in. The token is in
+    // the fragment (`#token=...`, ADR-036); the `/:token` forms are links
+    // already sent, moved to the fragment before anything renders.
     path: '/forgot-password',
     name: 'forgot-password',
     component: () => import('@/pages/ForgotPasswordPage.vue'),
     meta: { access: 'public', title: 'Reset your password' },
   },
   {
-    path: '/reset-password/:token',
+    path: '/reset-password',
     name: 'reset-password',
     component: () => import('@/pages/ResetPasswordPage.vue'),
     meta: { access: 'public', title: 'Choose a new password' },
   },
+  { path: '/reset-password/:token', redirect: fragmentRedirect('reset-password') },
   {
-    path: '/accept-invite/:token',
+    path: '/accept-invite',
     name: 'accept-invite',
     component: () => import('@/pages/AcceptInvitePage.vue'),
     meta: { access: 'public', title: 'Accept your invitation' },
   },
+  { path: '/accept-invite/:token', redirect: fragmentRedirect('accept-invite') },
   {
     path: '/choose-organization',
     name: 'choose-organization',
@@ -153,11 +158,15 @@ const routes: RouteRecordRaw[] = [
   {
     // The customer's pay page (Phase 4b). No session: the signed token in the
     // invoice email is the credential, and the API decides what it opens.
-    path: '/pay/:token',
+    // The token is in the fragment (ADR-036), and Stripe returns to
+    // `/pay?paid=1#token=...`. The `/:token` form is every invoice email sent
+    // before that, and the return of any Checkout session opened before it.
+    path: '/pay',
     name: 'pay',
     component: () => import('@/pages/PayInvoicePage.vue'),
     meta: { access: 'public', title: 'Pay invoice' },
   },
+  { path: '/pay/:token', redirect: fragmentRedirect('pay') },
   {
     path: '/:pathMatch(.*)*',
     name: 'not-found',

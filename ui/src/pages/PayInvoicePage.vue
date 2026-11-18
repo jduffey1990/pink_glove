@@ -2,8 +2,9 @@
   /**
    * The customer's pay page, reached from the link in the invoice email.
    *
-   * No session and no organization: the signed token in the URL is the
-   * credential, and the API answers 404 for a bad or expired one. Everything
+   * No session and no organization: the signed token in the URL's fragment
+   * is the credential (ADR-036), and the API answers 404 for a bad or expired
+   * one; an address with no token is not sent at all. Everything
    * shown is the server's public view of the invoice, and whether the button
    * appears is the server's `payable_reason`, never worked out here.
    *
@@ -16,11 +17,12 @@
   import { getPublicInvoice, openCheckout } from '@/api/endpoints'
   import { errorDetail, statusOf } from '@/api/errors'
   import { formatDayLabel } from '@/lib/datetime'
+  import { INCOMPLETE_LINK, tokenFromHash } from '@/lib/linkToken'
   import { formatCents, formatPercent } from '@/lib/money'
   import { pollUntilPaid } from '@/lib/payPoll'
 
   const route = useRoute()
-  const token = computed(() => String(route.params.token ?? ''))
+  const token = computed(() => tokenFromHash(route.hash))
 
   const invoice = ref<PublicInvoice | null>(null)
   const loading = ref(true)
@@ -33,6 +35,11 @@
   const paid = computed(() => invoice.value?.payment_state === 'paid')
 
   async function load (): Promise<void> {
+    if (!token.value) {
+      error.value = INCOMPLETE_LINK
+      loading.value = false
+      return
+    }
     loading.value = true
     error.value = ''
     try {
@@ -74,10 +81,12 @@
     try {
       window.location.assign(await openCheckout(token.value))
     } catch (error_) {
-      error.value = errorDetail(error_) ?? 'Could not start the payment.'
+      const reason = errorDetail(error_) ?? 'Could not start the payment.'
       paying.value = false
       // A 409 means the invoice changed under us; show the current state.
+      // `load` clears the error, so the reason is set after it.
       await load()
+      error.value ||= reason
     }
   }
 </script>

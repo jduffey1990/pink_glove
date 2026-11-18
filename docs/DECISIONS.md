@@ -1484,6 +1484,7 @@ They need no `allowed_while_inactive` flag, because they never reach `IsOrgMembe
 The second factor is a code sent to the same mailbox the reset link goes to, so with reset by email the mailbox alone is enough to take a staff account: before this, it took the mailbox and the password.
 That is inherent in a self-service reset while the code is emailed, and an authenticator app or passkey is what would change it.
 The invitation and reset tokens travel in the path of the page's address (`/accept-invite/<token>`, `/reset-password/<token>`), as the magic link's and the pay page's do, so a deployed server writes them to its access log before they are spent; a logged token still yields no session without the mailbox, and moving the token to the URL fragment would take it out of the log for all four links at once.
+ADR-036 does that for the three links with a page, and sets the rule for the fourth.
 Reset emails depend on the Celery worker: with the worker down the request still answers 202 and the email waits in the queue.
 Deactivating a membership does not end the person's session, since they may belong elsewhere; the middleware stops resolving the organization on their next request, and their trusted device, if any, is still trusted if they are reactivated.
 A deactivated cleaner's future job assignments are left as they are.
@@ -1663,3 +1664,96 @@ Every save of a scheduled visit starting within 48 hours costs one query for the
 It imports `scheduling.models`, `scheduling.enums`, `customers.enums` and `organizations.models`; nothing imports it.
 One beat entry, `send-visit-reminders`; one organization column with its migration (`organizations/0007`); two notifications migrations.
 The OpenAPI schema gained `visit_reminders_enabled` on the organization; refusing `sms` changed no schema, so no `ENUM_NAME_OVERRIDES` entry.
+
+---
+
+## ADR-036: An emailed link carries its token in the URL fragment
+
+**Decided (2026-11-18).**
+The pay link (`/pay/<token>`), the invitation (`/accept-invite/<token>`) and the password reset (`/reset-password/<token>`) carried their bearer token in the path of a page the server serves.
+Since ADR-027 that server is gunicorn on the API's own origin, so every page load wrote the token into the access log, and every request the page then made carried it again in its `Referer`.
+The pay page also called `GET /api/billing/pay/<token>/` and `POST /api/billing/pay/<token>/checkout/`, which put it in the log a second and third time.
+ADR-034 recorded this as an accepted cost and named the fix; this is that fix.
+
+**1. The token goes in the fragment: `/pay#token=...`, `/accept-invite#token=...`, `/reset-password#token=...`.**
+A browser never sends the fragment to a server: it is not in the request line, not in the `Referer`, and not in what a proxy or CDN sees.
+`base/links.py` (`token_link`) builds all three emailed links, and `ui/src/lib/linkToken.ts` reads them; the key, `token`, is spelled in those two files.
+Each page reads the token from `route.hash` and sends it to the API in a request body.
+The invitation and reset endpoints already took it in the body (ADR-034); the pay page now calls `POST /api/billing/pay/invoice/` and `POST /api/billing/pay/checkout/` with `{"token": ...}`.
+They make the same refusals as the path form, with the same throttle scopes (`pay_page`, `pay_checkout`), so a guess costs the same on either form and alternating between them buys nothing.
+An address with no token at all says "That link is incomplete" and asks the server nothing; a garbled one goes to the server and gets the existing invalid-link answer.
+The routed page is keyed by the token, because a second link opened over the first changes only the hash, which is no page load and no new route.
+
+**2. Links already sent keep working, and are rewritten on arrival.**
+Every invoice email sent before this has a 120-day pay link in the old form; invitations live 7 days and resets an hour.
+Each old route is a `redirect` record to the fragment form (`fragmentRedirect`), resolved before vue-router writes the URL, so the old address is replaced in place with `history.replaceState` and leaves no history entry, and the query (`?paid=1`) survives.
+What cannot be prevented: the page load that brought the old address has already been logged, and so have the requests the page makes before the router runs.
+Measured against the built SPA under gunicorn, one old-form load writes the token once in its request line and 12 to 18 more times in the `Referer` of the stylesheet, scripts and session fetch that precede the rewrite.
+The path-token API views stay, marked `deprecated` in the schema, for a tab still running the previous bundle.
+
+**3. Stripe returns to the fragment form too.**
+Checkout's `success_url` and `cancel_url` (`stripe_return_url`) are `/pay?paid=1#token=...` and `/pay?cancelled=1#token=...`: the query, then the fragment, built by `token_link`.
+Stripe's API reference for `success_url` and its "Customize redirect behavior" guide say nothing about a fragment either way, so it was tested rather than assumed.
+Jordan ran it on 2026-11-18 with Stripe CLI 1.51.1, in the test-mode sandbox "Pink Glove Platform" (`livemode` false), hosted Checkout, on the platform account rather than a connected one.
+With `success_url` `https://example.com/pay?paid=1#token=fragment-survives`, the session object echoed it unchanged, and after paying with the 4242 test card `location.href` was exactly that address.
+With `cancel_url` `https://example.com/pay?cancelled=1#token=fragment-survives`, the session echoed it unchanged, and after the back link on the Checkout page `location.href` was exactly that address.
+Pay-page checkouts run on the tenant's connected account (ADR-024), which this did not exercise; a connected-account session is created with the same parameters and returns through the same hosted Checkout redirect, so the result is taken to carry over.
+A Checkout session opened before this deploys was created with the old `/pay/<token>?paid=1` and returns there for up to `CHECKOUT_SESSION_TTL` (30 minutes), which the old route rewrites.
+The Connect and subscription returns (`/billing/settings?stripe=...`, `?subscription=...`) carry no token and are untouched.
+
+**4. The old form is removed later, in steps, not here.**
+This branch only sends the new form.
+Removing the old routes before every old link has expired would lock a customer out of paying a real invoice, so the order is: ship this, then measure, then remove.
+Measure by counting old-form page loads in the access log (`GET /pay/`, `/accept-invite/`, `/reset-password/` with a path segment), never by keeping the tokens.
+The deprecated path-token API views can go one deploy after this one, once no bundle older than this one can be open.
+The old SPA routes can go 120 days after this deploys, and only once the count is zero.
+That also outlives the longest Checkout session opened before the deploy (`CHECKOUT_SESSION_TTL`, 30 minutes), whose return is the old `/pay/<token>`; if that TTL is ever raised past the pay token's 120 days, the old route must outlive it instead.
+
+**5. What is logged, after.**
+Gunicorn's access log uses its default format, `%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"`, so it records the request line with path and query (`%(r)s`) and the `Referer` (`%(f)s`).
+Django's own logging records the path of a 4xx or 5xx (`django.request`, "Not Found: /api/..."), never a body.
+After this change, a new-form link puts nothing of its token in either: the page load is `GET /pay`, the API calls are `POST /api/billing/pay/invoice/` with a `Referer` of `/pay`, and the token is only in a body, which nothing logs.
+Before it is spent, an old-form link still writes its token as described in 2, as does the return of a Checkout session opened before the deploy; a return from a session opened after it writes nothing (`GET /pay?paid=1`).
+Sentry already drops request bodies; its URL scrubber now also redacts a `#name=value` pair, because a built link can still appear in a log message or an exception, and the long-path-segment rule that used to catch it no longer matches.
+
+**6. The customer's magic link follows the same rule when it gets a page.**
+`users/views.py` builds `/sign-in/<token>` and no SPA route exists for it yet; its consume endpoint already takes the token in the body.
+The branch that adds the page must build the link with `token_link("/sign-in", ...)` and read it with `tokenFromHash`, not add `/sign-in/:token`.
+Magic links expire in minutes, so the old form needs no redirect there unless one has already been sent to a real customer.
+
+**Rejected -- a header instead of a body for the pay page's read.**
+`GET /api/billing/pay/` with the token in, say, `X-Pay-Token` keeps the read a GET.
+It needs a custom header the development CORS setup would have to allow, a header a proxy may be configured to log where a body never is, and a second way of passing a credential beside the body the invitation and reset endpoints already use.
+A POST that writes nothing is the smaller cost; its operation id says it is a retrieve.
+
+**Rejected -- the token in the query string.**
+It is as visible to the server as the path: in the request line, in the access log and in the `Referer`.
+
+**Rejected -- stripping the fragment from the address bar once it is read.**
+It would keep the token out of local history and history sync.
+It would also break a reload, a bookmark, and the pay page after a return from Stripe, and a customer who reloads a pay page should not be told the link is incomplete.
+The fragment stays in the address; what it is kept out of is every server.
+
+**Rejected -- a server-side redirect from the old path to the fragment.**
+A 302 from Django could rewrite the old link before the SPA loads, saving the `Referer` lines.
+It is still a request with the token in the path, so it saves nothing in the request line, and it puts a second copy of the routing rule in Django.
+The SPA redirect is the one place the old form is known.
+
+**Rejected -- removing the old routes in this branch.**
+Every pay link sent in the last 120 days would stop working on the day this deploys, and a customer would find out by being unable to pay.
+That is a lockout, and a lockout ships in steps (send, measure, enforce).
+
+**Rejected -- a fragment `success_url` on the strength of how browsers treat redirects.**
+A browser keeps a fragment across an HTTP redirect, and Stripe's own Checkout URL carries one, so it would probably work.
+"Probably" is not enough for the page a customer sees right after paying, so the first cut kept the path form until the test in 3 was run; it now uses the fragment on that evidence, not on the argument.
+
+**Accepted costs.**
+The fragment is still in the browser's own history, synced history and anything that reads the address bar (an extension, a screenshot), as the path was.
+A link pasted into a chat or a ticket still carries the token, as before.
+The three emails' anchors carry `clicktracking=off`: SendGrid's click tracking would otherwise wrap each link in a redirect through its own servers, which would then hold the token and whose handling of a fragment is undocumented.
+That attribute is SendGrid's; another provider would need its own equivalent, and a provider that ignores it and tracks anyway would break the fragment form, which only a real send on staging shows.
+
+**Consequences.**
+The SPA paths are `/pay`, `/accept-invite` and `/reset-password`, with the old `/:token` forms as redirect records beside them in `ui/src/router/index.ts`; `billing/connect.py` builds `pay_url` and `stripe_return_url`, both in the fragment form through `token_link`; and the old `/pay/:token` route must outlive the longest Checkout session opened before the deploy, which the 120 days already do.
+The fragment key `token` is spelled in `app/base/links.py` and `ui/src/lib/linkToken.ts`.
+`App.vue` keys the routed page by the link token, so any future page that reads a token from the hash starts over when the token changes.

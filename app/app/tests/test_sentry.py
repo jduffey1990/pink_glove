@@ -197,6 +197,18 @@ class TestCredentialsInAUrl:
         )
         assert scrub_url(f"Not Found: /pay/{token}") == f"Not Found: /pay/{FILTERED}"
 
+    def test_a_token_in_a_links_fragment_is_redacted(self):
+        """ADR-036: the emailed links carry the token after `#token=`."""
+        from billing.connect import pay_url
+
+        invoice = SimpleNamespace(pk=uuid.uuid4())
+        link = pay_url(invoice)
+
+        assert "#token=" in link
+        assert scrub_url(f"sent {link} to the customer") == (
+            f"sent {link.split('#')[0]}#token={FILTERED} to the customer"
+        )
+
     @pytest.mark.django_db
     def test_a_customers_magic_link_is_redacted(self, user):
         from users.models import MagicLinkToken

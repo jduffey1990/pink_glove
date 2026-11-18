@@ -972,7 +972,9 @@ paths:
   /api/billing/pay/{token}/:
     get:
       operationId: billing_pay_retrieve
-      summary: The invoice, as its customer sees it
+      description: 'Deprecated: the token in the path. `PublicInvoiceView` replaces
+        it.'
+      summary: The invoice, as its customer sees it (token in the path)
       parameters:
       - in: path
         name: token
@@ -984,6 +986,7 @@ paths:
       security:
       - cookieAuth: []
       - {}
+      deprecated: true
       responses:
         '200':
           content:
@@ -1000,7 +1003,9 @@ paths:
   /api/billing/pay/{token}/checkout/:
     post:
       operationId: billing_pay_checkout_create
-      summary: Open a Stripe Checkout session for the balance
+      description: 'Deprecated: the token in the path. `PayCheckoutView` replaces
+        it.'
+      summary: Open a Stripe Checkout session for the balance (token in the path)
       parameters:
       - in: path
         name: token
@@ -1012,6 +1017,7 @@ paths:
       security:
       - cookieAuth: []
       - {}
+      deprecated: true
       responses:
         '200':
           content:
@@ -1032,6 +1038,98 @@ paths:
                 $ref: '#/components/schemas/Detail'
           description: ''
         '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/pay/checkout/:
+    post:
+      operationId: billing_pay_checkout_open
+      summary: Open a Stripe Checkout session for the balance
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayTokenRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PayTokenRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PayTokenRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Url'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+  /api/billing/pay/invoice/:
+    post:
+      operationId: billing_pay_invoice_retrieve
+      summary: The invoice, as its customer sees it
+      tags:
+      - billing
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayTokenRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PayTokenRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PayTokenRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicInvoice'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Detail'
+          description: ''
+        '404':
           content:
             application/json:
               schema:
@@ -3831,8 +3929,8 @@ paths:
 
         Public: the token is the credential. A POST with the token in the body,
         like the magic link, so no API call carries it in a URL. The page's own
-        address still does (`/accept-invite/<token>`), and a deployed server
-        writes that to its access log: see ADR-034 for why that is tolerated.
+        address carries it in the fragment (`/accept-invite#token=...`), which no
+        request includes (ADR-036).
       summary: Look at an invitation
       tags:
       - users
@@ -7139,6 +7237,15 @@ components:
           type: string
           format: date-time
           nullable: true
+    PayTokenRequest:
+      type: object
+      description: The pay link's token, in a request body rather than a URL (ADR-036).
+      properties:
+        token:
+          type: string
+          minLength: 1
+      required:
+      - token
     Payment:
       type: object
       description: |-

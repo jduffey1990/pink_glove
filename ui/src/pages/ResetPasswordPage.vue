@@ -2,7 +2,8 @@
   /**
    * Choose a new password with a reset link.
    *
-   * Public: the token in the address is the credential. A success signs
+   * Public: the token in the address's fragment is the credential (ADR-036).
+   * An address without one says so and offers no form. A success signs
    * nobody in. It ends every session the account had, forgets every trusted
    * device, and the person then signs in with the new password and a code
    * like any other sign-in (ADR-008, ADR-034).
@@ -14,6 +15,7 @@
   import { useRoute, useRouter } from 'vue-router'
   import { confirmPasswordReset } from '@/api/endpoints'
   import { fieldErrors } from '@/api/errors'
+  import { INCOMPLETE_LINK, tokenFromHash } from '@/lib/linkToken'
   import { failureMessage } from '@/lib/team'
   import { useSessionStore } from '@/stores/session'
 
@@ -21,7 +23,7 @@
   const router = useRouter()
   const session = useSessionStore()
 
-  const token = String(route.params.token ?? '')
+  const token = tokenFromHash(route.hash)
 
   const password = ref('')
   const showPassword = ref(false)
@@ -70,6 +72,16 @@
 
           <v-btn block color="primary" size="large" @click="router.push({ name: 'login' })">
             Sign in
+          </v-btn>
+        </template>
+
+        <template v-else-if="!token">
+          <v-alert class="mb-4" density="compact" type="error" variant="tonal">
+            {{ INCOMPLETE_LINK }}
+          </v-alert>
+
+          <v-btn block variant="text" @click="router.push({ name: 'forgot-password' })">
+            Ask for a new link
           </v-btn>
         </template>
 
