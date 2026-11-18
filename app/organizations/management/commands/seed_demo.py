@@ -45,6 +45,10 @@ ORGANIZATIONS = [
         "invoice_prefix": "SPK",
         "invoice_terms_days": 14,
         "invoice_footer": "Make checks payable to Sparkle Clean. Thank you!",
+        # On for one tenant only (ADR-035), so a reminder sent for the wrong
+        # organization shows up in the worker's console. The seeded customers'
+        # addresses are on the reserved `.test` domain, which mail never reaches.
+        "visit_reminders_enabled": True,
     },
     {
         "name": "Rival Cleaners",
@@ -55,6 +59,7 @@ ORGANIZATIONS = [
         "invoice_prefix": "RIV",
         "invoice_terms_days": 30,
         "invoice_footer": "Zelle to billing@rivalcleaners.test.",
+        "visit_reminders_enabled": False,
     },
 ]
 

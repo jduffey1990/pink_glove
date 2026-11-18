@@ -85,7 +85,7 @@ LOCAL_APPS = [
     "scheduling",
     "billing",
     "health",
-    # Phase 5 adds: notifications
+    "notifications",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -472,6 +472,14 @@ CELERY_BEAT_SCHEDULE = {
     "enforce-platform-billing": {
         "task": "billing.enforce_platform_billing_all",
         "schedule": crontab(hour="1", minute="0"),
+    },
+    # Visit reminders (ADR-035). Hourly for the reveal evaluator's reason:
+    # each organization's own clock decides whether its reminders are due,
+    # so one entry serves every timezone. Off the hour so it does not queue
+    # behind that evaluator.
+    "send-visit-reminders": {
+        "task": "notifications.send_visit_reminders_all",
+        "schedule": crontab(minute="15"),
     },
 }
 

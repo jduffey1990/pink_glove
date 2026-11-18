@@ -40,6 +40,7 @@ class OrganizationAdmin(admin.ModelAdmin):
             },
         ),
         ("Branding", {"fields": ("logo", "primary_color")}),
+        ("Notifications", {"fields": ("visit_reminders_enabled",)}),
         (
             "Invoicing",
             {

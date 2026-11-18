@@ -2,11 +2,13 @@ from rest_framework import serializers
 
 from base.validators import MaxFileSize
 from base.viewsets import TenantModelSerializer
-from customers.enums import ImportAction
+from customers.enums import ContactMethod, ImportAction
 from customers.import_columns import MAX_UPLOAD_MEGABYTES
 from customers.models import Customer, ServiceLocation
 from users.enums import Role
 from users.models import CustomUser
+
+SMS_UNAVAILABLE = "Text messages aren't available yet."
 
 
 class ServiceLocationSerializer(TenantModelSerializer):
@@ -101,6 +103,10 @@ class CustomerSerializer(TenantModelSerializer):
     display_name = serializers.CharField(read_only=True)
     locations = ServiceLocationSummarySerializer(many=True, read_only=True)
 
+    #: Choices the enum keeps but a write refuses (ADR-035). The import's
+    #: template hint reads this too, so it never offers what a row cannot hold.
+    unavailable_choices = {"preferred_contact_method": frozenset({ContactMethod.SMS})}
+
     class Meta(TenantModelSerializer.Meta):
         model = Customer
         fields = (
@@ -152,6 +158,17 @@ class CustomerSerializer(TenantModelSerializer):
             memberships__deleted_at__isnull=True,
         ).distinct()
         return fields
+
+    def validate_preferred_contact_method(self, value):
+        """
+        Nothing sends a text message yet, so nobody may be promised one
+        (ADR-035). The enum keeps `sms` so rows that already hold it still
+        read, and it comes back when SMS ships. Every write path reaches
+        this: create, update, and the import, which validates rows here.
+        """
+        if value in self.unavailable_choices["preferred_contact_method"]:
+            raise serializers.ValidationError(SMS_UNAVAILABLE)
+        return value
 
     def validate(self, attrs):
         # Mirrors the customer_has_a_name check constraint, so the API returns
