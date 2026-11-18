@@ -13,21 +13,14 @@ from celery import shared_task
 from django.utils import timezone
 
 from notifications import services
-from organizations.models import Organization
 
 logger = logging.getLogger(__name__)
-
-
-def _remindable_organizations():
-    # A deactivated organization is read-only (ADR-028): it books nothing and
-    # tells its customers nothing until it is back.
-    return Organization.objects.filter(is_active=True, visit_reminders_enabled=True)
 
 
 @shared_task(name="notifications.send_visit_reminders_all")
 def send_visit_reminders_all() -> int:
     """Dispatch one reminder pass per organization that wants them. Returns how many."""
-    organization_ids = list(_remindable_organizations().values_list("id", flat=True))
+    organization_ids = list(services.remindable_organizations().values_list("id", flat=True))
     for organization_id in organization_ids:
         send_visit_reminders.delay(str(organization_id))
     return len(organization_ids)
@@ -43,8 +36,28 @@ def send_visit_reminders(organization_id: str) -> int:
     here, because it may have been switched off or deactivated since the
     fan-out queued this.
     """
-    organization = _remindable_organizations().filter(pk=organization_id).first()
+    organization = services.remindable_organizations().filter(pk=organization_id).first()
     if organization is None:
         logger.info("send_visit_reminders: organization %s is not sending", organization_id)
         return 0
     return services.send_due_reminders(organization, timezone.now())
+
+
+@shared_task(name="notifications.send_visit_reminder")
+def send_visit_reminder(organization_id: str, job_id: str) -> bool:
+    """
+    Send one visit's reminder now, if it is due. Queued by the `post_save`
+    receiver when a visit is booked or moved into its window (ADR-035).
+
+    Re-checks everything: the organization by the id it was handed, and the
+    visit through `due_reminders`, scoped to that organization, so a stale
+    or foreign job id finds nothing. True only if this call sent the email.
+    """
+    organization = services.remindable_organizations().filter(pk=organization_id).first()
+    if organization is None:
+        return False
+    now = timezone.now()
+    job = services.due_reminders(organization, now).filter(pk=job_id).first()
+    if job is None:
+        return False
+    return services.send_reminder(job, now)

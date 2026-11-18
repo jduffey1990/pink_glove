@@ -3,9 +3,10 @@ Visit reminders: which visits are due one, and sending it (ADR-035).
 
 A visit is due its reminder once it is `REMINDER_LOCAL_HOUR` on the
 organization-local day before it, until it starts. The hourly task asks
-that question every hour, so a missed tick, a worker that was down, or a
-visit booked at 23:30 for the next morning is still reminded before it
-begins (at the next tick). What stops a reminder being
+that question every hour, and a visit booked or moved into its window is
+asked it again as soon as the save commits (`notifications.signals`), so a
+missed tick, a worker that was down, or a visit booked at 23:30 for the next
+morning is still reminded before it begins. What stops a reminder being
 repeated is the `VisitReminder` ledger, not the clock.
 
 Reckoned in `Organization.timezone` and compared in UTC (invariant 8):
@@ -38,6 +39,14 @@ REMINDER_LOCAL_HOUR = 17
 #: archived one has been told nothing about a visit that somebody forgot to
 #: cancel, and an email is the wrong way for them to find out.
 REMINDABLE_CUSTOMER_STATUSES = (CustomerStatus.LEAD, CustomerStatus.ACTIVE)
+
+
+def remindable_organizations() -> QuerySet[Organization]:
+    """
+    The organizations that send reminders. A deactivated one is read-only
+    (ADR-028): it tells its customers nothing until it is back.
+    """
+    return Organization.objects.filter(is_active=True, visit_reminders_enabled=True)
 
 
 def reminder_window(
