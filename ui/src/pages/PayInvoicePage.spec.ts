@@ -85,6 +85,8 @@ describe('PayInvoicePage', () => {
 
     const call = mock.history.post.find(each => each.url === CHECKOUT)
     expect(JSON.parse(call?.data ?? '{}')).toEqual({ token: 'tok-1' })
+    // The reason survives the re-read that follows a refusal.
+    expect(wrapper.text()).toContain('Card payments are not available right now.')
   })
 
   it.each(['/pay', '/pay#token=', '/pay#tok-1'])(

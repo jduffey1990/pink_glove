@@ -81,10 +81,12 @@
     try {
       window.location.assign(await openCheckout(token.value))
     } catch (error_) {
-      error.value = errorDetail(error_) ?? 'Could not start the payment.'
+      const reason = errorDetail(error_) ?? 'Could not start the payment.'
       paying.value = false
       // A 409 means the invoice changed under us; show the current state.
+      // `load` clears the error, so the reason is set after it.
       await load()
+      error.value ||= reason
     }
   }
 </script>
