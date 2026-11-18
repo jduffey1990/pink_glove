@@ -1602,6 +1602,7 @@ Promoting a lead to active when a visit is booked is approved as a separate, lat
 **The customer's contact preference is not consulted, and "Text message" cannot be chosen.**
 Email is the only channel there is, so every customer with an address gets the reminder whatever their preference says.
 Until SMS exists nobody may be promised a text: `CustomerSerializer` refuses `sms` with "Text messages aren't available yet." on create and update, and the customer import reports it on the row's column because it validates through the same serializer.
+The refused values live once, in `CustomerSerializer.unavailable_choices`, and the import template's column hint reads them too, so it never offers a value a row cannot hold.
 The enum keeps the value, with no data migration, so rows that already hold it still read and edit, and it returns when SMS ships.
 "Phone call" stays selectable.
 The UI's customer form never offered the preference, so nothing there changed.
