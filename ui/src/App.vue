@@ -8,6 +8,7 @@
   import { useRoute, useRouter } from 'vue-router'
   import { useDisplay } from 'vuetify'
   import { billingBanner } from '@/lib/billingBanner'
+  import { tokenFromHash } from '@/lib/linkToken'
   import { useSessionStore } from '@/stores/session'
 
   const session = useSessionStore()
@@ -145,7 +146,12 @@
         </router-link>
       </v-alert>
 
-      <router-view />
+      <!-- A link's token is in the fragment (ADR-036), and opening a second
+           link over the first changes only the hash, which is no page load
+           and no new route: keyed by the token, the page starts over. -->
+      <router-view v-slot="{ Component, route: shown }">
+        <component :is="Component" :key="tokenFromHash(shown.hash) || undefined" />
+      </router-view>
     </v-main>
   </v-app>
 </template>
