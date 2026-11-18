@@ -1,10 +1,12 @@
 """
-Booking work for a Lead makes them Active (ADR-037).
+What booking work does to a customer's status (ADR-037).
 
-The two booking paths are a one-off visit created through the API and a
-recurring plan created through the API. Only `lead` moves. The promotion is in
-the booking's transaction, so every refused booking -- including the ones
-refused after a row was already written -- leaves the Lead a Lead.
+Booking is a new visit, a new active plan, a paused plan made active, and a
+visit or active plan handed to another customer, all through the API. Lead and
+Inactive become Active; Active stays; Archived is refused with a 400 and
+nothing is written. The move is in the booking's transaction, so every
+refused booking -- including the ones refused after a row was already
+written -- changes no status.
 """
 
 import datetime as dt
@@ -16,8 +18,9 @@ from django.utils import timezone
 
 from catalog.enums import PricingModel
 from customers.enums import CustomerStatus
+from customers.models import Customer
 from scheduling.models import Job, RecurringPlan
-from scheduling.services import materialize_plan
+from scheduling.services import ARCHIVED_CUSTOMER_REFUSAL, materialize_plan
 from scheduling.tests.factories import (
     CustomerFactory,
     JobFactory,
@@ -29,6 +32,14 @@ from users.enums import Role
 
 JOBS = reverse("scheduling:job-list")
 PLANS = reverse("scheduling:plan-list")
+
+
+def plan_detail(plan) -> str:
+    return reverse("scheduling:plan-detail", args=[plan.id])
+
+
+def job_detail(job) -> str:
+    return reverse("scheduling:job-detail", args=[job.id])
 
 
 def status_of(customer) -> str:
@@ -135,33 +146,252 @@ class TestALeadIsPromoted:
         assert customer.first_name == "Dana"
 
 
+def set_status(customer, status) -> None:
+    customer.status = status
+    customer.save(update_fields=["status"])
+
+
+def book_visit(client, organization, target, target_location, service):
+    start = timezone.now().replace(second=0, microsecond=0) + dt.timedelta(days=3)
+    return client.post(
+        JOBS,
+        {
+            "customer": str(target.id),
+            "location": str(target_location.id),
+            "service": str(service.id),
+            "scheduled_start": start.isoformat(),
+            "scheduled_end": (start + dt.timedelta(hours=2)).isoformat(),
+        },
+        format="json",
+    )
+
+
+def book_plan(client, organization, target, target_location, service):
+    return client.post(
+        PLANS,
+        {
+            "customer": str(target.id),
+            "location": str(target_location.id),
+            "service": str(service.id),
+            "rrule": "FREQ=WEEKLY;BYDAY=TU",
+            "starts_on": timezone.now().date().isoformat(),
+            "preferred_start_time": "09:00:00",
+            "duration_minutes": 120,
+        },
+        format="json",
+    )
+
+
+def reactivate_plan(client, organization, target, target_location, service):
+    plan = RecurringPlanFactory(
+        organization=organization,
+        customer=target,
+        location=target_location,
+        service=service,
+        is_active=False,
+    )
+    return client.patch(plan_detail(plan), {"is_active": True}, format="json")
+
+
+def hand_over_plan(client, organization, target, target_location, service):
+    plan = RecurringPlanFactory(organization=organization, service=service)
+    body = {"customer": str(target.id), "location": str(target_location.id)}
+    return client.patch(plan_detail(plan), body, format="json")
+
+
+def hand_over_visit(client, organization, target, target_location, service):
+    job = JobFactory(organization=organization, service=service)
+    body = {"customer": str(target.id), "location": str(target_location.id)}
+    return client.patch(job_detail(job), body, format="json")
+
+
+TRIGGERS = [book_visit, book_plan, reactivate_plan, hand_over_plan, hand_over_visit]
+
+
 @pytest.mark.django_db
-class TestOnlyALeadMoves:
-    @pytest.mark.parametrize(
-        "status", [CustomerStatus.ACTIVE, CustomerStatus.INACTIVE, CustomerStatus.ARCHIVED]
-    )
-    def test_a_one_off_visit_leaves_it(self, authed_client, customer, visit, status):
-        customer.status = status
-        customer.save(update_fields=["status"])
+class TestEveryTriggerAndEveryStatus:
+    """Each booking path against each status, on each side of each line."""
 
-        assert authed_client.post(JOBS, visit, format="json").status_code == 201
-        assert status_of(customer) == status
+    @pytest.fixture
+    def target(self, organization):
+        customer = CustomerFactory(organization=organization)
+        return customer, ServiceLocationFactory(organization=organization, customer=customer)
 
-    @pytest.mark.parametrize(
-        "status", [CustomerStatus.ACTIVE, CustomerStatus.INACTIVE, CustomerStatus.ARCHIVED]
-    )
-    def test_a_plan_leaves_it(self, authed_client, customer, plan, status):
-        customer.status = status
-        customer.save(update_fields=["status"])
+    @pytest.mark.parametrize("trigger", TRIGGERS, ids=lambda t: t.__name__)
+    @pytest.mark.parametrize("status", [CustomerStatus.LEAD, CustomerStatus.INACTIVE])
+    def test_lead_and_inactive_become_active(
+        self, authed_client, organization, service, target, trigger, status
+    ):
+        customer, location = target
+        set_status(customer, status)
 
-        assert authed_client.post(PLANS, plan, format="json").status_code == 201
-        assert status_of(customer) == status
+        response = trigger(authed_client, organization, customer, location, service)
 
-    def test_a_paused_plan_books_nothing_and_promotes_no_one(self, authed_client, customer, plan):
+        assert response.status_code in (200, 201)
+        assert status_of(customer) == CustomerStatus.ACTIVE
+
+    @pytest.mark.parametrize("trigger", TRIGGERS, ids=lambda t: t.__name__)
+    def test_active_stays_active_and_is_not_written(
+        self, authed_client, organization, service, target, trigger
+    ):
+        customer, location = target
+        set_status(customer, CustomerStatus.ACTIVE)
+        before = Customer.objects.get(pk=customer.pk).updated_at
+
+        response = trigger(authed_client, organization, customer, location, service)
+
+        assert response.status_code in (200, 201)
+        assert status_of(customer) == CustomerStatus.ACTIVE
+        assert customer.updated_at == before
+
+    @pytest.mark.parametrize("trigger", TRIGGERS, ids=lambda t: t.__name__)
+    def test_archived_is_refused_and_nothing_is_written(
+        self, authed_client, organization, service, target, trigger
+    ):
+        customer, location = target
+        set_status(customer, CustomerStatus.ARCHIVED)
+        plans_before = set(RecurringPlan.objects.values_list("id", "customer_id", "is_active"))
+        jobs_before = set(Job.objects.values_list("id", "customer_id"))
+
+        response = trigger(authed_client, organization, customer, location, service)
+
+        assert response.status_code == 400
+        assert response.json() == {"customer": [ARCHIVED_CUSTOMER_REFUSAL]}
+        assert status_of(customer) == CustomerStatus.ARCHIVED
+        # The reactivate and hand-over triggers make their row before the
+        # request; whatever existed then is exactly what exists now.
+        plans_after = set(RecurringPlan.objects.values_list("id", "customer_id", "is_active"))
+        assert plans_after == plans_before or trigger in (reactivate_plan, hand_over_plan)
+        assert not RecurringPlan.objects.filter(customer=customer, is_active=True).exists()
+        assert not Job.objects.filter(customer=customer).exists()
+        assert set(Job.objects.values_list("id", "customer_id")) >= jobs_before
+
+    def test_a_paused_plan_books_nothing_and_moves_no_one(self, authed_client, customer, plan):
         response = authed_client.post(PLANS, {**plan, "is_active": False}, format="json")
 
         assert response.status_code == 201
         assert status_of(customer) == CustomerStatus.LEAD
+
+
+@pytest.mark.django_db
+class TestAnArchivedCustomersExistingWork:
+    @pytest.fixture
+    def archived(self, customer):
+        set_status(customer, CustomerStatus.ARCHIVED)
+        return customer
+
+    def test_a_paused_plan_may_be_created_for_them(self, authed_client, archived, plan):
+        """It books nothing; making it active is what is refused."""
+        response = authed_client.post(PLANS, {**plan, "is_active": False}, format="json")
+
+        assert response.status_code == 201
+        assert status_of(archived) == CustomerStatus.ARCHIVED
+
+    def test_a_paused_plan_is_not_handed_to_them(
+        self, authed_client, organization, archived, location
+    ):
+        plan = RecurringPlanFactory(organization=organization, is_active=False)
+
+        response = authed_client.patch(
+            plan_detail(plan),
+            {"customer": str(archived.id), "location": str(location.id)},
+            format="json",
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {"customer": [ARCHIVED_CUSTOMER_REFUSAL]}
+        plan.refresh_from_db()
+        assert plan.customer_id != archived.id
+
+    def test_their_existing_visit_can_still_be_edited(
+        self, authed_client, organization, location, service, customer
+    ):
+        job = JobFactory(
+            organization=organization, customer=customer, location=location, service=service
+        )
+        set_status(customer, CustomerStatus.ARCHIVED)
+
+        response = authed_client.patch(job_detail(job), {"notes": "Key under mat."}, format="json")
+
+        assert response.status_code == 200
+        assert status_of(customer) == CustomerStatus.ARCHIVED
+
+    def test_their_active_plan_can_be_paused(self, authed_client, organization, customer):
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+        materialize_plan(plan)
+        set_status(customer, CustomerStatus.ARCHIVED)
+
+        response = authed_client.patch(plan_detail(plan), {"is_active": False}, format="json")
+
+        assert response.status_code == 200
+        assert status_of(customer) == CustomerStatus.ARCHIVED
+
+    def test_their_active_plan_is_not_otherwise_edited(self, authed_client, organization, customer):
+        """A regenerating edit would book them new visits: pause it first, or unarchive them."""
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+        materialize_plan(plan)
+        set_status(customer, CustomerStatus.ARCHIVED)
+        jobs_before = set(Job.objects.filter(plan=plan).values_list("id", flat=True))
+
+        response = authed_client.patch(
+            plan_detail(plan), {"preferred_start_time": "14:00:00"}, format="json"
+        )
+
+        assert response.status_code == 400
+        assert response.json() == {"customer": [ARCHIVED_CUSTOMER_REFUSAL]}
+        assert set(Job.objects.filter(plan=plan).values_list("id", flat=True)) == jobs_before
+
+    def test_a_soft_deleted_customer_is_refused_as_before(self, authed_client, customer, visit):
+        customer.delete()
+
+        response = authed_client.post(JOBS, visit, format="json")
+
+        assert response.status_code == 400
+        assert "customer" in response.json()
+        assert not Job.objects.exists()
+
+
+@pytest.mark.django_db
+class TestTheNightlyRunForAnArchivedCustomer:
+    """
+    An active plan whose customer was archived after it was booked keeps the
+    visits already on the board and gets no new ones (ADR-037).
+    """
+
+    @pytest.fixture
+    def booked_then_archived(self, organization, customer):
+        plan = RecurringPlanFactory(organization=organization, customer=customer)
+        today = timezone.now().date()
+        materialize_plan(plan, today=today)
+        set_status(customer, CustomerStatus.ARCHIVED)
+        plan.refresh_from_db()
+        return plan, today
+
+    def test_existing_visits_are_kept_and_no_new_ones_made(self, booked_then_archived):
+        plan, today = booked_then_archived
+        before = set(Job.objects.filter(plan=plan).values_list("id", flat=True))
+        assert before
+
+        assert materialize_plan(plan, today=today + dt.timedelta(days=28)) == 0
+        assert set(Job.objects.filter(plan=plan).values_list("id", flat=True)) == before
+
+    def test_the_organization_task_skips_it_too(self, booked_then_archived, organization):
+        from scheduling.tasks import materialize_organization
+
+        plan, _ = booked_then_archived
+        assert Job.objects.filter(plan=plan).exists()
+        Job.objects.filter(plan=plan).delete()  # room for the run to refill, if it would
+
+        assert materialize_organization(str(organization.id)) == 0
+        assert not Job.objects.filter(plan=plan).exists()
+
+    def test_unarchiving_lets_the_next_run_resume(self, booked_then_archived, customer):
+        plan, today = booked_then_archived
+        set_status(customer, CustomerStatus.INACTIVE)
+        plan.refresh_from_db()
+
+        assert materialize_plan(plan, today=today + dt.timedelta(days=28)) > 0
+        assert status_of(customer) == CustomerStatus.INACTIVE
 
 
 @pytest.mark.django_db
@@ -233,14 +463,6 @@ class TestARefusedBookingLeavesALead:
         assert not RecurringPlan.objects.exists()
         assert not Job.objects.exists()
         assert status_of(customer) == CustomerStatus.LEAD
-
-
-def plan_detail(plan) -> str:
-    return reverse("scheduling:plan-detail", args=[plan.id])
-
-
-def job_detail(job) -> str:
-    return reverse("scheduling:job-detail", args=[job.id])
 
 
 @pytest.fixture
@@ -475,12 +697,12 @@ class TestTenancy:
 
     def test_the_service_will_not_cross_organizations(self, other_organization, organization):
         """A customer copy carrying the wrong organization matches no row."""
-        from scheduling.services import promote_lead
+        from scheduling.services import activate_booked_customer
 
         rival = CustomerFactory(organization=other_organization)
         rival.organization_id = organization.id
 
-        assert promote_lead(rival) is False
+        assert activate_booked_customer(rival) is False
         rival.refresh_from_db()
         assert rival.status == CustomerStatus.LEAD
 
