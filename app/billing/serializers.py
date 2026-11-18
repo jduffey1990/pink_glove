@@ -300,6 +300,12 @@ class UrlSerializer(serializers.Serializer):
     url = serializers.URLField()
 
 
+class PayTokenSerializer(serializers.Serializer):
+    """The pay link's token, in a request body rather than a URL (ADR-036)."""
+
+    token = serializers.CharField()
+
+
 class PublicInvoiceLineSerializer(serializers.Serializer):
     description = serializers.CharField()
     amount_cents = serializers.IntegerField()

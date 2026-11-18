@@ -435,7 +435,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The invoice, as its customer sees it */
+        /**
+         * The invoice, as its customer sees it (token in the path)
+         * @deprecated
+         * @description Deprecated: the token in the path. `PublicInvoiceView` replaces it.
+         */
         get: operations["billing_pay_retrieve"];
         put?: never;
         post?: never;
@@ -454,8 +458,46 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Open a Stripe Checkout session for the balance */
+        /**
+         * Open a Stripe Checkout session for the balance (token in the path)
+         * @deprecated
+         * @description Deprecated: the token in the path. `PayCheckoutView` replaces it.
+         */
         post: operations["billing_pay_checkout_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/pay/checkout/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Open a Stripe Checkout session for the balance */
+        post: operations["billing_pay_checkout_open"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/billing/pay/invoice/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The invoice, as its customer sees it */
+        post: operations["billing_pay_invoice_retrieve"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3306,6 +3348,10 @@ export interface components {
             /** Format: date-time */
             clock_out?: string | null;
         };
+        /** @description The pay link's token, in a request body rather than a URL (ADR-036). */
+        PayTokenRequest: {
+            token: string;
+        };
         /**
          * @description A payment. Written once and thereafter only voided (ADR-025), so every
          *     field but the ones `record_payment` takes is read-only.
@@ -4761,6 +4807,104 @@ export interface operations {
                 };
             };
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_pay_checkout_open: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayTokenRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PayTokenRequest"];
+                "multipart/form-data": components["schemas"]["PayTokenRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Url"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+        };
+    };
+    billing_pay_invoice_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayTokenRequest"];
+                "application/x-www-form-urlencoded": components["schemas"]["PayTokenRequest"];
+                "multipart/form-data": components["schemas"]["PayTokenRequest"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicInvoice"];
+                };
+            };
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Detail"];
+                };
+            };
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

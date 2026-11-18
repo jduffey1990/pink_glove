@@ -6,9 +6,11 @@ from billing.views import (
     CollectionsReportView,
     InvoiceLineViewSet,
     InvoiceViewSet,
+    PayCheckoutView,
     PayInvoiceCheckoutView,
     PayInvoiceView,
     PaymentViewSet,
+    PublicInvoiceView,
     ReceivablesCSVView,
     ReceivablesReportView,
     StripeConnectView,
@@ -45,7 +47,12 @@ urlpatterns = [
     ),
     path("subscription/portal/", SubscriptionPortalView.as_view(), name="subscription-portal"),
     path("subscription/refresh/", SubscriptionRefreshView.as_view(), name="subscription-refresh"),
-    # Public, by signed token (the credential is in the invoice email).
+    # Public, by signed token (the credential is in the invoice email). The
+    # token travels in the body (ADR-036). These two are declared before the
+    # deprecated path-token pair, whose `<str:token>` would otherwise take
+    # `invoice` and `checkout` for a token.
+    path("pay/invoice/", PublicInvoiceView.as_view(), name="pay-invoice"),
+    path("pay/checkout/", PayCheckoutView.as_view(), name="pay-start-checkout"),
     path("pay/<str:token>/", PayInvoiceView.as_view(), name="pay"),
     path("pay/<str:token>/checkout/", PayInvoiceCheckoutView.as_view(), name="pay-checkout"),
     path("reports/receivables/", ReceivablesReportView.as_view(), name="report-receivables"),

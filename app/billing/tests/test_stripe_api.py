@@ -6,10 +6,13 @@ payment serializers say about Stripe.
 line, the token, and the server-owned fields are what is under test.
 """
 
+import datetime as dt
 from unittest import mock
 
 import pytest
-from django.core import mail
+from django.core import mail, signing
+from django.core.cache import cache
+from rest_framework.throttling import SimpleRateThrottle
 
 from app.exceptions import ConflictError
 from billing import connect, services
@@ -236,6 +239,191 @@ class TestCheckout:
 
     def test_a_bad_token_is_a_404(self, api_client):
         assert api_client.post("/api/billing/pay/nope/checkout/").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# The pay page with the token in the body (ADR-036)
+# ---------------------------------------------------------------------------
+
+PAY_INVOICE = "/api/billing/pay/invoice/"
+PAY_CHECKOUT = "/api/billing/pay/checkout/"
+
+
+def _expired():
+    later = dt.datetime.now(dt.UTC) + connect.PAY_TOKEN_MAX_AGE + dt.timedelta(days=1)
+    return mock.patch("django.core.signing.time.time", return_value=later.timestamp())
+
+
+class TestPayPageByBody:
+    """The page's own call now. Every refusal the path form makes, it makes."""
+
+    def post(self, api_client, token):
+        return api_client.post(PAY_INVOICE, {"token": token}, format="json")
+
+    def test_shows_the_invoice_to_anyone_with_the_token(self, api_client, connected):
+        invoice = IssuedInvoiceFactory(organization=connected, number="SPK-0010")
+        token = connect.pay_token(invoice)
+
+        response = self.post(api_client, token)
+
+        assert response.status_code == 200
+        assert response.data["number"] == "SPK-0010"
+        assert response.data["organization_name"] == connected.name
+        # The same public view as the path form, field for field.
+        assert response.data == api_client.get(f"/api/billing/pay/{token}/").data
+
+    def test_says_nothing_it_should_not(self, api_client, connected):
+        invoice = IssuedInvoiceFactory(organization=connected, bill_to_email="pat@x.test")
+
+        body = self.post(api_client, connect.pay_token(invoice)).data
+
+        for secret in ("bill_to_email", "bill_to_address", "customer", "id", "organization"):
+            assert secret not in body
+
+    def test_a_bad_token_is_a_404(self, api_client):
+        assert self.post(api_client, "not-a-token").status_code == 404
+
+    def test_a_missing_token_is_a_400(self, api_client):
+        assert api_client.post(PAY_INVOICE, {}, format="json").status_code == 400
+        assert self.post(api_client, "").status_code == 400
+
+    def test_an_expired_token_is_a_404(self, api_client, connected):
+        token = connect.pay_token(IssuedInvoiceFactory(organization=connected))
+
+        with _expired():
+            assert self.post(api_client, token).status_code == 404
+
+    def test_a_token_signed_for_something_else_is_a_404(self, api_client, connected):
+        invoice = IssuedInvoiceFactory(organization=connected)
+
+        assert self.post(api_client, signing.dumps(str(invoice.pk))).status_code == 404
+
+    def test_a_token_for_a_deleted_invoice_is_a_404(self, api_client, connected):
+        from django.utils import timezone
+
+        from billing.models import Invoice
+
+        invoice = IssuedInvoiceFactory(organization=connected)
+        token = connect.pay_token(invoice)
+        Invoice.all_objects.filter(pk=invoice.pk).update(deleted_at=timezone.now())
+
+        assert self.post(api_client, token).status_code == 404
+
+    def test_the_callers_organization_has_no_say(self, api_client, make_member, connected):
+        """
+        A signed-in owner of another organization, naming theirs in the
+        header, gets the invoice the token names and nothing of their own:
+        the token alone decides, as on the path form.
+        """
+        rival = OrganizationFactory(name="Rival Cleaners")
+        api_client.force_login(make_member(rival, Role.OWNER))
+        invoice = IssuedInvoiceFactory(organization=connected, number="SPK-0011")
+
+        response = api_client.post(
+            PAY_INVOICE,
+            {"token": connect.pay_token(invoice)},
+            format="json",
+            HTTP_X_ORGANIZATION=str(rival.pk),
+        )
+
+        assert response.status_code == 200
+        assert response.data["organization_name"] == connected.name
+        assert response.data["number"] == "SPK-0011"
+
+    def test_the_token_is_not_in_the_url(self, api_client, connected):
+        token = connect.pay_token(IssuedInvoiceFactory(organization=connected))
+
+        response = self.post(api_client, token)
+
+        assert token not in response.wsgi_request.get_full_path()
+
+    def test_both_body_endpoints_are_throttled_with_a_rate_that_resolves(self):
+        from rest_framework.throttling import ScopedRateThrottle
+
+        from billing.views import PayCheckoutView, PublicInvoiceView
+
+        for view in (PublicInvoiceView, PayCheckoutView):
+            assert ScopedRateThrottle in view.throttle_classes
+            throttle = ScopedRateThrottle()
+            throttle.scope = view.throttle_scope
+            assert throttle.get_rate()
+
+
+class TestCheckoutByBody:
+    def post(self, api_client, token):
+        return api_client.post(PAY_CHECKOUT, {"token": token}, format="json")
+
+    def test_opens_a_session_for_the_balance(self, api_client, connected):
+        invoice = IssuedInvoiceFactory(organization=connected)
+
+        with mock.patch.object(
+            connect, "create_checkout_session", return_value="https://checkout.stripe.com/x"
+        ) as create:
+            response = self.post(api_client, connect.pay_token(invoice))
+
+        assert response.status_code == 200
+        assert response.data == {"url": "https://checkout.stripe.com/x"}
+        create.assert_called_once_with(invoice)
+
+    def test_not_payable_is_a_409_with_the_reason(self, api_client, organization):
+        invoice = IssuedInvoiceFactory(organization=organization)
+
+        with mock.patch.object(connect, "client"):
+            response = self.post(api_client, connect.pay_token(invoice))
+
+        assert response.status_code == 409
+        assert "does not take card payments" in response.data["detail"]
+
+    def test_is_a_503_without_stripe(self, api_client, connected, settings):
+        settings.STRIPE_ENABLED = False
+        token = connect.pay_token(IssuedInvoiceFactory(organization=connected))
+
+        assert self.post(api_client, token).status_code == 503
+
+    def test_a_bad_or_missing_token_is_refused(self, api_client):
+        assert self.post(api_client, "nope").status_code == 404
+        assert api_client.post(PAY_CHECKOUT, {}, format="json").status_code == 400
+
+    def test_an_expired_token_is_a_404(self, api_client, connected):
+        token = connect.pay_token(IssuedInvoiceFactory(organization=connected))
+
+        with _expired():
+            assert self.post(api_client, token).status_code == 404
+
+
+class TestPayThrottlesAcrossForms:
+    """
+    The body and path forms share a scope, so one bucket per address:
+    alternating between them buys no extra attempts at guessing a token.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _tight_rates(self, monkeypatch, settings):
+        rates = dict(settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"])
+        rates.update({"pay_page": "3/hour", "pay_checkout": "2/hour"})
+        monkeypatch.setattr(SimpleRateThrottle, "THROTTLE_RATES", rates)
+        cache.clear()
+        yield
+        cache.clear()
+
+    def test_the_page_read_is_one_bucket(self, api_client):
+        statuses = [
+            api_client.post(PAY_INVOICE, {"token": "x"}, format="json").status_code,
+            api_client.get("/api/billing/pay/x/").status_code,
+            api_client.post(PAY_INVOICE, {"token": "x"}, format="json").status_code,
+            api_client.get("/api/billing/pay/x/").status_code,
+        ]
+
+        assert statuses == [404, 404, 404, 429]
+
+    def test_checkout_is_one_bucket(self, api_client):
+        statuses = [
+            api_client.post(PAY_CHECKOUT, {"token": "x"}, format="json").status_code,
+            api_client.post("/api/billing/pay/x/checkout/").status_code,
+            api_client.post(PAY_CHECKOUT, {"token": "x"}, format="json").status_code,
+        ]
+
+        assert statuses == [404, 404, 429]
 
 
 # ---------------------------------------------------------------------------
