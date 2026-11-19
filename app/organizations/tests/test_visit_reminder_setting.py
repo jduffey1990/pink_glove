@@ -11,7 +11,7 @@ import pytest
 from app.middleware.tenant import ORGANIZATION_HEADER
 from base.permissions import ORGANIZATION_INACTIVE
 from organizations.models import Organization
-from users.enums import Role
+from users.enums import DISPATCHER_ROLES, Role
 
 URL = "/api/organizations/current/"
 
@@ -26,8 +26,8 @@ class TestDefault:
         """No tenant finds its customers emailed by something it never switched on."""
         assert Organization.objects.create(name="Fresh Clean").visit_reminders_enabled is False
 
-    @pytest.mark.parametrize("role", list(Role))
-    def test_every_member_can_read_it(self, api_client, organization, make_member, role):
+    @pytest.mark.parametrize("role", DISPATCHER_ROLES)
+    def test_the_settings_tiers_can_read_it(self, api_client, organization, make_member, role):
         api_client.force_login(make_member(organization, role))
 
         response = api_client.get(URL)

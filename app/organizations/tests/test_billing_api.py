@@ -14,6 +14,7 @@ import pytest
 from django.utils import timezone
 
 from app.middleware.tenant import ORGANIZATION_HEADER
+from organizations.serializers import PlatformBillingSerializer
 from users.enums import Role
 
 DAY = dt.timedelta(days=1)
@@ -67,9 +68,15 @@ class TestTheBillingBlock:
         organization.save()
         customer = as_role(api_client, make_member, organization, Role.CUSTOMER)
 
-        billing = customer.get(self.URL).data["billing"]
+        # The settings endpoint is not theirs at all (ADR-040); the block's
+        # own customer branch stays as a second line, so it is pinned here
+        # on the serializer directly.
+        refused = customer.get(self.URL)
+        billing = PlatformBillingSerializer(organization, context={"role": Role.CUSTOMER}).data
         current = customer.get("/api/users/session/").data["current_organization"]
 
+        assert refused.status_code == 403
+        assert "billing" not in refused.data
         assert billing == {
             "state": "lapsed",
             "level": None,
