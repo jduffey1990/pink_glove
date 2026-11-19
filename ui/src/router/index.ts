@@ -13,7 +13,9 @@ import { fragmentRedirect } from '@/lib/linkToken'
 import { useSessionStore } from '@/stores/session'
 
 /** Which tier a route needs. Absent means "any signed-in user". */
-type Access = 'public' | 'admin' | 'dispatcher' | 'staff'
+type Access = 'public' | 'admin' | 'dispatcher' | 'staff' | 'customer'
+
+type Session = ReturnType<typeof useSessionStore>
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -76,10 +78,13 @@ export const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'home',
     // Sends each role to the screen they actually work from.
-    redirect: () => {
-      const session = useSessionStore()
-      return session.isCleaner ? { name: 'my-day' } : { name: 'schedule' }
-    },
+    redirect: () => ({ name: landingFor(useSessionStore()) }),
+  },
+  {
+    path: '/my-visits',
+    name: 'customer-home',
+    component: () => import('@/pages/CustomerHomePage.vue'),
+    meta: { access: 'customer', title: 'Your visits' },
   },
   {
     path: '/schedule',
@@ -175,6 +180,53 @@ export const routes: RouteRecordRaw[] = [
   },
 ]
 
+/**
+ * Whether a session may open a route of this tier. The one place the tiers
+ * are read, so the landing below can be checked against the same rule.
+ */
+export function admits (access: Access | undefined, session: Session): boolean {
+  switch (access) {
+    case 'admin': {
+      return session.isAdminOrHigher
+    }
+    case 'dispatcher': {
+      return session.isDispatcherOrHigher
+    }
+    case 'staff': {
+      return session.isStaff
+    }
+    case 'customer': {
+      return session.isCustomer
+    }
+    default: {
+      return true
+    }
+  }
+}
+
+/**
+ * Where `/` sends a signed-in person: the screen their role works from.
+ *
+ * Every answer is a route `admits` lets that role open, which is what keeps
+ * `/` from redirecting into a refusal that redirects back to `/` (ADR-039).
+ * Before this, everyone who was not a cleaner went to `schedule`, so a
+ * customer, refused it, bounced between the two until the tab froze. No role
+ * at all (a superuser with no membership, who acts by header and the SPA
+ * never sends one) has no screen, and gets the page that says so.
+ */
+export function landingFor (session: Session): 'schedule' | 'my-day' | 'customer-home' | 'no-access' {
+  if (session.isDispatcherOrHigher) {
+    return 'schedule'
+  }
+  if (session.isCleaner) {
+    return 'my-day'
+  }
+  if (session.isCustomer) {
+    return 'customer-home'
+  }
+  return 'no-access'
+}
+
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
@@ -204,7 +256,7 @@ router.beforeEach(async to => {
   if (session.hasNoOrganization) {
     return to.name === 'no-access' ? true : { name: 'no-access' }
   }
-  if (to.name === 'no-access') {
+  if (to.name === 'no-access' && landingFor(session) !== 'no-access') {
     return { name: 'home' }
   }
 
@@ -212,19 +264,9 @@ router.beforeEach(async to => {
     return { name: 'choose-organization' }
   }
 
-  if (to.meta.access === 'admin' && !session.isAdminOrHigher) {
-    return { name: 'home' }
-  }
-
-  if (to.meta.access === 'dispatcher' && !session.isDispatcherOrHigher) {
-    return { name: 'home' }
-  }
-
-  if (to.meta.access === 'staff' && !session.isStaff) {
-    return { name: 'home' }
-  }
-
-  return true
+  // `home` lands on a route `admits` passes for this session, so a refusal
+  // here never leads back to itself.
+  return admits(to.meta.access, session) ? true : { name: 'home' }
 })
 
 router.afterEach(to => {
