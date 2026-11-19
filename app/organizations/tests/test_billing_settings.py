@@ -85,8 +85,8 @@ class TestDefaults:
 class TestApi:
     """The settings ride the existing organization endpoint and its gating."""
 
-    def test_a_member_can_read_them(self, api_client, organization, make_member):
-        api_client.force_login(make_member(organization, Role.CLEANER))
+    def test_a_dispatcher_can_read_them(self, api_client, organization, make_member):
+        api_client.force_login(make_member(organization, Role.DISPATCHER))
 
         response = api_client.get("/api/organizations/current/")
 

@@ -1107,7 +1107,9 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * @description The caller's own organization.
+         * @description The caller's own organization, for its settings page: dispatcher and
+         *     above read it, admin and above change it. Cleaners and customers are
+         *     refused and read the session's `OrganizationSummary` instead (ADR-040).
          *
          *     Not a `TenantViewSetMixin` view: `Organization` is the tenant, not
          *     tenant-owned data. Scoping happens by only ever returning the organization
@@ -1115,7 +1117,9 @@ export interface paths {
          */
         get: operations["organizations_current_retrieve"];
         /**
-         * @description The caller's own organization.
+         * @description The caller's own organization, for its settings page: dispatcher and
+         *     above read it, admin and above change it. Cleaners and customers are
+         *     refused and read the session's `OrganizationSummary` instead (ADR-040).
          *
          *     Not a `TenantViewSetMixin` view: `Organization` is the tenant, not
          *     tenant-owned data. Scoping happens by only ever returning the organization
@@ -1127,7 +1131,9 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * @description The caller's own organization.
+         * @description The caller's own organization, for its settings page: dispatcher and
+         *     above read it, admin and above change it. Cleaners and customers are
+         *     refused and read the session's `OrganizationSummary` instead (ADR-040).
          *
          *     Not a `TenantViewSetMixin` view: `Organization` is the tenant, not
          *     tenant-owned data. Scoping happens by only ever returning the organization

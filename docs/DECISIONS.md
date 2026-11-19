@@ -1510,7 +1510,7 @@ It is off until an owner or admin turns it on.
 
 **1. The switch is a field on `Organization`, written through the endpoint that already writes the organization.**
 `visit_reminders_enabled`, default false, on `OrganizationSerializer`.
-`PATCH /api/organizations/current/` is already gated to admin and owner by `CurrentOrganizationView.get_permissions`, already refused in a read-only organization by `IsOrgMember`, and already read by every member.
+`PATCH /api/organizations/current/` is already gated to admin and owner by `CurrentOrganizationView.get_permissions`, already refused in a read-only organization by `IsOrgMember`, and at the time already read by every member (reads were narrowed to dispatcher and above by ADR-040).
 So the switch needed no new view, no new action and no new permission, and each of those properties is pinned by a test against the new field (`organizations/tests/test_visit_reminder_setting.py`).
 Default off because a tenant that already rings its customers must not find them getting a second, unannounced message the day this deploys.
 No backfill: every existing organization reads false.
@@ -1928,7 +1928,7 @@ The login page gains "Customer? Email me a sign-in link", which opens `/sign-in-
 A customer may read their own visits (`JobViewSet`, `IsStaff | IsCustomerOfJob`, the queryset filtered to `customer__user`, the `CustomerJobSerializer` shape without crew or office notes) and nothing else of the tenant's: invoices, payments, customers and locations are dispatcher and above.
 So the page greets them, lists their visits for the next eight weeks (the horizon plans are booked to, inside the jobs filter's 62-day cap) with day, time, service, address and status, and says that each invoice comes by email with a link to pay it.
 It makes one request, `GET /api/scheduling/jobs/?date_from=...&date_to=...&ordering=scheduled_start`, and asks for nothing a customer is refused, so it never meets a 403.
-The organization's name comes from the session, not from `GET /api/organizations/current/`, which a customer may read but which carries the whole settings payload.
+The organization's name comes from the session, not from `GET /api/organizations/current/`, which carries the whole settings payload and, since ADR-040, refuses a customer.
 
 **3. The loop's cause, and the fix at its source.**
 The root route sent everyone who was not a cleaner to `schedule`; the guard refused `schedule` to anyone below dispatcher and sent them to `home`; `home` sent them to `schedule`.
@@ -1963,3 +1963,39 @@ The SPA paths are `/sign-in`, `/sign-in-link` and `/my-visits`, with `/sign-in/:
 `ui/src/router/index.ts` now holds the role landing (`landingFor`) and the tier check (`admits`) beside the routes; a new role or tier changes both, and `src/router/landing.spec.ts` checks for every role that the landing is admitted and that `/` resolves without a loop.
 The magic link email is plain text, so it has no anchor to carry `clicktracking=off` (ADR-036); SendGrid does not rewrite links in plain-text bodies unless its text click tracking is switched on, which only a real send on staging shows.
 `seed_demo`'s customer logins are not linked to any `Customer` row, so a demo customer signs in to an empty home; linking one is a seed change for another branch.
+
+---
+
+## ADR-040: The organization's settings are read by the settings page's tier, and everyone else reads the session summary
+
+**Decided (2026-11-18).**
+`GET /api/organizations/current/` answered any member of the organization, so a signed-in cleaner or customer received the whole `Organization`: the address and contact fields, the operating window and reveal buffers, the tax rate, the no-access fee, the invoice prefix, terms and footer, the reminder switch, the Stripe Connect state, and the platform subscription block.
+Cleaners got that block in full (its dates, Stripe's status word and the available actions); customers got it blanked by `PlatformBillingSerializer`'s customer branch, but every other field as the owner sees it.
+With the customer sign-in page in flight, that is every customer of every tenant.
+Reads now need `IsDispatcherOrHigher`; writes stay `IsAdminOrHigher`; cleaners and customers get a 403.
+
+**Why a refusal and not a narrower body.**
+The only reader of the endpoint is `BillingSettingsPage.vue`, on a route whose access is `dispatcher`.
+Everything a cleaner's or a customer's screen reads about the organization comes from the session payload's `OrganizationSummary` (`current_organization` and each membership's `organization`): the name, the timezone `src/lib/datetime.ts` reckons in, the logo and colour, `is_active` for the read-only state, and the billing notice already written for the reader's role (ADR-028).
+That summary was narrow already and is unchanged.
+So the narrow representation of the settings endpoint for those two roles is the empty one, and the honest way to serve it is to refuse.
+
+**Unchanged.**
+Both permission classes inherit `IsOrgMember`, so a deactivated organization stays readable by dispatcher and above, and its cleaners and customers still draw the read-only banner from the session.
+`PlatformBillingSerializer` keeps its customer branch as a second line; it is now reachable only if a customer is ever handed that serializer again, and a test pins it on the serializer directly.
+The schema's shape does not change: one response type, now described as dispatcher-and-above.
+
+**Rejected -- a second serializer chosen by role in `get_serializer_class`.**
+The customer and cleaner body would be the summary the session already sends, so it adds a second route to the same data and a second place a new field must be judged.
+The response would have to be a `oneOf` of `Organization` and `OrganizationSummary`, and the one page that calls it would have to narrow a union it can never receive.
+
+**Rejected -- a separate, member-wide endpoint for the summary.**
+It would duplicate the session payload, which every screen already has before it renders, and nothing would call it.
+
+**Rejected -- reads at `IsStaff`, so cleaners keep them.**
+No cleaner screen reads the endpoint, and the subscription's dates and actions, the tax rate and the fee are not a cleaner's to need.
+The staff tier exists for the services list and the staff directory, which cleaners do read.
+
+**Consequences.**
+The endpoint's read tier and the settings route's `dispatcher` access in `ui/src/router/index.ts` must move together; the view says so beside the permission.
+A field a cleaner or customer screen needs about the organization goes on `OrganizationSummarySerializer` (`users/serializers.py`), where `organizations/tests/test_organization_access.py` pins the exact key set for every role.
