@@ -344,9 +344,10 @@ fresh session can read what was checked and what was left.
      corrects a stale page. A new status touches the backend enum, the
      transitions, the schema and its label in `ui/src/lib/jobStatus.ts` --
      never a client-side table of moves;
-   - role tiers are mirrored in `ui/`: `DISPATCHER_ROLES`, `ADMIN_ROLES` and
-     `isOwner` in `src/stores/session.ts`, the route tiers in
-     `src/router/index.ts`, `canEdit` in `ServicesPage.vue`, and the
+   - role tiers are mirrored in `ui/`: `DISPATCHER_ROLES`, `ADMIN_ROLES`,
+     `isCustomer` and `isOwner` in `src/stores/session.ts`, the route tiers
+     in `src/router/index.ts` (read only by `admits`, with the role landing
+     in `landingFor` beside it), `canEdit` in `ServicesPage.vue`, and the
      customer filter in `listAssignableStaff`. Changing a tier in
      `users/enums.py` means all of them;
    - Stripe (4b): `STRIPE_API_VERSION` in `settings/base.py` is pinned

@@ -56,6 +56,8 @@
         { title: 'My day', icon: 'mdi-clipboard-check-outline', to: '/my-day' },
         { title: 'Services', icon: 'mdi-tag-outline', to: '/services' },
       )
+    } else if (session.isCustomer) {
+      items.push({ title: 'Your visits', icon: 'mdi-home-outline', to: '/my-visits' })
     }
 
     // Owner and admin only, like the route and the API behind it.

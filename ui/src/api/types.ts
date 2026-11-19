@@ -31,6 +31,7 @@ export type InviteOptions = Schemas['InviteOptions']
 export type Invitation = Schemas['Invitation']
 export type InvitationAcceptRequest = Schemas['InvitationAcceptRequest']
 export type PasswordResetSent = Schemas['PasswordResetSent']
+export type MagicLinkSent = Schemas['MagicLinkSent']
 
 /**
  * What the server says may be done to a team row right now.

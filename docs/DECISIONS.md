@@ -1717,6 +1717,7 @@ Before it is spent, an old-form link still writes its token as described in 2, a
 Sentry already drops request bodies; its URL scrubber now also redacts a `#name=value` pair, because a built link can still appear in a log message or an exception, and the long-path-segment rule that used to catch it no longer matches.
 
 **6. The customer's magic link follows the same rule when it gets a page.**
+**Done by ADR-039 (customer sign-in, 2026-11-18): the link is `/sign-in#token=...`, and `/sign-in/:token` redirects to it.** Kept for the reasoning.
 `users/views.py` builds `/sign-in/<token>` and no SPA route exists for it yet; its consume endpoint already takes the token in the body.
 The branch that adds the page must build the link with `token_link("/sign-in", ...)` and read it with `tokenFromHash`, not add `/sign-in/:token`.
 Magic links expire in minutes, so the old form needs no redirect there unless one has already been sent to a real customer.
@@ -1904,3 +1905,61 @@ An https page linking to an http address sends no `Referer` at all under `strict
 In development the page is served by the Vite dev server, which sends no `Referrer-Policy`, so the browser's default governs the dev page's own requests; the API's responses and the suite carry the deployed value.
 A change of policy is a change to `settings/base.py` and to the tests that name the value (`app/tests/test_referrer_policy.py`, `app/tests/test_spa.py`, `app/tests/test_settings_production.py`).
 `SecurityMiddleware` must stay above whitenoise in `MIDDLEWARE` for the assets to carry the header; `app/tests/test_spa.py` asserts the order, as it already did for the clickjacking header.
+
+---
+
+## ADR-039: A customer signs in at `/sign-in`, lands on their own visits, and every role lands on a screen it may open
+
+**Decided (2026-11-18).**
+Customers sign in by emailed link only (ADR-008), and neither half worked in the SPA.
+The link was built as `/sign-in/<token>`, a path with no route, so it opened "Nothing here"; and there was no page to ask for a link at all.
+Reproduced on a scratch stack serving the built SPA under gunicorn: the link mailed to `customer@sparkle-clean.test` opened the not-found page, and once signed in by posting the token by hand, opening `/` froze the tab (a script asking the page for its own address timed out, as did a screenshot).
+
+**1. The link is `/sign-in#token=...`, read by a page and spent by a button.**
+`MagicLinkRequestView` builds it with `token_link("/sign-in", raw_token)`, as ADR-036 point 6 asked, so the token is in the fragment and in no request line or `Referer`.
+`/sign-in` reads it with `tokenFromHash` and posts it to `POST /api/users/magic-link/consume/` in the body; that endpoint always took the token in the body, so it is unchanged and there is no path form to deprecate.
+The token is spent when the customer presses "Sign in", not when the page loads: a mail security scanner that opens links and runs their scripts would otherwise spend a link that works once, and the customer would find it dead.
+A success re-reads the session and replaces the page with `/`, so Back does not return to a spent link.
+A missing or empty token says "That link is incomplete" and asks the server nothing; a garbled, spent, expired or no-longer-a-customer token shows the server's one sentence for all of them; both offer "Email me a new link".
+`/sign-in/:token` redirects to the fragment form with `fragmentRedirect`, like the other three old forms, in case a link in the old form was already sent.
+The login page gains "Customer? Email me a sign-in link", which opens `/sign-in-link`; the request endpoint answers every address with the same 202, and staff still get no email.
+
+**2. A customer lands on `/my-visits`, which shows only what the API already serves a customer.**
+A customer may read their own visits (`JobViewSet`, `IsStaff | IsCustomerOfJob`, the queryset filtered to `customer__user`, the `CustomerJobSerializer` shape without crew or office notes) and nothing else of the tenant's: invoices, payments, customers and locations are dispatcher and above.
+So the page greets them, lists their visits for the next eight weeks (the horizon plans are booked to, inside the jobs filter's 62-day cap) with day, time, service, address and status, and says that each invoice comes by email with a link to pay it.
+It makes one request, `GET /api/scheduling/jobs/?date_from=...&date_to=...&ordering=scheduled_start`, and asks for nothing a customer is refused, so it never meets a 403.
+The organization's name comes from the session, not from `GET /api/organizations/current/`, which a customer may read but which carries the whole settings payload.
+
+**3. The loop's cause, and the fix at its source.**
+The root route sent everyone who was not a cleaner to `schedule`; the guard refused `schedule` to anyone below dispatcher and sent them to `home`; `home` sent them to `schedule`.
+Each guard answer is a redirect before any history write, so the loop ran on promises alone, never yielded to the event loop, and froze the tab without an error.
+A superuser with no membership has no role and looped the same way.
+Now the guard reads every tier through one function, `admits(access, session)`, and `/` redirects to `landingFor(session)`, which only names routes `admits` passes for that session: `schedule` for dispatcher and above, `my-day` for a cleaner, `customer-home` for a customer, and `no-access` for a session with no role.
+A refused route still redirects to `/`, which by construction lands somewhere admitted.
+A new tier, `customer`, guards `/my-visits`, so staff opening it land on their own screen.
+
+**Rejected -- spending the token on page load.**
+One fewer click, and what most magic-link pages do.
+Link scanners in corporate and consumer mail run page scripts often enough that a single-use link spent on load is a known cause of "my link is always expired", and the customer cannot tell why.
+The press costs one tap and the page says why it is there.
+
+**Rejected -- `/sign-in` without a token as the request form.**
+One route instead of two.
+But then a link a mail client cut short would show an email form instead of saying the link was broken, and the reset and invitation pages already separate the two; `/sign-in-link` follows them.
+
+**Rejected -- serving customers their invoices on this branch.**
+An invoice list with pay links is the obvious second half of a customer home, and the pay page already exists.
+It needs a new read permission on `InvoiceViewSet` (or a customer-scoped endpoint) and a decision about which states and fields a customer sees, and this branch opens no new data to customers.
+It is listed for Jordan instead.
+
+**Rejected -- landing customers on `/no-access` or the login page.**
+Either stops the loop, and either tells a signed-in customer they are not welcome.
+
+**Rejected -- sending refused routes straight to `landingFor` instead of `/`.**
+It saves one redirect hop and puts the landing rule in two places; `/` is already where a role's home is decided.
+
+**Consequences.**
+The SPA paths are `/sign-in`, `/sign-in-link` and `/my-visits`, with `/sign-in/:token` as a redirect record; `MagicLinkRequestView` builds the link through `token_link`, so the fragment key is still spelled only in `app/base/links.py` and `ui/src/lib/linkToken.ts`.
+`ui/src/router/index.ts` now holds the role landing (`landingFor`) and the tier check (`admits`) beside the routes; a new role or tier changes both, and `src/router/landing.spec.ts` checks for every role that the landing is admitted and that `/` resolves without a loop.
+The magic link email is plain text, so it has no anchor to carry `clicktracking=off` (ADR-036); SendGrid does not rewrite links in plain-text bodies unless its text click tracking is switched on, which only a real send on staging shows.
+`seed_demo`'s customer logins are not linked to any `Customer` row, so a demo customer signs in to an empty home; linking one is a seed change for another branch.
