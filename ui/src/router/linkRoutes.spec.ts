@@ -27,6 +27,7 @@ describe.each([
   ['pay', '/pay'],
   ['accept-invite', '/accept-invite'],
   ['reset-password', '/reset-password'],
+  ['sign-in', '/sign-in'],
 ])('%s', (name, path) => {
   it('opens the fragment form as it is', async () => {
     const { router } = await open(`${path}#token=tok-new`)

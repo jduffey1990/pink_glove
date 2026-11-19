@@ -11,6 +11,10 @@
  *      not challenged).
  *   3. POST /api/auth/verify/   -- on success, re-fetch the session.
  *   4. More than one membership and no current_organization -> the picker.
+ *
+ * A customer skips 2 and 3: an emailed link's token goes to
+ * POST /api/users/magic-link/consume/ in the body (ADR-039), then step 1
+ * again.
  */
 
 import type { Membership, Role, Session } from '@/api/types'
@@ -215,6 +219,16 @@ export const useSessionStore = defineStore('session', () => {
     await refresh()
   }
 
+  /**
+   * Redeem a customer's sign-in link. The token travels in the body, never
+   * in a URL (ADR-036). A refusal (401: spent, expired, or no longer a
+   * customer) is the caller's to show; nothing here changes on one.
+   */
+  async function signInWithLink (token: string): Promise<void> {
+    await api.post('/api/users/magic-link/consume/', { token })
+    await refresh()
+  }
+
   async function resendCode (): Promise<void> {
     const response = await api.post('/api/auth/resend/')
     devCode.value = response.data?.dev_code ?? null
@@ -252,6 +266,7 @@ export const useSessionStore = defineStore('session', () => {
     refresh,
     login,
     verify,
+    signInWithLink,
     resendCode,
     logout,
     chooseOrganization,

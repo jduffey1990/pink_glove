@@ -29,6 +29,7 @@ import type {
   JobPhoto,
   JobRequest,
   JobStatus,
+  MagicLinkSent,
   MaterializeResult,
   Membership,
   NewJobRequest,
@@ -738,6 +739,16 @@ export async function acceptInvitation (payload: InvitationAcceptRequest): Promi
 /** The same answer for every address, by design. */
 export async function requestPasswordReset (email: string): Promise<PasswordResetSent> {
   const { data } = await api.post<PasswordResetSent>('/api/auth/password-reset/', { email })
+  return data
+}
+
+/**
+ * A customer's sign-in link (ADR-008, ADR-039). The same 202 for every
+ * address, staff and strangers included. Redeeming the link signs someone in,
+ * so that half is the session store's (`signInWithLink`).
+ */
+export async function requestSignInLink (email: string): Promise<MagicLinkSent> {
+  const { data } = await api.post<MagicLinkSent>('/api/users/magic-link/', { email })
   return data
 }
 

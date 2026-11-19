@@ -62,6 +62,22 @@ export const routes: RouteRecordRaw[] = [
   },
   { path: '/accept-invite/:token', redirect: fragmentRedirect('accept-invite') },
   {
+    // A customer's sign-in (ADR-008, ADR-039): ask for a link, then open it.
+    // The link's token is in the fragment (ADR-036); `/sign-in/:token` is the
+    // form sent before that, moved to the fragment before anything renders.
+    path: '/sign-in-link',
+    name: 'sign-in-link',
+    component: () => import('@/pages/SignInLinkPage.vue'),
+    meta: { access: 'public', title: 'Email me a sign-in link' },
+  },
+  {
+    path: '/sign-in',
+    name: 'sign-in',
+    component: () => import('@/pages/SignInPage.vue'),
+    meta: { access: 'public', title: 'Sign in' },
+  },
+  { path: '/sign-in/:token', redirect: fragmentRedirect('sign-in') },
+  {
     path: '/choose-organization',
     name: 'choose-organization',
     component: () => import('@/pages/ChooseOrganizationPage.vue'),

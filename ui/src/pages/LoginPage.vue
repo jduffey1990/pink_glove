@@ -146,6 +146,18 @@
         >
           Forgot password?
         </v-btn>
+
+        <!-- Customers have no password (ADR-008): their way in is a link. -->
+        <v-divider class="my-4" />
+
+        <v-btn
+          block
+          prepend-icon="mdi-email-fast-outline"
+          variant="tonal"
+          @click="router.push({ name: 'sign-in-link' })"
+        >
+          Customer? Email me a sign-in link
+        </v-btn>
       </v-card-text>
     </v-card>
   </v-container>
