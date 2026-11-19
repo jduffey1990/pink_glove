@@ -1717,6 +1717,7 @@ Before it is spent, an old-form link still writes its token as described in 2, a
 Sentry already drops request bodies; its URL scrubber now also redacts a `#name=value` pair, because a built link can still appear in a log message or an exception, and the long-path-segment rule that used to catch it no longer matches.
 
 **6. The customer's magic link follows the same rule when it gets a page.**
+**Done by ADR-039 (customer sign-in, 2026-11-18): the link is `/sign-in#token=...`, and `/sign-in/:token` redirects to it.** Kept for the reasoning.
 `users/views.py` builds `/sign-in/<token>` and no SPA route exists for it yet; its consume endpoint already takes the token in the body.
 The branch that adds the page must build the link with `token_link("/sign-in", ...)` and read it with `tokenFromHash`, not add `/sign-in/:token`.
 Magic links expire in minutes, so the old form needs no redirect there unless one has already been sent to a real customer.
