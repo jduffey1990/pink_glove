@@ -3674,7 +3674,7 @@ Branch `fix/narrow-org-settings-for-customers`, cut from `main` at `a733f02`, af
 
 ## Seed customer logins as built
 
-Branch `fix/seed-customer-logins`, cut from `main` at `a733f02`.
+Branch `fix/seed-customer-logins`, cut from `main` at `9a79c29`, after `fix/narrow-org-settings-for-customers` merged.
 Each demo tenant's customer login is now linked to one of its customers, so a demo customer who signs in sees a home (ADR-039's last consequence).
 
 - **Which customer.** `PORTAL_CUSTOMER` in `seed_demo.py`: `customer@sparkle-clean.test` is Dana Whitfield, on the weekly plan, so `/my-visits` lists upcoming visits; `customer@rival-cleaners.test` is Marcus Alvarez, the one Lead with nothing booked, so the empty home is still there to see.
@@ -3685,7 +3685,7 @@ Each demo tenant's customer login is now linked to one of its customers, so a de
 
 ### Phase gate - as built
 
-1. **Test coverage.** Backend 2573 to 2580 (+7), in `organizations/tests/test_seed_demo.py` `TestSeededPortalLogins`: Sparkle's login is Dana in Sparkle with jobs and upcoming jobs, Rival's is Marcus in Rival, a Lead with no jobs, each link passes `CustomerSerializer.get_fields`' queryset, only the two are linked, Sparkle's session reads Dana's visits and nobody else's through the API, `--force` links an older seed's logins, and `--force` leaves a link someone made alone. With the call removed all seven go red. Seed tests run twice. Frontend untouched. Gaps: nothing was checked in a browser.
+1. **Test coverage.** Backend 2603 to 2610 (+7), in `organizations/tests/test_seed_demo.py` `TestSeededPortalLogins`: Sparkle's login is Dana in Sparkle with jobs and upcoming jobs, Rival's is Marcus in Rival, a Lead with no jobs, each link passes `CustomerSerializer.get_fields`' queryset, only the two are linked, Sparkle's session reads Dana's visits and nobody else's through the API, `--force` links an older seed's logins, and `--force` leaves a link someone made alone. With the call removed all seven go red. Seed tests run twice. Frontend untouched. Gaps: nothing was checked in a browser.
 2. **DRY.** The membership rule is restated as one query in the seed rather than calling the serializer, because the serializer needs a request; the test checks the seed against the serializer's own queryset so the two cannot drift silently.
 3. **Modularity.** All changes are in the management command and its tests.
 4. **Orthogonality.** No new coupling. `PORTAL_CUSTOMER` names customers from `CUSTOMERS` by name, so renaming a seeded customer means both. `CLAUDE.md`'s seed description says nothing about customer logins and is still true, so it was not edited.
