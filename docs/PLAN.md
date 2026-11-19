@@ -3669,3 +3669,25 @@ Branch `fix/narrow-org-settings-for-customers`, cut from `main` at `a733f02`, af
 4. **Orthogonality.** One new mirror: the endpoint's read tier and the `/billing/settings` route's `dispatcher` access in `ui/src/router/index.ts`, noted beside the permission in `organizations/views.py`. `CLAUDE.md`'s list of role-tier mirrors does not name it and was not edited (reported to Jordan).
 5. **Security.** No new model, task, `AllowAny` or `allowed_while_inactive`; the change only refuses more. Both permission classes inherit `IsOrgMember`, so the read-only rule and tenant resolution are unchanged, and the organization served is still only the one the middleware resolved. `/security-review` was not run; the gate owns the review in this repo, and the diff was checked by hand against the list above.
 6. **Branch and production guard.** All work is on `fix/narrow-org-settings-for-customers`; nothing committed to `main`, pushed or merged; no `fly`; tests ran only against the scratch database `pg_wave2_orgnarrow`, never `pink_glove`.
+
+---
+
+## Seed customer logins as built
+
+Branch `fix/seed-customer-logins`, cut from `main` at `a733f02`.
+Each demo tenant's customer login is now linked to one of its customers, so a demo customer who signs in sees a home (ADR-039's last consequence).
+
+- **Which customer.** `PORTAL_CUSTOMER` in `seed_demo.py`: `customer@sparkle-clean.test` is Dana Whitfield, on the weekly plan, so `/my-visits` lists upcoming visits; `customer@rival-cleaners.test` is Marcus Alvarez, the one Lead with nothing booked, so the empty home is still there to see.
+- **The rule.** `_portal_login` links only when the user is an active, customer-role member of that organization, the same rule `CustomerSerializer.get_fields` puts on the API's link. A user who no longer is, or a customer or user already linked to someone else, is left as it is with a line in the output; the seed never takes a link away.
+- **Additive.** Runs every time, so a database seeded before this gains both links on a `--force` run; a second run is a no-op. The `DEBUG` and existing-organization guards are unchanged.
+- **Seeded on 2026-11-19** (scratch database `pg_wave2_seedlogins`): signed in through the magic link as each login, `GET /api/scheduling/jobs/` for the next eight weeks returned 8 of Dana's visits for Sparkle and none for Rival.
+- The login's email (`customer@<slug>.test`) and the customer's contact email (`dana.whitfield@sparkle-clean.test`) stay different rows and different addresses, as they may for a real customer. No schema, serializer, view or migration change; no frontend change.
+
+### Phase gate - as built
+
+1. **Test coverage.** Backend 2573 to 2580 (+7), in `organizations/tests/test_seed_demo.py` `TestSeededPortalLogins`: Sparkle's login is Dana in Sparkle with jobs and upcoming jobs, Rival's is Marcus in Rival, a Lead with no jobs, each link passes `CustomerSerializer.get_fields`' queryset, only the two are linked, Sparkle's session reads Dana's visits and nobody else's through the API, `--force` links an older seed's logins, and `--force` leaves a link someone made alone. With the call removed all seven go red. Seed tests run twice. Frontend untouched. Gaps: nothing was checked in a browser.
+2. **DRY.** The membership rule is restated as one query in the seed rather than calling the serializer, because the serializer needs a request; the test checks the seed against the serializer's own queryset so the two cannot drift silently.
+3. **Modularity.** All changes are in the management command and its tests.
+4. **Orthogonality.** No new coupling. `PORTAL_CUSTOMER` names customers from `CUSTOMERS` by name, so renaming a seeded customer means both. `CLAUDE.md`'s seed description says nothing about customer logins and is still true, so it was not edited.
+5. **Security.** No endpoint, model, task, `AllowAny` or `allowed_while_inactive` added; the links grant each demo login only its own customer's visits, the read ADR-039 already allows. `/security-review` was not run; the diff touches only the dev seed and the gate owns the review.
+6. **Branch and production guard.** All work is on `fix/seed-customer-logins`; nothing committed to `main`, pushed or merged; no `fly`; `migrate` and `seed_demo` ran only against `pg_wave2_seedlogins`, never `pink_glove`.
