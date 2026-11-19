@@ -81,6 +81,16 @@ BILLING = {
 
 ROLES = [Role.OWNER, Role.ADMIN, Role.DISPATCHER, Role.CLEANER, Role.CUSTOMER]
 
+#: Which customer each tenant's customer-role login is, by name from
+#: `CUSTOMERS`. Different on purpose, so both portal homes can be shown:
+#: Sparkle's is Dana, on the weekly plan, so `/my-visits` lists upcoming
+#: visits; Rival's is Marcus, the one customer with nothing booked, so the
+#: empty home is still there to see (ADR-039).
+PORTAL_CUSTOMER = {
+    "Sparkle Clean": ("Dana", "Whitfield"),
+    "Rival Cleaners": ("Marcus", "Alvarez"),
+}
+
 #: One customer per interesting shape, because each exercises a different path:
 #: square footage drives per-sqft pricing, pets and codes drive what a cleaner
 #: sees on the job screen, and the reveal is only interesting where codes exist.
@@ -209,6 +219,7 @@ class Command(BaseCommand):
             organization = self._organization(spec)
             users = self._users(organization)
             customers = self._customers(organization)
+            self._portal_login(organization, users[Role.CUSTOMER], customers)
             services = self._services(organization)
             plans = self._plans(organization, customers, services, cleaner=users[Role.CLEANER])
             self._move_out(organization, customers[2], services[2], plans[0].starts_on)
@@ -275,6 +286,43 @@ class Command(BaseCommand):
             users[role] = user
             self.stdout.write(f"  {role:11} {email}")
         return users
+
+    def _portal_login(self, organization, user, customers) -> None:
+        """
+        Link the tenant's customer-role login to its `PORTAL_CUSTOMER`.
+
+        Without it a demo customer signs in to an empty home whoever they are,
+        because a customer's visits are found through `Customer.user`.
+
+        Held to the rule `CustomerSerializer.get_fields` puts on the API's
+        link: the user is an active, customer-role member of this same
+        organization. A database where that no longer holds, or where either
+        side is already linked to someone else, is left as it is and said so:
+        the link is one-to-one, and undoing a link someone made is not a
+        seed's call. Additive, so a database seeded before this gains its
+        links on a `--force` run.
+        """
+        name = PORTAL_CUSTOMER[organization.name]
+        customer = next(c for c in customers if (c.first_name, c.last_name) == name)
+        if customer.user_id == user.pk:
+            return
+
+        is_customer_member = Membership.objects.filter(
+            user=user,
+            organization=organization,
+            role=Role.CUSTOMER,
+            is_active=True,
+        ).exists()
+        if not is_customer_member:
+            self.stdout.write(f"  {user.email} is not a customer here, left unlinked")
+            return
+        if customer.user_id is not None or Customer.all_objects.filter(user=user).exists():
+            self.stdout.write(f"  {customer} or {user.email} is already linked, left as is")
+            return
+
+        customer.user = user
+        customer.save(update_fields=["user", "updated_at"])
+        self.stdout.write(f"  {user.email} signs in as {customer}")
 
     def _materialize(self, organization, plans) -> int:
         """
