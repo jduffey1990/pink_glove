@@ -1,4 +1,7 @@
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
+from django.core import mail
 from django.urls import reverse
 
 from app.middleware.tenant import ORGANIZATION_HEADER
@@ -6,6 +9,7 @@ from users.enums import Role
 from users.models import MagicLinkToken, Membership
 
 SESSION_URL = reverse("users:session")
+JOBS_URL = reverse("scheduling:job-list")
 MAGIC_LINK_URL = reverse("users:magic-link-request")
 MAGIC_CONSUME_URL = reverse("users:magic-link-consume")
 
@@ -110,7 +114,26 @@ class TestMagicLink:
         return api_client.post(MAGIC_LINK_URL, {"email": email})
 
     def _token_for(self, api_client, user):
-        return self._request_link(api_client, user.email).json()["dev_link"].rsplit("/", 1)[-1]
+        return _fragment_token(self._request_link(api_client, user.email).json()["dev_link"])
+
+    def test_the_link_carries_its_token_in_the_fragment(self, api_client, homeowner, settings):
+        """ADR-036, ADR-039: nothing of the token in the path or the query."""
+        link = self._request_link(api_client, homeowner.email).json()["dev_link"]
+        parts = urlsplit(link)
+
+        assert link.startswith(f"{settings.FRONTEND_BASE_URL}/sign-in#token=")
+        assert parts.path == "/sign-in"
+        assert parts.query == ""
+        assert _fragment_token(link)
+
+    def test_the_token_is_taken_from_the_body_only(self, api_client, homeowner):
+        token = self._token_for(api_client, homeowner)
+
+        response = api_client.post(f"{MAGIC_CONSUME_URL}?token={token}", {})
+
+        assert response.status_code == 400
+        # Not spent by the refused attempt: the body form still redeems it.
+        assert api_client.post(MAGIC_CONSUME_URL, {"token": token}).status_code == 200
 
     def test_unknown_address_looks_identical_to_a_known_one(self, api_client, homeowner):
         known = self._request_link(api_client, homeowner.email)
@@ -185,6 +208,17 @@ class TestMagicLink:
 
         assert api_client.post(MAGIC_CONSUME_URL, {"token": token}).status_code == 401
 
+    def test_a_link_from_one_customer_signs_in_that_customer_only(
+        self, api_client, homeowner, make_member, organization
+    ):
+        neighbour = make_member(organization, role=Role.CUSTOMER, email="next-door@example.com")
+        token = self._token_for(api_client, homeowner)
+        self._token_for(api_client, neighbour)
+
+        body = api_client.post(MAGIC_CONSUME_URL, {"token": token}).json()
+
+        assert body["email"] == homeowner.email
+
     def test_a_bogus_token_is_refused(self, api_client):
         assert api_client.post(MAGIC_CONSUME_URL, {"token": "nonsense"}).status_code == 401
 
@@ -193,6 +227,111 @@ class TestMagicLink:
 
         assert not MagicLinkToken.objects.filter(token_hash=token).exists()
         assert MagicLinkToken.objects.count() == 1
+
+
+def _fragment_token(link: str) -> str:
+    return parse_qs(urlsplit(link).fragment)["token"][0]
+
+
+@pytest.mark.django_db
+class TestMagicLinkEmail:
+    """Deployed (LOCAL off): the link goes by email, never in the response."""
+
+    @pytest.fixture(autouse=True)
+    def _deployed_mode(self, settings):
+        settings.LOCAL = False
+        settings.FRONTEND_BASE_URL = "https://app.example.test"
+
+    def test_the_email_carries_the_fragment_form(self, api_client, organization, make_member):
+        homeowner = make_member(organization, role=Role.CUSTOMER, email="homeowner@example.com")
+
+        response = api_client.post(MAGIC_LINK_URL, {"email": homeowner.email})
+
+        assert response.status_code == 202
+        assert "dev_link" not in response.json()
+        assert len(mail.outbox) == 1
+        message = mail.outbox[0]
+        assert message.to == [homeowner.email]
+        assert "https://app.example.test/sign-in#token=" in message.body
+        assert "/sign-in/" not in message.body
+
+    def test_the_emailed_token_signs_the_customer_in(self, api_client, organization, make_member):
+        homeowner = make_member(organization, role=Role.CUSTOMER, email="homeowner@example.com")
+        api_client.post(MAGIC_LINK_URL, {"email": homeowner.email})
+        link = mail.outbox[0].body.split("Sign in here: ", 1)[1].split()[0]
+
+        response = api_client.post(MAGIC_CONSUME_URL, {"token": _fragment_token(link)})
+
+        assert response.status_code == 200
+        assert response.json()["email"] == homeowner.email
+
+    @pytest.mark.parametrize("role", [Role.OWNER, Role.ADMIN, Role.DISPATCHER, Role.CLEANER])
+    def test_staff_get_the_same_202_and_no_email(self, api_client, organization, make_member, role):
+        staff = make_member(organization, role=role)
+
+        response = api_client.post(MAGIC_LINK_URL, {"email": staff.email})
+
+        assert response.status_code == 202
+        assert mail.outbox == []
+
+
+@pytest.mark.django_db
+class TestSignedInCustomerAcrossTenants:
+    """
+    What a link's session can read: its own visits in its own organization,
+    and nothing of another tenant's, header or no header.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _local_mode(self, settings):
+        settings.LOCAL = True
+
+    @pytest.fixture
+    def scene(self, organization, other_organization, make_member):
+        from scheduling.tests.factories import CustomerFactory, JobFactory
+
+        user = make_member(organization, role=Role.CUSTOMER, email="homeowner@example.com")
+        mine = JobFactory(
+            organization=organization,
+            customer=CustomerFactory(organization=organization, user=user),
+        )
+        JobFactory(organization=organization)  # a neighbour's visit, same tenant
+        JobFactory(organization=other_organization)
+        return user, mine
+
+    def _sign_in(self, api_client, user):
+        link = api_client.post(MAGIC_LINK_URL, {"email": user.email}).json()["dev_link"]
+        assert (
+            api_client.post(MAGIC_CONSUME_URL, {"token": _fragment_token(link)}).status_code == 200
+        )
+
+    def test_the_customer_reads_only_their_own_visits(self, api_client, scene):
+        user, mine = scene
+        self._sign_in(api_client, user)
+
+        results = api_client.get(JOBS_URL).json()["results"]
+
+        assert [job["id"] for job in results] == [str(mine.id)]
+        # The customer's own shape: no crew roster, no office notes.
+        assert "assignments" not in results[0]
+        assert "notes" not in results[0]
+
+    def test_another_tenants_header_opens_nothing(self, api_client, scene, other_organization):
+        user, _ = scene
+        self._sign_in(api_client, user)
+
+        response = api_client.get(
+            JOBS_URL, headers={ORGANIZATION_HEADER.lower(): str(other_organization.id)}
+        )
+
+        assert response.status_code == 403
+
+    def test_the_customer_cannot_read_invoices(self, api_client, scene):
+        """Pinned so the customer home's scope is a decision, not an accident (ADR-039)."""
+        user, _ = scene
+        self._sign_in(api_client, user)
+
+        assert api_client.get(reverse("billing:invoice-list")).status_code == 403
 
 
 @pytest.mark.django_db

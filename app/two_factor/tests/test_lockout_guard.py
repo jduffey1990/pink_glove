@@ -8,6 +8,8 @@ existing owner is locked out (ADR-034). These walk the three sign-in paths
 of ADR-008 for exactly such a person.
 """
 
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 from django.urls import reverse
 from django.utils import timezone
@@ -74,9 +76,9 @@ def test_a_customer_made_before_invitations_still_signs_in_by_magic_link(api_cli
     Membership.objects.create(user=customer, organization=organization, role=Role.CUSTOMER)
 
     link = api_client.post(reverse("users:magic-link-request"), {"email": customer.email}).json()
-    response = api_client.post(
-        reverse("users:magic-link-consume"), {"token": link["dev_link"].rsplit("/", 1)[-1]}
-    )
+    # The token is in the link's fragment (ADR-036, ADR-039).
+    token = parse_qs(urlsplit(link["dev_link"]).fragment)["token"][0]
+    response = api_client.post(reverse("users:magic-link-consume"), {"token": token})
 
     assert response.status_code == 200
     assert api_client.get(SESSION).json()["current_role"] == Role.CUSTOMER

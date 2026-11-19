@@ -14,6 +14,7 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.viewsets import GenericViewSet
 
+from base.links import token_link
 from base.permissions import IsAdminOrHigher, IsStaff
 from base.serializers import DetailSerializer
 from base.viewsets import TenantViewSetMixin
@@ -102,7 +103,9 @@ class MagicLinkRequestView(APIView):
             return Response(body, status=status.HTTP_202_ACCEPTED)
 
         token, raw_token = MagicLinkToken.issue(user)
-        link = f"{settings.FRONTEND_BASE_URL}/sign-in/{raw_token}"
+        # The token rides in the fragment, which no request carries (ADR-036,
+        # ADR-039); the page posts it to the consume endpoint in a body.
+        link = token_link("/sign-in", raw_token)
 
         if settings.LOCAL:
             body["dev_link"] = link
