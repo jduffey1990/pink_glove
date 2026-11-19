@@ -3415,7 +3415,7 @@ The first piece of Phase 5: a customer is emailed ahead of a scheduled visit, if
 
 **The switch.**
 `Organization.visit_reminders_enabled`, default false (`organizations/0007`), on `OrganizationSerializer`.
-It rides `PATCH /api/organizations/current/`, which was already admin-tier for writes, member-readable, and refused in a read-only organization.
+It rides `PATCH /api/organizations/current/`, which was already admin-tier for writes, member-readable (reads since narrowed to dispatcher and above, ADR-040), and refused in a read-only organization.
 No new view and no new action; no settings page and no UI control (the organization settings page is a later branch).
 Until then it is turned on through that endpoint or the Django admin's new "Notifications" fieldset.
 
@@ -3652,7 +3652,7 @@ A customer can now ask for a sign-in link, open it, and land on a page of their 
 
 ## Organization settings narrowed for cleaners and customers as built
 
-Branch `fix/narrow-org-settings-for-customers`, cut from `main` at `89d5dbc`.
+Branch `fix/narrow-org-settings-for-customers`, cut from `main` at `a733f02`, after the customer sign-in merge.
 `GET /api/organizations/current/` now needs dispatcher or above; cleaners and customers get a 403 and read the organization from the session summary (ADR-040).
 
 - **Before**, reproduced with `force_login` per role: every role got all 30 settings keys (address and contact, operating window, reveal buffers, tax rate, no-access fee, invoice prefix, terms and footer, reminder switch, `stripe`, `billing`, `is_active`, `created_at`). A cleaner's `billing` carried the trial and grace dates and `available_actions`; a customer's was blanked by `PlatformBillingSerializer`, but the rest, `stripe` included, was the owner's.
@@ -3663,7 +3663,7 @@ Branch `fix/narrow-org-settings-for-customers`, cut from `main` at `89d5dbc`.
 
 ### Phase gate - as built
 
-1. **Test coverage.** Backend 2561 to 2591 (+32 new in `organizations/tests/test_organization_access.py`, minus two cleaner and customer cases dropped from `test_visit_reminder_setting.py`): exact settings keys for owner, admin and dispatcher, a 403 with only `detail` for cleaner and customer on GET, HEAD and OPTIONS, writes refused to dispatcher, cleaner and customer, the exact session summary keys (current and per membership) for all five roles, a deactivated organization still readable by the settings tiers, still refused below them and still giving every role its banner fields on the session, and cross-tenant reads with a foreign `X-Organization` header for all five roles. Three existing tests that asserted a cleaner or customer could read the settings now assert the tier; the customer branch of `PlatformBillingSerializer` is pinned on the serializer directly. Run twice. Mutation-checked: putting `IsOrgMember` back turns 5 tests red, and adding a settings field to `OrganizationSummarySerializer` turns 5 red. Frontend unchanged at 459; lint, type-check and vitest green. Gaps: nothing was checked in a browser; the 403 path of `BillingSettingsPage.vue` is not reachable through the router and has no spec.
+1. **Test coverage.** Backend 2573 to 2603 (+32 new in `organizations/tests/test_organization_access.py`, minus two cleaner and customer cases dropped from `test_visit_reminder_setting.py`): exact settings keys for owner, admin and dispatcher, a 403 with only `detail` for cleaner and customer on GET, HEAD and OPTIONS, writes refused to dispatcher, cleaner and customer, the exact session summary keys (current and per membership) for all five roles, a deactivated organization still readable by the settings tiers, still refused below them and still giving every role its banner fields on the session, and cross-tenant reads with a foreign `X-Organization` header for all five roles. Three existing tests that asserted a cleaner or customer could read the settings now assert the tier; the customer branch of `PlatformBillingSerializer` is pinned on the serializer directly. Run twice. Mutation-checked: putting `IsOrgMember` back turns 5 tests red, and adding a settings field to `OrganizationSummarySerializer` turns 5 red. Frontend unchanged at 493; lint, type-check and vitest green. Gaps: nothing was checked in a browser; the 403 path of `BillingSettingsPage.vue` is not reachable through the router and has no spec.
 2. **DRY.** No new serializer or endpoint; cleaners and customers keep the one summary they already had.
 3. **Modularity.** The change is the view's permission tier; no app reaches into another.
 4. **Orthogonality.** One new mirror: the endpoint's read tier and the `/billing/settings` route's `dispatcher` access in `ui/src/router/index.ts`, noted beside the permission in `organizations/views.py`. `CLAUDE.md`'s list of role-tier mirrors does not name it and was not edited (reported to Jordan).

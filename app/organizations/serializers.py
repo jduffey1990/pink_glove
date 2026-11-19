@@ -77,7 +77,9 @@ class PlatformBillingSerializer(BillingNoticeSerializer):
         role = role_for_notice(self.context)
         if not coverage.is_staff(role):
             # The tenant's customers: the state word (they can see read-only
-            # for themselves) and none of the commercial relationship.
+            # for themselves) and none of the commercial relationship. A second
+            # line since ADR-040: neither view that serves this block answers a
+            # customer any more, and a test pins the branch on the serializer.
             return {
                 **super().to_representation(organization),
                 "summary": "",

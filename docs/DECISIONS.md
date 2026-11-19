@@ -1510,7 +1510,7 @@ It is off until an owner or admin turns it on.
 
 **1. The switch is a field on `Organization`, written through the endpoint that already writes the organization.**
 `visit_reminders_enabled`, default false, on `OrganizationSerializer`.
-`PATCH /api/organizations/current/` is already gated to admin and owner by `CurrentOrganizationView.get_permissions`, already refused in a read-only organization by `IsOrgMember`, and already read by every member.
+`PATCH /api/organizations/current/` is already gated to admin and owner by `CurrentOrganizationView.get_permissions`, already refused in a read-only organization by `IsOrgMember`, and at the time already read by every member (reads were narrowed to dispatcher and above by ADR-040).
 So the switch needed no new view, no new action and no new permission, and each of those properties is pinned by a test against the new field (`organizations/tests/test_visit_reminder_setting.py`).
 Default off because a tenant that already rings its customers must not find them getting a second, unannounced message the day this deploys.
 No backfill: every existing organization reads false.
@@ -1928,7 +1928,7 @@ The login page gains "Customer? Email me a sign-in link", which opens `/sign-in-
 A customer may read their own visits (`JobViewSet`, `IsStaff | IsCustomerOfJob`, the queryset filtered to `customer__user`, the `CustomerJobSerializer` shape without crew or office notes) and nothing else of the tenant's: invoices, payments, customers and locations are dispatcher and above.
 So the page greets them, lists their visits for the next eight weeks (the horizon plans are booked to, inside the jobs filter's 62-day cap) with day, time, service, address and status, and says that each invoice comes by email with a link to pay it.
 It makes one request, `GET /api/scheduling/jobs/?date_from=...&date_to=...&ordering=scheduled_start`, and asks for nothing a customer is refused, so it never meets a 403.
-The organization's name comes from the session, not from `GET /api/organizations/current/`, which a customer may read but which carries the whole settings payload.
+The organization's name comes from the session, not from `GET /api/organizations/current/`, which carries the whole settings payload and, since ADR-040, refuses a customer.
 
 **3. The loop's cause, and the fix at its source.**
 The root route sent everyone who was not a cleaner to `schedule`; the guard refused `schedule` to anyone below dispatcher and sent them to `home`; `home` sent them to `schedule`.
