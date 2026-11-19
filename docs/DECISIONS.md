@@ -1963,6 +1963,7 @@ The SPA paths are `/sign-in`, `/sign-in-link` and `/my-visits`, with `/sign-in/:
 `ui/src/router/index.ts` now holds the role landing (`landingFor`) and the tier check (`admits`) beside the routes; a new role or tier changes both, and `src/router/landing.spec.ts` checks for every role that the landing is admitted and that `/` resolves without a loop.
 The magic link email is plain text, so it has no anchor to carry `clicktracking=off` (ADR-036); SendGrid does not rewrite links in plain-text bodies unless its text click tracking is switched on, which only a real send on staging shows.
 `seed_demo`'s customer logins are not linked to any `Customer` row, so a demo customer signs in to an empty home; linking one is a seed change for another branch.
+**Done by `fix/seed-customer-logins` (2026-11-19): Sparkle's customer login is Dana, with visits booked, and Rival's is Marcus, the Lead with nothing booked, so both homes can be shown.** Kept for the reasoning.
 
 ---
 

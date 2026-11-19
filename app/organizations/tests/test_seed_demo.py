@@ -164,6 +164,105 @@ class TestSeededSchedule:
 
 
 @pytest.mark.django_db
+class TestSeededPortalLogins:
+    """
+    Each tenant's customer login is linked to one of its customers, so a demo
+    customer who signs in sees a home (ADR-039): Sparkle's with visits on it,
+    Rival's the empty one.
+    """
+
+    def _linked(self, slug):
+        user = CustomUser.objects.get(email=f"customer@{slug}.test")
+        return user, Customer.objects.get(user=user)
+
+    def test_sparkles_login_is_a_customer_with_upcoming_visits(self, seeded):
+        from django.utils import timezone
+
+        user, customer = self._linked("sparkle-clean")
+
+        assert customer.organization.name == "Sparkle Clean"
+        assert (customer.first_name, customer.last_name) == ("Dana", "Whitfield")
+        assert Job.objects.filter(customer=customer).exists()
+        assert Job.objects.filter(customer=customer, scheduled_start__gt=timezone.now()).exists()
+
+    def test_rivals_login_is_the_lead_with_nothing_booked(self, seeded):
+        from customers.enums import CustomerStatus
+
+        user, customer = self._linked("rival-cleaners")
+
+        assert customer.organization.name == "Rival Cleaners"
+        assert (customer.first_name, customer.last_name) == ("Marcus", "Alvarez")
+        assert customer.status == CustomerStatus.LEAD
+        assert not Job.all_objects.filter(customer=customer).exists()
+
+    def test_each_link_is_one_the_api_would_accept(self, seeded, rf):
+        """`CustomerSerializer.get_fields` offers only active customer members."""
+        from customers.serializers import CustomerSerializer
+
+        for slug in ("sparkle-clean", "rival-cleaners"):
+            user, customer = self._linked(slug)
+            request = rf.get("/")
+            request.organization = customer.organization
+            fields = CustomerSerializer(context={"request": request}).get_fields()
+
+            assert fields["user"].queryset.filter(pk=user.pk).exists()
+
+    def test_only_the_two_logins_are_linked(self, seeded):
+        assert Customer.all_objects.filter(user__isnull=False).count() == 2
+
+    def test_the_sparkle_login_reads_its_own_visits_through_the_api(self, seeded):
+        """What `/my-visits` asks for: the next eight weeks, Dana's and nobody else's."""
+        import datetime as dt
+
+        from rest_framework.test import APIClient
+
+        user, customer = self._linked("sparkle-clean")
+        today = customer.organization.today()
+        client = APIClient()
+        client.force_login(user)
+
+        response = client.get(
+            "/api/scheduling/jobs/",
+            {
+                "date_from": today.isoformat(),
+                "date_to": (today + dt.timedelta(days=56)).isoformat(),
+                "ordering": "scheduled_start",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        visits = body["results"] if isinstance(body, dict) else body
+        assert visits
+        assert {visit["customer"] for visit in visits} == {str(customer.pk)}
+
+    def test_force_links_an_older_seeds_logins(self, seeded, settings):
+        settings.DEBUG = True
+        Customer.all_objects.update(user=None)
+
+        call_command("seed_demo", "--force", verbosity=0)
+
+        assert Customer.all_objects.filter(user__isnull=False).count() == 2
+
+    def test_force_leaves_a_link_someone_made_alone(self, seeded, settings):
+        """The link is one-to-one; the seed never takes it from another customer."""
+        settings.DEBUG = True
+        user, dana = self._linked("sparkle-clean")
+        dana.user = None
+        dana.save(update_fields=["user", "updated_at"])
+        priya = Customer.objects.get(organization=dana.organization, first_name="Priya")
+        priya.user = user
+        priya.save(update_fields=["user", "updated_at"])
+
+        call_command("seed_demo", "--force", verbosity=0)
+
+        priya.refresh_from_db()
+        dana.refresh_from_db()
+        assert priya.user_id == user.pk
+        assert dana.user_id is None
+
+
+@pytest.mark.django_db
 class TestSeedGuards:
     def test_it_refuses_to_run_twice_without_force(self, seeded, settings):
         settings.DEBUG = True
